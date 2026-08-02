@@ -16,6 +16,18 @@ const PROMOTED_GLYPH = {
 };
 const TWO_CHAR = new Set(["KY", "KE", "GI"]); // promoted forms shown as 2 kanji
 
+// Spoken readings for the kifu read-aloud feature. Kanji piece names are
+// ambiguous or just wrong when handed straight to TTS (e.g. 角 as "かど"),
+// so the announcement uses these hiragana readings while the board itself
+// keeps showing the kanji glyphs above.
+const READING = {
+  FU: "ふ", KY: "きょう", KE: "けい", GI: "ぎん", KI: "きん", KA: "かく", HI: "ひ",
+};
+const PROMOTED_READING = {
+  FU: "と", KY: "なりきょう", KE: "なりけい", GI: "なりぎん", KA: "うま", HI: "りゅう",
+};
+const KING_READING = { sente: "おう", gote: "ぎょく" };
+
 const KANJI_DAN = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
 const SIDE_LABEL = { sente: "先手", gote: "後手" };
 
@@ -282,25 +294,28 @@ const promptEl = document.getElementById("promotePrompt");
 const voiceToggleEl = document.getElementById("voiceToggle");
 
 // ---------- Kifu (game record) read-aloud ----------
-// Builds standard kifu notation: arabic file number (筋, counted from
-// sente's right, so file = 9 - column) + kanji rank number (段, counted
-// from gote's back rank, so rank = row + 1) + piece name, e.g. "５六歩".
-// `piece` is the moving piece's state *before* this move (or null for a
-// drop) so promotion display matches convention: a newly-promoting move
-// still names the base piece with a trailing 成, not the promoted name.
+// Builds the text handed to speechSynthesis: standard kifu position
+// (arabic file number, counted from sente's right, so file = 9 - column;
+// kanji rank number, counted from gote's back rank, so rank = row + 1)
+// plus the piece's *spoken reading* — hiragana, not the kanji glyph, since
+// TTS engines mangle several of these kanji (e.g. 角 as "かど") and the
+// readings the board displays aren't necessarily the readings you'd say
+// aloud. `piece` is the moving piece's state *before* this move (or null
+// for a drop) so a newly-promoting move is read as the base piece + なり,
+// not the promoted piece's own reading.
 function kifuText(owner, move, piece) {
   const suji = 9 - move.to.c;
   const dan = KANJI_DAN[move.to.r];
   const label = SIDE_LABEL[owner];
   if (move.kind === "drop") {
-    return `${label} ${suji}${dan}${GLYPH[move.piece]}打`;
+    return `${label} ${suji}${dan}${READING[move.piece]}うち`;
   }
   const wasPromoted = piece.promoted;
-  const glyph = wasPromoted
-    ? PROMOTED_GLYPH[piece.type]
-    : (piece.type === "OU" ? (owner === "sente" ? "王" : "玉") : GLYPH[piece.type]);
-  const promoSuffix = !wasPromoted && move.promote ? "成" : "";
-  return `${label} ${suji}${dan}${glyph}${promoSuffix}`;
+  const reading = wasPromoted
+    ? PROMOTED_READING[piece.type]
+    : (piece.type === "OU" ? KING_READING[owner] : READING[piece.type]);
+  const promoSuffix = !wasPromoted && move.promote ? "なり" : "";
+  return `${label} ${suji}${dan}${reading}${promoSuffix}`;
 }
 
 let voiceEnabled = true;
