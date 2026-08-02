@@ -307,15 +307,18 @@ function kifuText(owner, move, piece) {
   const suji = 9 - move.to.c;
   const dan = KANJI_DAN[move.to.r];
   const label = SIDE_LABEL[owner];
+  // A full-width comma (rather than a plain space) gives most Japanese TTS
+  // voices a natural breath/pause and a bit of pitch movement around it,
+  // instead of reading the whole line flat and run-on.
   if (move.kind === "drop") {
-    return `${label} ${suji}${dan}${READING[move.piece]}うち`;
+    return `${label}、${suji}${dan}${READING[move.piece]}うち`;
   }
   const wasPromoted = piece.promoted;
   const reading = wasPromoted
     ? PROMOTED_READING[piece.type]
     : (piece.type === "OU" ? KING_READING[owner] : READING[piece.type]);
   const promoSuffix = !wasPromoted && move.promote ? "なり" : "";
-  return `${label} ${suji}${dan}${reading}${promoSuffix}`;
+  return `${label}、${suji}${dan}${reading}${promoSuffix}`;
 }
 
 let voiceEnabled = true;
@@ -340,7 +343,8 @@ function speak(text, onDone) {
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "ja-JP";
   if (japaneseVoice) utter.voice = japaneseVoice;
-  utter.rate = 1.05;
+  utter.rate = 0.8; // slower and easier to follow than default speed
+  utter.pitch = 1.15; // a bit brighter/more animated than the flat default
   utter.onend = () => onDone?.();
   utter.onerror = () => onDone?.();
   window.speechSynthesis.speak(utter);
