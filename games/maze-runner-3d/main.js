@@ -214,7 +214,49 @@ const keys = new Set();
 window.addEventListener("keydown", (e) => keys.add(e.key.toLowerCase()));
 window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 
+// Touch/mouse virtual joystick, bottom-left of the screen. Reports a
+// direction vector with magnitude 0-1 so dragging halfway gives half speed.
+const joystickBase = document.getElementById("joystickBase");
+const joystickKnob = document.getElementById("joystickKnob");
+const joystickDir = new THREE.Vector3();
+const JOYSTICK_RADIUS = 46;
+let joystickPointerId = null;
+
+function updateJoystick(clientX, clientY) {
+  const rect = joystickBase.getBoundingClientRect();
+  const dx = clientX - (rect.left + rect.width / 2);
+  const dy = clientY - (rect.top + rect.height / 2);
+  const dist = Math.hypot(dx, dy) || 1;
+  const clamped = Math.min(dist, JOYSTICK_RADIUS);
+  const mag = clamped / JOYSTICK_RADIUS;
+  joystickKnob.style.transform =
+    `translate(${(dx / dist) * clamped}px, ${(dy / dist) * clamped}px)`;
+  joystickDir.set((dx / dist) * mag, 0, (dy / dist) * mag);
+}
+
+function resetJoystick() {
+  joystickPointerId = null;
+  joystickDir.set(0, 0, 0);
+  joystickKnob.style.transform = "translate(0px, 0px)";
+}
+
+joystickBase.addEventListener("pointerdown", (e) => {
+  joystickPointerId = e.pointerId;
+  joystickBase.setPointerCapture(e.pointerId);
+  updateJoystick(e.clientX, e.clientY);
+});
+joystickBase.addEventListener("pointermove", (e) => {
+  if (e.pointerId !== joystickPointerId) return;
+  updateJoystick(e.clientX, e.clientY);
+});
+joystickBase.addEventListener("pointerup", (e) => {
+  if (e.pointerId === joystickPointerId) resetJoystick();
+});
+joystickBase.addEventListener("pointercancel", resetJoystick);
+
 function inputDirection() {
+  if (joystickDir.lengthSq() > 0.0001) return joystickDir.clone();
+
   const dir = new THREE.Vector3();
   if (keys.has("w") || keys.has("arrowup")) dir.z -= 1;
   if (keys.has("s") || keys.has("arrowdown")) dir.z += 1;
