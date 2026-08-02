@@ -10,5 +10,4 @@
 
 GitHub Pages でホストしています: https://shmind369.github.io/games/
 
-(初回のみ、リポジトリの Settings → Pages → Build and deployment の Source を
-「GitHub Actions」に設定してください。設定後は main への push で自動デプロイされます。)
+main への push で GitHub Actions が自動的にビルド・デプロイします(Pages自体の有効化もワークフローが行います)。
