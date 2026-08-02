@@ -5,6 +5,7 @@
 ## 収録ゲーム
 
 - [maze-runner-3d](games/maze-runner-3d) — Three.js製の3D迷路アクションゲーム
+- [pinball-3d](games/pinball-3d) — Three.js製の3Dピンボール
 
 ## 公開ページ
 
