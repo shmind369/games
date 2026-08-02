@@ -42,6 +42,15 @@
     }
     #turnIndicator.thinking { opacity: 0.6; }
 
+    #voiceToggle {
+      font-size: clamp(16px, 5vw, 20px);
+      background: none;
+      border: none;
+      color: inherit;
+      padding: 4px 6px;
+      line-height: 1;
+    }
+
     .hand {
       width: min(92vw, 62vh);
       min-height: clamp(34px, 9vh, 52px);
@@ -210,6 +219,7 @@
     <div id="topBar">
       <div>あなた: 先手</div>
       <div id="turnIndicator">あなたの番です</div>
+      <button id="voiceToggle" aria-pressed="true" aria-label="棋譜読み上げの切り替え">🔊</button>
     </div>
 
     <div class="hand gote-hand" id="goteHand"></div>

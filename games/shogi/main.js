@@ -16,6 +16,9 @@ const PROMOTED_GLYPH = {
 };
 const TWO_CHAR = new Set(["KY", "KE", "GI"]); // promoted forms shown as 2 kanji
 
+const KANJI_DAN = ["一", "二", "三", "四", "五", "六", "七", "八", "九"];
+const SIDE_LABEL = { sente: "先手", gote: "後手" };
+
 const VALUE = { FU: 1, KY: 3, KE: 4, GI: 5, KI: 6, KA: 8, HI: 10, OU: 1000 };
 const PROMOTED_VALUE = { FU: 6, KY: 6, KE: 6, GI: 6, KA: 10, HI: 12 };
 
@@ -276,6 +279,59 @@ const turnIndicatorEl = document.getElementById("turnIndicator");
 const overlayEl = document.getElementById("overlay");
 const overlayTitleEl = document.getElementById("overlayTitle");
 const promptEl = document.getElementById("promotePrompt");
+const voiceToggleEl = document.getElementById("voiceToggle");
+
+// ---------- Kifu (game record) read-aloud ----------
+// Builds standard kifu notation: arabic file number (筋, counted from
+// sente's right, so file = 9 - column) + kanji rank number (段, counted
+// from gote's back rank, so rank = row + 1) + piece name, e.g. "５六歩".
+// `piece` is the moving piece's state *before* this move (or null for a
+// drop) so promotion display matches convention: a newly-promoting move
+// still names the base piece with a trailing 成, not the promoted name.
+function kifuText(owner, move, piece) {
+  const suji = 9 - move.to.c;
+  const dan = KANJI_DAN[move.to.r];
+  const label = SIDE_LABEL[owner];
+  if (move.kind === "drop") {
+    return `${label} ${suji}${dan}${GLYPH[move.piece]}打`;
+  }
+  const wasPromoted = piece.promoted;
+  const glyph = wasPromoted
+    ? PROMOTED_GLYPH[piece.type]
+    : (piece.type === "OU" ? (owner === "sente" ? "王" : "玉") : GLYPH[piece.type]);
+  const promoSuffix = !wasPromoted && move.promote ? "成" : "";
+  return `${label} ${suji}${dan}${glyph}${promoSuffix}`;
+}
+
+let voiceEnabled = true;
+let japaneseVoice = null;
+function refreshJapaneseVoice() {
+  const voices = window.speechSynthesis?.getVoices() ?? [];
+  japaneseVoice = voices.find((v) => v.lang === "ja-JP") || voices.find((v) => v.lang?.startsWith("ja")) || null;
+}
+if ("speechSynthesis" in window) {
+  refreshJapaneseVoice();
+  window.speechSynthesis.addEventListener("voiceschanged", refreshJapaneseVoice);
+}
+
+function speak(text) {
+  if (!voiceEnabled || !("speechSynthesis" in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "ja-JP";
+  if (japaneseVoice) utter.voice = japaneseVoice;
+  utter.rate = 1.05;
+  window.speechSynthesis.speak(utter);
+}
+
+if (voiceToggleEl) {
+  voiceToggleEl.addEventListener("click", () => {
+    voiceEnabled = !voiceEnabled;
+    voiceToggleEl.textContent = voiceEnabled ? "🔊" : "🔇";
+    voiceToggleEl.setAttribute("aria-pressed", String(voiceEnabled));
+    if (!voiceEnabled && "speechSynthesis" in window) window.speechSynthesis.cancel();
+  });
+}
 
 function cellKey(r, c) { return `${r},${c}`; }
 
@@ -407,7 +463,9 @@ document.getElementById("promoteNo").addEventListener("click", () => {
 });
 
 function finalizeMove(move) {
+  const movingPiece = move.kind === "move" ? board[move.from.r][move.from.c] : null;
   const captured = applyMove(board, hands, turn, move);
+  speak(kifuText(turn, move, movingPiece));
   clearSelection();
   if (captured && captured.type === "OU") {
     endGame(turn === "sente" ? "あなたの勝ちです" : "CPUの勝ちです");
@@ -433,7 +491,9 @@ function runCpuTurn() {
     return;
   }
   const decided = { ...move, promote: decidePromotion(move) };
+  const movingPiece = decided.kind === "move" ? board[decided.from.r][decided.from.c] : null;
   const captured = applyMove(board, hands, "gote", decided);
+  speak(kifuText("gote", decided, movingPiece));
   if (captured && captured.type === "OU") {
     endGame("CPUの勝ちです");
     return;
