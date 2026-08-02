@@ -314,13 +314,20 @@ if ("speechSynthesis" in window) {
   window.speechSynthesis.addEventListener("voiceschanged", refreshJapaneseVoice);
 }
 
-function speak(text) {
-  if (!voiceEnabled || !("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
+// `onDone` fires once this utterance has actually finished (or immediately,
+// synchronously, if voice is off/unsupported) — callers use it to hold off
+// the next side's announcement instead of cutting this one short.
+function speak(text, onDone) {
+  if (!voiceEnabled || !("speechSynthesis" in window)) {
+    onDone?.();
+    return;
+  }
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "ja-JP";
   if (japaneseVoice) utter.voice = japaneseVoice;
   utter.rate = 1.05;
+  utter.onend = () => onDone?.();
+  utter.onerror = () => onDone?.();
   window.speechSynthesis.speak(utter);
 }
 
@@ -463,23 +470,32 @@ document.getElementById("promoteNo").addEventListener("click", () => {
 });
 
 function finalizeMove(move) {
+  const mover = turn;
   const movingPiece = move.kind === "move" ? board[move.from.r][move.from.c] : null;
   const captured = applyMove(board, hands, turn, move);
-  speak(kifuText(turn, move, movingPiece));
+  const text = kifuText(mover, move, movingPiece);
   clearSelection();
   if (captured && captured.type === "OU") {
-    endGame(turn === "sente" ? "あなたの勝ちです" : "CPUの勝ちです");
+    speak(text);
+    endGame(mover === "sente" ? "あなたの勝ちです" : "CPUの勝ちです");
     return;
   }
-  turn = turn === "sente" ? "gote" : "sente";
+  turn = mover === "sente" ? "gote" : "sente";
   render();
-  if (turn === "gote" && !gameOver) scheduleCpuTurn();
+  // Only start the CPU's turn once the player's own move has finished
+  // being read aloud (plus a short pause), so the two announcements never
+  // overlap or cut each other off.
+  speak(text, () => {
+    if (turn === "gote" && !gameOver) scheduleCpuTurn();
+  });
 }
+
+const CPU_PAUSE_AFTER_SPEECH_MS = 500;
 
 function scheduleCpuTurn() {
   cpuThinking = true;
   render();
-  setTimeout(runCpuTurn, 350);
+  setTimeout(runCpuTurn, CPU_PAUSE_AFTER_SPEECH_MS);
 }
 
 function runCpuTurn() {
