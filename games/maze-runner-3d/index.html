@@ -37,6 +37,48 @@
       pointer-events: none;
       user-select: none;
     }
+    #touchHint {
+      position: fixed;
+      bottom: 156px;
+      left: 12px;
+      font-size: 13px;
+      opacity: 0.7;
+      pointer-events: none;
+      user-select: none;
+      display: none;
+    }
+
+    #joystickBase {
+      position: fixed;
+      left: 28px;
+      bottom: 28px;
+      width: 116px;
+      height: 116px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      touch-action: none;
+      display: none;
+      z-index: 20;
+    }
+    #joystickKnob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 48px;
+      height: 48px;
+      margin-left: -24px;
+      margin-top: -24px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.35);
+      pointer-events: none;
+    }
+
+    @media (pointer: coarse), (hover: none) {
+      #hint { display: none; }
+      #touchHint { display: block; }
+      #joystickBase { display: block; }
+    }
 
     #overlay {
       position: fixed;
@@ -69,6 +111,11 @@
     <div>Lives: <span id="lives">3</span></div>
   </div>
   <div id="hint">WASD / 矢印キーで移動</div>
+  <div id="touchHint">左下のスティックで移動</div>
+
+  <div id="joystickBase">
+    <div id="joystickKnob"></div>
+  </div>
 
   <div id="overlay">
     <h1 id="overlayTitle">Game Over</h1>
