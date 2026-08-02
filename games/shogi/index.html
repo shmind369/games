@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>将棋</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #1c140c;
+      font-family: system-ui, sans-serif;
+      color: #f0e6d6;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    #app {
+      height: 100%;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+      box-sizing: border-box;
+    }
+
+    #topBar {
+      width: 100%;
+      max-width: 560px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: clamp(12px, 3.6vw, 16px);
+    }
+    #turnIndicator.thinking { opacity: 0.6; }
+
+    .hand {
+      width: min(92vw, 62vh);
+      min-height: clamp(34px, 9vh, 52px);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      padding: 2px 4px;
+      box-sizing: border-box;
+    }
+    .hand-piece {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: clamp(26px, 7vw, 40px);
+      height: clamp(26px, 7vw, 40px);
+      border-radius: 6px;
+      background: rgba(255, 220, 160, 0.08);
+      border: 1px solid rgba(255, 220, 160, 0.25);
+      font-size: clamp(13px, 4vw, 18px);
+      position: relative;
+    }
+    .hand-piece.selectable { background: rgba(255, 220, 160, 0.22); }
+    .hand-piece.selected { background: rgba(120, 220, 140, 0.4); border-color: #7be08c; }
+    .hand-piece .count {
+      position: absolute;
+      bottom: -4px;
+      right: -4px;
+      font-size: 10px;
+      background: #2a1f14;
+      border-radius: 50%;
+      width: 15px;
+      height: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .hand.gote-hand .hand-piece { transform: rotate(180deg); }
+    .hand.gote-hand .hand-piece .count { transform: rotate(180deg); }
+
+    #board {
+      width: min(92vw, 62vh);
+      aspect-ratio: 1 / 1;
+      display: grid;
+      grid-template-columns: repeat(9, 1fr);
+      grid-template-rows: repeat(9, 1fr);
+      background: #d9b171;
+      border: 3px solid #5a3d1f;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+    }
+    .cell {
+      position: relative;
+      border: 1px solid rgba(0,0,0,0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .cell.target::after {
+      content: "";
+      position: absolute;
+      inset: 22%;
+      border-radius: 50%;
+      background: rgba(60, 160, 90, 0.55);
+    }
+    .cell.selected { background: rgba(255, 235, 130, 0.55); }
+
+    .piece {
+      width: 88%;
+      height: 88%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #1c140c;
+      font-size: clamp(13px, 4.6vw, 22px);
+      line-height: 1;
+      clip-path: polygon(50% 0%, 92% 22%, 100% 100%, 0% 100%, 8% 22%);
+      background: linear-gradient(#f4ddb0, #e2c184);
+      user-select: none;
+    }
+    .piece.gote { transform: rotate(180deg); }
+    .piece.promoted { color: #b3241f; }
+    .piece.two-char { font-size: clamp(9px, 3.2vw, 15px); }
+
+    #hint {
+      font-size: clamp(10px, 3vw, 13px);
+      opacity: 0.65;
+      text-align: center;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      background: rgba(0, 0, 0, 0.7);
+      text-align: center;
+      padding: 0 24px;
+      z-index: 50;
+    }
+    #overlay.show { display: flex; }
+    #overlay h1 { margin: 0; font-size: clamp(24px, 7.5vw, 36px); }
+    #overlay button {
+      font-size: clamp(16px, 4.5vw, 18px);
+      padding: 12px 32px;
+      border-radius: 8px;
+      border: none;
+      background: #4c8dff;
+      color: white;
+    }
+
+    #promotePrompt {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 60;
+    }
+    #promotePrompt.show { display: flex; }
+    #promotePrompt .box {
+      background: #2a1f14;
+      border-radius: 12px;
+      padding: 20px 24px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      font-size: clamp(14px, 4.2vw, 18px);
+    }
+    #promotePrompt .buttons { display: flex; gap: 12px; justify-content: center; }
+    #promotePrompt button {
+      font-size: clamp(14px, 4vw, 16px);
+      padding: 10px 22px;
+      border-radius: 8px;
+      border: none;
+      background: #4c8dff;
+      color: white;
+    }
+    #promotePrompt button.no { background: #555; }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #1c140c;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="topBar">
+      <div>あなた: 先手</div>
+      <div id="turnIndicator">あなたの番です</div>
+    </div>
+
+    <div class="hand gote-hand" id="goteHand"></div>
+    <div id="board"></div>
+    <div class="hand sente-hand" id="senteHand"></div>
+    <div id="hint">駒をタップ→移動先をタップ / 持ち駒をタップして打つ</div>
+  </div>
+
+  <div id="promotePrompt">
+    <div class="box">
+      <div>成りますか?</div>
+      <div class="buttons">
+        <button class="yes" id="promoteYes">成る</button>
+        <button class="no" id="promoteNo">成らない</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="overlay">
+    <h1 id="overlayTitle">Game Over</h1>
+    <button id="restartBtn">もう一度</button>
+  </div>
+
+  <div id="rotateOverlay">縦向きにしてプレイしてください</div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
