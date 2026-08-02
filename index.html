@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>games</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: #0a0a12;
+      color: #eee;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 48px 24px;
+    }
+    h1 { margin-bottom: 8px; }
+    p.lead { opacity: 0.75; margin-top: 0; }
+    ul { list-style: none; padding: 0; }
+    li {
+      margin: 12px 0;
+    }
+    a.game-link {
+      display: block;
+      padding: 16px 20px;
+      border-radius: 10px;
+      background: #1c2033;
+      color: #eee;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    a.game-link:hover { background: #2a3050; }
+    a.game-link .title { font-weight: bold; font-size: 18px; }
+    a.game-link .desc { opacity: 0.7; font-size: 14px; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>games</h1>
+    <p class="lead">いろいろなゲームの作成・挙動検証をするためのリポジトリです。</p>
+    <ul>
+      <li>
+        <a class="game-link" href="games/maze-runner-3d/">
+          <div class="title">Maze Runner 3D</div>
+          <div class="desc">Three.js製の3D迷路アクションゲーム</div>
+        </a>
+      </li>
+    </ul>
+  </main>
+</body>
+</html>
