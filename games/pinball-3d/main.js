@@ -42,11 +42,17 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
-window.addEventListener("resize", () => {
+// visualViewport catches iOS Safari's address-bar show/hide, which doesn't
+// always fire a plain window "resize" event promptly.
+function handleResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
+window.addEventListener("resize", handleResize);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", handleResize);
+}
 
 scene.add(new THREE.AmbientLight(0x8899ff, 0.55));
 const sun = new THREE.DirectionalLight(0xffffff, 1.1);
