@@ -9,6 +9,7 @@
 - [shogi](games/shogi) — CPU対戦の将棋(2D)
 - [batting-center-3d](games/batting-center-3d) — Three.js製の3Dバッティングセンター
 - [bump-combat-prototype](games/bump-combat-prototype) — イース風体当たり戦闘の操作感検証プロトタイプ(2D)
+- [rail-shooter-3d](games/rail-shooter-3d) — Three.js製の疑似3D奥スクロールガンシューティング
 
 ## 公開ページ
 
