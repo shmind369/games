@@ -25,6 +25,24 @@ const OFFSET_THRESHOLD_RATIO = 0.45;
 // sliding out of sync when the player stops or changes speed.
 const WALK_STRIDE_PX = 22; // px of movement per full leg-swing cycle
 
+// Player sprite sheet: 4x4 grid (4 walk frames per row). Row 0 = facing
+// up (back view), row 1 = facing down (front view), row 2 = facing left.
+// There's no separate "facing right" row, so that direction reuses row 2
+// mirrored horizontally at draw time.
+const SPRITE_COLS = 4;
+const SPRITE_CELL = 128; // source cell size in assets/player-walk.png (512/4)
+const SPRITE_ROW = { up: 0, down: 1, left: 2 };
+const SPRITE_DRAW_W = 40;
+const SPRITE_DRAW_H = 50;
+const SPRITE_DRAW_OFFSET_Y = -8; // shift up slightly so feet land near the collision circle's base
+
+const playerSprite = new Image();
+let playerSpriteLoaded = false;
+playerSprite.onload = () => {
+  playerSpriteLoaded = true;
+};
+playerSprite.src = "./assets/player-walk.png";
+
 // ---------- Pure collision resolution (no DOM/canvas — testable directly
 // with synthetic positions and a facing direction) ----------
 // `facing` is the player's current/last movement direction: 'up' | 'down'
@@ -188,54 +206,37 @@ function update(dt) {
   enemies = enemies.filter((e) => !e.dead);
 }
 
-// Simple 4-direction walk-cycle figure (original shapes, not sprite art):
-// legs alternate via sin(walkPhase), and which pair of legs is drawn
-// switches between a front/back stance (up/down) and a side stance
-// (left/right) so the gait reads correctly no matter which way the
-// player is currently facing.
+// Which sprite-sheet frame to show: cycles through the 4 walk frames as
+// walkPhase advances, frozen on frame 0 (the standing pose) while idle.
+function spriteFrameIndex() {
+  if (!player.moving) return 0;
+  const cycle = player.walkPhase % (Math.PI * 2);
+  return Math.floor((cycle / (Math.PI * 2)) * SPRITE_COLS) % SPRITE_COLS;
+}
+
 function drawPlayer() {
-  const legSwing = player.moving ? Math.sin(player.walkPhase) * 6 : 0;
-  const bob = player.moving ? Math.abs(Math.sin(player.walkPhase)) * 2 : 0;
-  const isSide = player.facing === "left" || player.facing === "right";
-  const dir = player.facing === "left" ? -1 : 1;
+  if (!playerSpriteLoaded) return;
+
+  const frame = spriteFrameIndex();
+  const flip = player.facing === "right";
+  const row = SPRITE_ROW[flip ? "left" : player.facing];
+  const sx = frame * SPRITE_CELL;
+  const sy = row * SPRITE_CELL;
 
   ctx.save();
-  ctx.translate(player.x, player.y - bob);
-
-  ctx.fillStyle = "#26418a";
-  if (isSide) {
-    ctx.fillRect(-4 + legSwing * dir, 5, 7, 11);
-    ctx.fillRect(-4 - legSwing * dir, 5, 7, 11);
-  } else {
-    ctx.fillRect(-9, 5 + legSwing, 7, 11);
-    ctx.fillRect(2, 5 - legSwing, 7, 11);
-  }
-
-  ctx.fillStyle = "#3a6bd8";
-  ctx.fillRect(-9, -8, 18, 16);
-
-  ctx.fillStyle = "#f2c9a0";
-  ctx.beginPath();
-  ctx.arc(0, -13, 6, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Small facing marker so the direction reads even without motion:
-  // hair patch when facing away, eyes when facing the camera, a cheek
-  // bump on the side the player is turned toward otherwise.
-  if (player.facing === "up") {
-    ctx.fillStyle = "#26418a";
-    ctx.fillRect(-4, -17, 8, 4);
-  } else if (player.facing === "down") {
-    ctx.fillStyle = "#333";
-    ctx.fillRect(-3, -14, 2, 2);
-    ctx.fillRect(1, -14, 2, 2);
-  } else {
-    ctx.fillStyle = "#f2c9a0";
-    ctx.beginPath();
-    ctx.arc(dir * 4, -13, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
+  ctx.translate(player.x, player.y + SPRITE_DRAW_OFFSET_Y);
+  if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(
+    playerSprite,
+    sx,
+    sy,
+    SPRITE_CELL,
+    SPRITE_CELL,
+    -SPRITE_DRAW_W / 2,
+    -SPRITE_DRAW_H / 2,
+    SPRITE_DRAW_W,
+    SPRITE_DRAW_H
+  );
   ctx.restore();
 }
 
