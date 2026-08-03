@@ -20,6 +20,29 @@ const SWIPE_DEADZONE_PX = 6; // ignore tiny jitter before a direction is picked
 // hit rather than a head-on (losing) one.
 const OFFSET_THRESHOLD_RATIO = 0.45;
 
+// Walk-cycle animation: phase advances with distance actually moved (not
+// elapsed time), so the leg swing matches stride length instead of
+// sliding out of sync when the player stops or changes speed.
+const WALK_STRIDE_PX = 22; // px of movement per full leg-swing cycle
+
+// Player sprite sheet: 4x4 grid (4 walk frames per row). Row 0 = facing
+// up (back view), row 1 = facing down (front view), row 2 = facing left.
+// There's no separate "facing right" row, so that direction reuses row 2
+// mirrored horizontally at draw time.
+const SPRITE_COLS = 4;
+const SPRITE_CELL = 128; // source cell size in assets/player-walk.png (512/4)
+const SPRITE_ROW = { up: 0, down: 1, left: 2 };
+const SPRITE_DRAW_W = 40;
+const SPRITE_DRAW_H = 50;
+const SPRITE_DRAW_OFFSET_Y = -8; // shift up slightly so feet land near the collision circle's base
+
+const playerSprite = new Image();
+let playerSpriteLoaded = false;
+playerSprite.onload = () => {
+  playerSpriteLoaded = true;
+};
+playerSprite.src = "./assets/player-walk.png";
+
 // ---------- Pure collision resolution (no DOM/canvas — testable directly
 // with synthetic positions and a facing direction) ----------
 // `facing` is the player's current/last movement direction: 'up' | 'down'
@@ -51,7 +74,7 @@ if (window.visualViewport) window.visualViewport.addEventListener("resize", resi
 resize();
 
 // ---------- Game state ----------
-const player = { x: 0, y: 0, hp: PLAYER_MAX_HP, facing: "down" };
+const player = { x: 0, y: 0, hp: PLAYER_MAX_HP, facing: "down", walkPhase: 0, moving: false };
 let enemies = []; // { x, y, overlapping }
 let gameOver = false;
 let spawnTimer = 0;
@@ -61,6 +84,8 @@ function resetGame() {
   player.y = height / 2;
   player.hp = PLAYER_MAX_HP;
   player.facing = "down";
+  player.walkPhase = 0;
+  player.moving = false;
   enemies = [];
   gameOver = false;
   spawnTimer = 0;
@@ -130,6 +155,7 @@ function update(dt) {
     spawnEnemy();
   }
 
+  player.moving = !!dragDirection;
   if (dragDirection) {
     player.facing = dragDirection;
     const dist = (PLAYER_SPEED * dt) / 1000;
@@ -139,6 +165,7 @@ function update(dt) {
     else if (dragDirection === "right") player.x += dist;
     player.x = Math.max(PLAYER_RADIUS, Math.min(width - PLAYER_RADIUS, player.x));
     player.y = Math.max(PLAYER_RADIUS, Math.min(height - PLAYER_RADIUS, player.y));
+    player.walkPhase += (dist / WALK_STRIDE_PX) * Math.PI * 2;
   }
 
   // Enemies chase along a single axis per frame (whichever gap to the
@@ -179,6 +206,40 @@ function update(dt) {
   enemies = enemies.filter((e) => !e.dead);
 }
 
+// Which sprite-sheet frame to show: cycles through the 4 walk frames as
+// walkPhase advances, frozen on frame 0 (the standing pose) while idle.
+function spriteFrameIndex() {
+  if (!player.moving) return 0;
+  const cycle = player.walkPhase % (Math.PI * 2);
+  return Math.floor((cycle / (Math.PI * 2)) * SPRITE_COLS) % SPRITE_COLS;
+}
+
+function drawPlayer() {
+  if (!playerSpriteLoaded) return;
+
+  const frame = spriteFrameIndex();
+  const flip = player.facing === "right";
+  const row = SPRITE_ROW[flip ? "left" : player.facing];
+  const sx = frame * SPRITE_CELL;
+  const sy = row * SPRITE_CELL;
+
+  ctx.save();
+  ctx.translate(player.x, player.y + SPRITE_DRAW_OFFSET_Y);
+  if (flip) ctx.scale(-1, 1);
+  ctx.drawImage(
+    playerSprite,
+    sx,
+    sy,
+    SPRITE_CELL,
+    SPRITE_CELL,
+    -SPRITE_DRAW_W / 2,
+    -SPRITE_DRAW_H / 2,
+    SPRITE_DRAW_W,
+    SPRITE_DRAW_H
+  );
+  ctx.restore();
+}
+
 function draw() {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#eef1e8";
@@ -189,8 +250,7 @@ function draw() {
     ctx.fillRect(enemy.x - ENEMY_RADIUS, enemy.y - ENEMY_RADIUS, ENEMY_RADIUS * 2, ENEMY_RADIUS * 2);
   }
 
-  ctx.fillStyle = "#3a6bd8";
-  ctx.fillRect(player.x - PLAYER_RADIUS, player.y - PLAYER_RADIUS, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2);
+  drawPlayer();
 }
 
 function loop(now) {
