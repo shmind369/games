@@ -141,13 +141,18 @@ function update(dt) {
     player.y = Math.max(PLAYER_RADIUS, Math.min(height - PLAYER_RADIUS, player.y));
   }
 
+  // Enemies chase along a single axis per frame (whichever gap to the
+  // player is currently larger), never both at once — same 4-direction
+  // constraint as the player, no diagonal movement.
   const moveDist = (ENEMY_SPEED * dt) / 1000;
   for (const enemy of enemies) {
     const dx = player.x - enemy.x;
     const dy = player.y - enemy.y;
-    const dist = Math.hypot(dx, dy) || 1;
-    enemy.x += (dx / dist) * moveDist;
-    enemy.y += (dy / dist) * moveDist;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      enemy.x += Math.sign(dx) * Math.min(moveDist, Math.abs(dx));
+    } else if (dy !== 0) {
+      enemy.y += Math.sign(dy) * Math.min(moveDist, Math.abs(dy));
+    }
   }
 
   // Edge-triggered contact resolution: only act the moment an enemy
@@ -181,9 +186,7 @@ function draw() {
 
   ctx.fillStyle = "#d24545";
   for (const enemy of enemies) {
-    ctx.beginPath();
-    ctx.arc(enemy.x, enemy.y, ENEMY_RADIUS, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillRect(enemy.x - ENEMY_RADIUS, enemy.y - ENEMY_RADIUS, ENEMY_RADIUS * 2, ENEMY_RADIUS * 2);
   }
 
   ctx.fillStyle = "#3a6bd8";
