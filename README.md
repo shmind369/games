@@ -7,6 +7,7 @@
 - [maze-runner-3d](games/maze-runner-3d) — Three.js製の3D迷路アクションゲーム
 - [pinball-3d](games/pinball-3d) — Three.js製の3Dピンボール
 - [shogi](games/shogi) — CPU対戦の将棋(2D)
+- [batting-center-3d](games/batting-center-3d) — Three.js製の3Dバッティングセンター
 
 ## 公開ページ
 
