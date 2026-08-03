@@ -213,22 +213,62 @@ function applyMove(board, hands, turn, move) {
 }
 
 // ---------- Evaluation & CPU search ----------
+// Material + light positional shaping: pawns are worth a bit more the
+// further they've advanced, non-pawn pieces get a small bonus for being
+// nearer the center files, and each own piece guarding a square next to
+// the king adds a small safety bonus. All positional terms are kept small
+// relative to piece values (see VALUE/PROMOTED_VALUE) so material always
+// dominates — they only matter for choosing between near-equal options.
 function evaluateBoard(board, hands) {
   let score = 0;
+  let senteKing = null;
+  let goteKing = null;
+
   for (let r = 0; r < 9; r++) {
     for (let c = 0; c < 9; c++) {
       const p = board[r][c];
       if (!p) continue;
-      const v = valueOf(p.type, p.promoted);
-      score += p.owner === "sente" ? v : -v;
+      const sign = p.owner === "sente" ? 1 : -1;
+      score += sign * valueOf(p.type, p.promoted);
+
+      if (p.type === "OU") {
+        if (p.owner === "sente") senteKing = { r, c };
+        else goteKing = { r, c };
+      } else if (p.type === "FU" && !p.promoted) {
+        const advancement = p.owner === "sente" ? 6 - r : r - 2;
+        score += sign * Math.max(0, advancement) * 0.05;
+      } else {
+        const centerDistance = Math.abs(c - 4);
+        score += sign * Math.max(0, 0.15 - centerDistance * 0.03);
+      }
     }
   }
+
   for (const type of PIECES) {
     if (type === "OU") continue;
     score += hands.sente[type] * VALUE[type] * 0.9;
     score -= hands.gote[type] * VALUE[type] * 0.9;
   }
+
+  score += kingSafety(board, senteKing, "sente");
+  score -= kingSafety(board, goteKing, "gote");
   return score;
+}
+
+function kingSafety(board, kingPos, owner) {
+  if (!kingPos) return 0;
+  let guards = 0;
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = kingPos.r + dr;
+      const nc = kingPos.c + dc;
+      if (!inBounds(nr, nc)) continue;
+      const p = board[nr][nc];
+      if (p && p.owner === owner) guards++;
+    }
+  }
+  return guards * 0.08;
 }
 
 // CPU always promotes when eligible (forced or optional) — a reasonable
@@ -245,32 +285,96 @@ function simulateMove(board, hands, turn, move) {
   return { board: nb, hands: nh };
 }
 
-function chooseCpuMove(board, hands) {
-  const cpuMoves = generateMoves(board, hands, "gote");
-  if (cpuMoves.length === 0) return null;
+// The legal move count varies wildly with how many pieces are in hand
+// (a handful in the opening vs. hundreds of possible drop squares in a
+// heavily-traded endgame), so a fixed search depth is either too shallow
+// in simple positions or unacceptably slow in complex ones. Iterative
+// deepening searches depth 1, then 2, then 3... within a time budget,
+// keeping the best move from the last depth that finished in time —
+// deeper (stronger) play when the position allows it, always bounded.
+const SEARCH_TIME_BUDGET_MS = 900;
+const MAX_SEARCH_DEPTH = 8;
+const SEARCH_TIMEOUT = Symbol("search-timeout");
 
+function sideSign(turn) {
+  return turn === "sente" ? 1 : -1;
+}
+
+// Try captures and promotions first — alpha-beta prunes far more of the
+// tree when the strongest replies are considered before quiet moves.
+function moveOrderScore(board, move) {
+  if (move.kind === "drop") return 0;
+  let s = 0;
+  const target = board[move.to.r][move.to.c];
+  if (target) s += valueOf(target.type, target.promoted) * 10;
+  if (move.mustPromote || move.canPromote) s += 5;
+  return s;
+}
+
+function orderedMoves(board, hands, turn) {
+  const moves = generateMoves(board, hands, turn);
+  moves.sort((a, b) => moveOrderScore(board, b) - moveOrderScore(board, a));
+  return moves;
+}
+
+// Negamax with alpha-beta pruning. Returns a score from the perspective of
+// `turn` (higher is always better for whoever is to move at this node).
+// Throws SEARCH_TIMEOUT once the deadline passes, aborting the whole
+// in-progress depth iteration rather than returning an inaccurate result.
+function negamax(board, hands, turn, depth, alpha, beta, deadline) {
+  if (performance.now() > deadline) throw SEARCH_TIMEOUT;
+  if (depth === 0) return sideSign(turn) * evaluateBoard(board, hands);
+
+  const moves = orderedMoves(board, hands, turn);
+  if (moves.length === 0) return sideSign(turn) * evaluateBoard(board, hands);
+
+  const nextTurn = turn === "sente" ? "gote" : "sente";
+  let best = -Infinity;
+  for (const move of moves) {
+    const { board: nb, hands: nh } = simulateMove(board, hands, turn, move);
+    const score = -negamax(nb, nh, nextTurn, depth - 1, -beta, -alpha, deadline);
+    if (score > best) best = score;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break; // this branch can't beat what we already have
+  }
+  return best;
+}
+
+// Runs one full root search at a fixed depth; may throw SEARCH_TIMEOUT.
+function searchAtDepth(board, hands, cpuMoves, depth, deadline) {
   let bestMove = cpuMoves[0];
-  let bestScore = Infinity;
+  let bestScore = -Infinity;
+  let alpha = -Infinity;
+  const beta = Infinity;
   for (const move of cpuMoves) {
     const { board: nb, hands: nh } = simulateMove(board, hands, "gote", move);
-    let opponentBest = -Infinity;
-    const replies = generateMoves(nb, nh, "sente");
-    if (replies.length === 0) {
-      opponentBest = evaluateBoard(nb, nh);
-    } else {
-      for (const reply of replies) {
-        const { board: nb2, hands: nh2 } = simulateMove(nb, nh, "sente", reply);
-        const val = evaluateBoard(nb2, nh2);
-        if (val > opponentBest) opponentBest = val;
-      }
-    }
     // small random jitter so the CPU doesn't always pick the exact same
     // move among near-equal options
-    const jittered = opponentBest + (Math.random() - 0.5) * 0.3;
-    if (jittered < bestScore) {
-      bestScore = jittered;
+    const score = -negamax(nb, nh, "sente", depth - 1, -beta, -alpha, deadline) +
+      (Math.random() - 0.5) * 0.3;
+    if (score > bestScore) {
+      bestScore = score;
       bestMove = move;
     }
+    if (bestScore > alpha) alpha = bestScore;
+  }
+  return bestMove;
+}
+
+function chooseCpuMove(board, hands) {
+  const cpuMoves = orderedMoves(board, hands, "gote");
+  if (cpuMoves.length === 0) return null;
+
+  const deadline = performance.now() + SEARCH_TIME_BUDGET_MS;
+  let bestMove = cpuMoves[0];
+  for (let depth = 1; depth <= MAX_SEARCH_DEPTH; depth++) {
+    try {
+      bestMove = searchAtDepth(board, hands, cpuMoves, depth, deadline);
+    } catch (e) {
+      if (e === SEARCH_TIMEOUT) break; // keep the last fully-completed depth's move
+      throw e;
+    }
+    if (performance.now() > deadline) break;
   }
   return bestMove;
 }
