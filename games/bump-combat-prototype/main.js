@@ -20,6 +20,11 @@ const SWIPE_DEADZONE_PX = 6; // ignore tiny jitter before a direction is picked
 // hit rather than a head-on (losing) one.
 const OFFSET_THRESHOLD_RATIO = 0.45;
 
+// Walk-cycle animation: phase advances with distance actually moved (not
+// elapsed time), so the leg swing matches stride length instead of
+// sliding out of sync when the player stops or changes speed.
+const WALK_STRIDE_PX = 22; // px of movement per full leg-swing cycle
+
 // ---------- Pure collision resolution (no DOM/canvas — testable directly
 // with synthetic positions and a facing direction) ----------
 // `facing` is the player's current/last movement direction: 'up' | 'down'
@@ -51,7 +56,7 @@ if (window.visualViewport) window.visualViewport.addEventListener("resize", resi
 resize();
 
 // ---------- Game state ----------
-const player = { x: 0, y: 0, hp: PLAYER_MAX_HP, facing: "down" };
+const player = { x: 0, y: 0, hp: PLAYER_MAX_HP, facing: "down", walkPhase: 0, moving: false };
 let enemies = []; // { x, y, overlapping }
 let gameOver = false;
 let spawnTimer = 0;
@@ -61,6 +66,8 @@ function resetGame() {
   player.y = height / 2;
   player.hp = PLAYER_MAX_HP;
   player.facing = "down";
+  player.walkPhase = 0;
+  player.moving = false;
   enemies = [];
   gameOver = false;
   spawnTimer = 0;
@@ -130,6 +137,7 @@ function update(dt) {
     spawnEnemy();
   }
 
+  player.moving = !!dragDirection;
   if (dragDirection) {
     player.facing = dragDirection;
     const dist = (PLAYER_SPEED * dt) / 1000;
@@ -139,6 +147,7 @@ function update(dt) {
     else if (dragDirection === "right") player.x += dist;
     player.x = Math.max(PLAYER_RADIUS, Math.min(width - PLAYER_RADIUS, player.x));
     player.y = Math.max(PLAYER_RADIUS, Math.min(height - PLAYER_RADIUS, player.y));
+    player.walkPhase += (dist / WALK_STRIDE_PX) * Math.PI * 2;
   }
 
   // Enemies chase along a single axis per frame (whichever gap to the
@@ -179,6 +188,57 @@ function update(dt) {
   enemies = enemies.filter((e) => !e.dead);
 }
 
+// Simple 4-direction walk-cycle figure (original shapes, not sprite art):
+// legs alternate via sin(walkPhase), and which pair of legs is drawn
+// switches between a front/back stance (up/down) and a side stance
+// (left/right) so the gait reads correctly no matter which way the
+// player is currently facing.
+function drawPlayer() {
+  const legSwing = player.moving ? Math.sin(player.walkPhase) * 6 : 0;
+  const bob = player.moving ? Math.abs(Math.sin(player.walkPhase)) * 2 : 0;
+  const isSide = player.facing === "left" || player.facing === "right";
+  const dir = player.facing === "left" ? -1 : 1;
+
+  ctx.save();
+  ctx.translate(player.x, player.y - bob);
+
+  ctx.fillStyle = "#26418a";
+  if (isSide) {
+    ctx.fillRect(-4 + legSwing * dir, 5, 7, 11);
+    ctx.fillRect(-4 - legSwing * dir, 5, 7, 11);
+  } else {
+    ctx.fillRect(-9, 5 + legSwing, 7, 11);
+    ctx.fillRect(2, 5 - legSwing, 7, 11);
+  }
+
+  ctx.fillStyle = "#3a6bd8";
+  ctx.fillRect(-9, -8, 18, 16);
+
+  ctx.fillStyle = "#f2c9a0";
+  ctx.beginPath();
+  ctx.arc(0, -13, 6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Small facing marker so the direction reads even without motion:
+  // hair patch when facing away, eyes when facing the camera, a cheek
+  // bump on the side the player is turned toward otherwise.
+  if (player.facing === "up") {
+    ctx.fillStyle = "#26418a";
+    ctx.fillRect(-4, -17, 8, 4);
+  } else if (player.facing === "down") {
+    ctx.fillStyle = "#333";
+    ctx.fillRect(-3, -14, 2, 2);
+    ctx.fillRect(1, -14, 2, 2);
+  } else {
+    ctx.fillStyle = "#f2c9a0";
+    ctx.beginPath();
+    ctx.arc(dir * 4, -13, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
 function draw() {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#eef1e8";
@@ -189,8 +249,7 @@ function draw() {
     ctx.fillRect(enemy.x - ENEMY_RADIUS, enemy.y - ENEMY_RADIUS, ENEMY_RADIUS * 2, ENEMY_RADIUS * 2);
   }
 
-  ctx.fillStyle = "#3a6bd8";
-  ctx.fillRect(player.x - PLAYER_RADIUS, player.y - PLAYER_RADIUS, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2);
+  drawPlayer();
 }
 
 function loop(now) {
