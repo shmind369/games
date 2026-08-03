@@ -8,6 +8,7 @@
 - [pinball-3d](games/pinball-3d) — Three.js製の3Dピンボール
 - [shogi](games/shogi) — CPU対戦の将棋(2D)
 - [batting-center-3d](games/batting-center-3d) — Three.js製の3Dバッティングセンター
+- [bump-combat-prototype](games/bump-combat-prototype) — イース風体当たり戦闘の操作感検証プロトタイプ(2D)
 
 ## 公開ページ
 
