@@ -51,9 +51,12 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0ff);
 scene.fog = new THREE.Fog(0x8fd0ff, 22, 42);
 
+// Third-person, over-the-shoulder: pulled back and to the side of the
+// batter so their swing is visible, rather than a strict first-person
+// view where only the bat would ever be on screen.
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 1.6, 1.4);
-camera.lookAt(0, 1.35, -PITCH_DISTANCE);
+camera.position.set(2.6, 2.6, 5.2);
+camera.lookAt(0.3, 1.4, -PITCH_DISTANCE * 0.4);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -145,13 +148,46 @@ ball.castShadow = true;
 ball.visible = false;
 scene.add(ball);
 
-// Bat swing flourish — purely cosmetic feedback, not part of hit detection
-const bat = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.04, 0.08, 1.1, 10),
-  new THREE.MeshStandardMaterial({ color: 0xc99a52 })
+// Batter figure, standing just beside the plate facing the pitcher.
+const BATTER_POS = { x: 0.55, z: 0.35 };
+const batter = new THREE.Group();
+const batterBody = new THREE.Mesh(
+  new THREE.CapsuleGeometry(0.26, 0.85, 4, 8),
+  new THREE.MeshStandardMaterial({ color: 0xf5f5f5 })
 );
-bat.visible = false;
-scene.add(bat);
+batterBody.position.y = 1.05;
+batterBody.castShadow = true;
+const batterHead = new THREE.Mesh(
+  new THREE.SphereGeometry(0.18, 12, 12),
+  new THREE.MeshStandardMaterial({ color: 0xe0b088 })
+);
+batterHead.position.y = 1.68;
+batterHead.castShadow = true;
+const batterCap = new THREE.Mesh(
+  new THREE.SphereGeometry(0.19, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0xc23b3b })
+);
+batterCap.position.y = 1.72;
+batter.add(batterBody, batterHead, batterCap);
+batter.position.set(BATTER_POS.x, 0, BATTER_POS.z);
+batter.rotation.y = -0.35; // angled toward the pitcher, not square-on
+scene.add(batter);
+
+// Bat: a pivot group at the batter's hands with the bat mesh extending
+// out horizontally from it, so swinging is a rotation around the pivot's
+// *vertical* (Y) axis — a level, horizontal swing — rather than around Z,
+// which would chop straight down at the ground.
+const BAT_LENGTH = 0.9;
+const batGeo = new THREE.CylinderGeometry(0.035, 0.06, BAT_LENGTH, 10);
+batGeo.rotateZ(Math.PI / 2); // lay the cylinder along local +X
+batGeo.translate(BAT_LENGTH / 2, 0, 0); // hands (pivot) at one end, tip at the other
+const bat = new THREE.Mesh(batGeo, new THREE.MeshStandardMaterial({ color: 0xc99a52 }));
+bat.castShadow = true;
+const batPivot = new THREE.Group();
+batPivot.add(bat);
+batPivot.position.set(-0.1, 1.2, 0.15); // roughly hand height, relative to batter
+batPivot.rotation.y = -2.1; // resting, cocked-back stance
+batter.add(batPivot);
 
 // ---------- HUD elements ----------
 const pitchCountEl = document.getElementById("pitchCount");
@@ -256,18 +292,19 @@ function applyOutcome(outcome) {
   }, RESULT_DISPLAY_MS);
 }
 
+const SWING_START_ANGLE = -2.1; // cocked back, bat pointing behind the batter
+const SWING_END_ANGLE = 0.9; // follow-through, swept around toward the pitcher
+
 function showSwingFlourish() {
-  bat.visible = true;
-  bat.position.set(0.2, 1.2, 0.6);
-  bat.rotation.set(0, 0, -0.4);
+  batPivot.rotation.y = SWING_START_ANGLE;
   const start = performance.now();
   function animateBat(now) {
     const t = (now - start) / 220;
     if (t >= 1) {
-      bat.visible = false;
+      batPivot.rotation.y = SWING_START_ANGLE; // back to the ready stance
       return;
     }
-    bat.rotation.z = -0.4 + t * 2.4;
+    batPivot.rotation.y = SWING_START_ANGLE + (SWING_END_ANGLE - SWING_START_ANGLE) * t;
     requestAnimationFrame(animateBat);
   }
   requestAnimationFrame(animateBat);
