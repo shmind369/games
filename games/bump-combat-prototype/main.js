@@ -21,9 +21,12 @@ const SWIPE_DEADZONE_PX = 6; // ignore tiny jitter before a direction is picked
 const OFFSET_THRESHOLD_RATIO = 0.45;
 
 // Walk-cycle animation: phase advances with distance actually moved (not
-// elapsed time), so the leg swing matches stride length instead of
-// sliding out of sync when the player stops or changes speed.
-const WALK_STRIDE_PX = 22; // px of movement per full leg-swing cycle
+// elapsed time), so the pose matches stride length instead of sliding out
+// of sync when the player stops or changes speed. This is a *discrete*
+// 4-frame sprite cycle (not a continuous swing), so the stride needs to be
+// long enough that each frame holds for a human-readable ~130ms instead of
+// flicking past every couple of render frames.
+const WALK_STRIDE_PX = 100; // px of movement per full 4-frame walk cycle
 
 // Player sprite sheet: 4x4 grid (4 walk frames per row). Row 0 = facing
 // up (back view), row 1 = facing down (front view), row 2 = facing left.
@@ -223,8 +226,12 @@ function drawPlayer() {
   const sx = frame * SPRITE_CELL;
   const sy = row * SPRITE_CELL;
 
+  // Round to whole pixels: drawImage is scaling the source cell down a
+  // lot (128px -> 40px), and re-sampling it at a different fractional
+  // offset every single frame (as the continuous x/y position moves)
+  // made the resampled pixels visibly shimmer/vibrate frame to frame.
   ctx.save();
-  ctx.translate(player.x, player.y + SPRITE_DRAW_OFFSET_Y);
+  ctx.translate(Math.round(player.x), Math.round(player.y + SPRITE_DRAW_OFFSET_Y));
   if (flip) ctx.scale(-1, 1);
   ctx.drawImage(
     playerSprite,
