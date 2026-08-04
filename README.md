@@ -11,6 +11,7 @@
 - [bump-combat-prototype](games/bump-combat-prototype) — イース風体当たり戦闘の操作感検証プロトタイプ(2D)
 - [rail-shooter-3d](games/rail-shooter-3d) — Three.js製の疑似3D奥スクロールガンシューティング
 - [konbini-cashier](games/konbini-cashier) — コンビニレジ打ちシミュレーション(2D)
+- [sling-battle-3d](games/sling-battle-3d) — Three.js製、自キャラを引っ張って発射するアリーナバトル
 
 ## 公開ページ
 
