@@ -14,6 +14,7 @@
 - [sling-battle-3d](games/sling-battle-3d) — Three.js製、自キャラを引っ張って発射するアリーナバトル
 - [street-duel-prototype](games/street-duel-prototype) — 上段/下段パンチとガードで押し合う路上デュエルプロトタイプ(2D)
 - [yamanote-loop-map](games/yamanote-loop-map) — 山手線30駅をループ状の壁にしたRPGフィールドマップ(2D)
+- [whip-physics-3d](games/whip-physics-3d) — Three.js製、質量テーパリングVerletチェーンによる鞭打ち効果の物理シミュレーション
 
 ## 公開ページ
 

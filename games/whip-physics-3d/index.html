@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Whip Physics 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0c0f16;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    canvas { display: block; touch-action: none; }
+
+    #hud {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      left: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      font-size: clamp(11px, 3.2vw, 13px);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+      pointer-events: none;
+      z-index: 20;
+    }
+    #tipSpeed { color: #ffe066; font-weight: bold; }
+
+    #settingsToggle {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      right: 14px;
+      z-index: 25;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: none;
+      background: rgba(255,255,255,0.12);
+      color: #eee;
+      font-size: 16px;
+      touch-action: manipulation;
+    }
+
+    #settingsPanel {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 24;
+      background: rgba(12,15,22,0.92);
+      border-top: 1px solid rgba(255,255,255,0.15);
+      padding: 10px 16px max(12px, env(safe-area-inset-bottom));
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 55vh;
+      overflow-y: auto;
+    }
+    #settingsPanel.show { display: flex; }
+    .paramRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: clamp(11px, 3.2vw, 13px);
+    }
+    .paramRow label { flex: 0 0 92px; opacity: 0.85; }
+    .paramRow input[type="range"] { flex: 1 1 auto; }
+    .paramRow .val { flex: 0 0 44px; text-align: right; opacity: 0.75; font-variant-numeric: tabular-nums; }
+    #resetBtn {
+      margin-top: 4px;
+      align-self: flex-start;
+      font-size: clamp(12px, 3.6vw, 14px);
+      padding: 8px 18px;
+      border-radius: 8px;
+      border: none;
+      background: #4c8dff;
+      color: white;
+      touch-action: manipulation;
+    }
+
+    #hint {
+      position: fixed;
+      bottom: max(14px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: clamp(11px, 3.2vw, 13px);
+      opacity: 0.65;
+      pointer-events: none;
+      z-index: 20;
+      text-align: center;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+    }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #0c0f16;
+      color: #eee;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div>先端速度 <span id="tipSpeed">0.0</span> m/s</div>
+  </div>
+  <button id="settingsToggle">⚙</button>
+
+  <div id="settingsPanel">
+    <div class="paramRow">
+      <label for="stiffness">Stiffness</label>
+      <input type="range" id="stiffness" min="0.1" max="1" step="0.01" />
+      <span class="val" id="stiffnessVal"></span>
+    </div>
+    <div class="paramRow">
+      <label for="damping">Damping</label>
+      <input type="range" id="damping" min="0" max="0.3" step="0.005" />
+      <span class="val" id="dampingVal"></span>
+    </div>
+    <div class="paramRow">
+      <label for="massRatio">質量比(先端/根元)</label>
+      <input type="range" id="massRatio" min="0.01" max="1" step="0.01" />
+      <span class="val" id="massRatioVal"></span>
+    </div>
+    <div class="paramRow">
+      <label for="segments">節の数</label>
+      <input type="range" id="segments" min="20" max="40" step="1" />
+      <span class="val" id="segmentsVal"></span>
+    </div>
+    <div class="paramRow">
+      <label for="airResistance">空気抵抗</label>
+      <input type="range" id="airResistance" min="0" max="0.5" step="0.01" />
+      <span class="val" id="airResistanceVal"></span>
+    </div>
+    <button id="resetBtn">鞭をリセット</button>
+  </div>
+
+  <div id="hint">ドラッグして引っ張り、離すと鞭が弾ける</div>
+
+  <div id="rotateOverlay">縦向きにしてプレイしてください</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
