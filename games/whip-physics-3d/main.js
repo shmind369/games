@@ -172,11 +172,13 @@ class WhipChain {
 // ---------- Scene setup ----------
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0c0f16);
-scene.fog = new THREE.Fog(0x0c0f16, 6, 16);
+scene.fog = new THREE.Fog(0x0c0f16, 8, 34);
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 0.9, 6.4);
-camera.lookAt(0, -0.3, 0);
+const CAMERA_INITIAL_TARGET = new THREE.Vector3(0, -0.3, 0);
+const CAMERA_INITIAL_POS = new THREE.Vector3(0, 0.9, 6.4);
+camera.position.copy(CAMERA_INITIAL_POS);
+camera.lookAt(CAMERA_INITIAL_TARGET);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -194,6 +196,55 @@ function handleResize() {
 window.addEventListener("resize", handleResize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", handleResize);
 handleResize();
+
+// ---------- Auto-framing camera ----------
+// Dollies the (fixed-direction) camera in/out each frame so the whip's
+// current bounding sphere always fits inside the view frustum, instead of
+// letting a fast crack fling the tip off camera. Zooming OUT happens
+// instantly (never lets the whip clip out of frame, even for one frame);
+// zooming back IN happens gradually once it's safe, for a smooth dolly
+// feel rather than jarring snaps.
+const CAMERA_MARGIN = 1.25;
+const CAMERA_ZOOM_IN_LERP = 0.06;
+const cameraDir = CAMERA_INITIAL_POS.clone().sub(CAMERA_INITIAL_TARGET).normalize();
+const MIN_CAMERA_DISTANCE = CAMERA_INITIAL_POS.distanceTo(CAMERA_INITIAL_TARGET);
+const MAX_CAMERA_DISTANCE = 40;
+let cameraDistance = MIN_CAMERA_DISTANCE;
+const cameraTarget = CAMERA_INITIAL_TARGET.clone();
+const _boundsCenter = new THREE.Vector3();
+
+function updateCameraFraming() {
+  _boundsCenter.set(0, 0, 0);
+  for (const node of chain.nodes) _boundsCenter.add(node.pos);
+  _boundsCenter.divideScalar(chain.nodes.length);
+
+  let maxRadius = 0;
+  for (const node of chain.nodes) {
+    const d = node.pos.distanceTo(_boundsCenter);
+    if (d > maxRadius) maxRadius = d;
+  }
+
+  const halfVFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  const halfHFov = Math.atan(Math.tan(halfVFov) * camera.aspect);
+  const tightHalfFov = Math.min(halfVFov, halfHFov);
+  const requiredDistance = THREE.MathUtils.clamp(
+    (maxRadius * CAMERA_MARGIN) / Math.sin(tightHalfFov),
+    MIN_CAMERA_DISTANCE,
+    MAX_CAMERA_DISTANCE
+  );
+
+  cameraDistance = requiredDistance > cameraDistance
+    ? requiredDistance
+    : THREE.MathUtils.lerp(cameraDistance, requiredDistance, CAMERA_ZOOM_IN_LERP);
+
+  // The target must exactly track the bounding sphere's true center (no
+  // smoothing lag here) — the distance formula above only guarantees
+  // containment if the camera is actually looking at that center. Physics
+  // motion is already continuous frame-to-frame, so this reads as smooth.
+  cameraTarget.copy(_boundsCenter);
+  camera.position.copy(cameraTarget).addScaledVector(cameraDir, cameraDistance);
+  camera.lookAt(cameraTarget);
+}
 
 scene.add(new THREE.AmbientLight(0x8fa8ff, 0.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -365,6 +416,7 @@ function loop(now) {
   const tipSpeed = chain.speedAt(chain.tipIndex, FIXED_DT);
   tipSpeedEl.textContent = tipSpeed.toFixed(1);
 
+  updateCameraFraming();
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
