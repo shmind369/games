@@ -222,13 +222,17 @@ function spawnEnemies(grid, rng, townPos) {
 }
 
 // ---------- Canvas setup ----------
+const gameAreaEl = document.getElementById("gameArea");
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 let width = 0;
 let height = 0;
 function resize() {
-  width = window.innerWidth;
-  height = window.innerHeight;
+  // The play view only occupies the #gameArea half of the screen (Wonders-
+  // Dungeon-style split), so size the canvas off its own box, not the window.
+  const rect = gameAreaEl.getBoundingClientRect();
+  width = rect.width;
+  height = rect.height;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = width * dpr;
   canvas.height = height * dpr;
