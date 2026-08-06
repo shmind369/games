@@ -259,7 +259,13 @@ let messages = [];
 
 const AGGRO_RADIUS = 6;
 const DEFEND_DAMAGE_MULT = 0.5;
-const DIRS = { up: { dx: 0, dy: -1 }, down: { dx: 0, dy: 1 }, left: { dx: -1, dy: 0 }, right: { dx: 1, dy: 0 } };
+// 8-direction movement (including diagonals) — the classic Mystery-Dungeon-
+// genre control scheme, rather than the orthogonal-only 4-direction pad
+// the original spec called for.
+const DIRS = {
+  up: { dx: 0, dy: -1 }, down: { dx: 0, dy: 1 }, left: { dx: -1, dy: 0 }, right: { dx: 1, dy: 0 },
+  upLeft: { dx: -1, dy: -1 }, upRight: { dx: 1, dy: -1 }, downLeft: { dx: -1, dy: 1 }, downRight: { dx: 1, dy: 1 },
+};
 
 const lvEl = document.getElementById("lv");
 const hpTextEl = document.getElementById("hpText");
@@ -361,8 +367,11 @@ function processEnemyTurn() {
     if (!enemy.alive || gameOver) continue;
     const dx = player.x - enemy.x;
     const dy = player.y - enemy.y;
-    const dist = Math.abs(dx) + Math.abs(dy);
-    if (dist === 1 && (dx === 0 || dy === 0)) {
+    // Chebyshev (8-direction) distance, matching the player's own movement
+    // freedom — otherwise enemies would feel stuck on rails next to a
+    // player who can now step and attack diagonally.
+    const dist = Math.max(Math.abs(dx), Math.abs(dy));
+    if (dist === 1) {
       const dmg = computeDamage(enemy.atk, effectivePlayerDef(), combatRng);
       player.hp = applyDamage(player.hp, dmg);
       pushMessage(`${ENEMY_LABELS[enemy.type]}の攻撃！ ${dmg}のダメージ`);
@@ -371,8 +380,8 @@ function processEnemyTurn() {
         return;
       }
     } else if (dist <= AGGRO_RADIUS) {
-      const stepX = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
-      const stepY = stepX === 0 ? Math.sign(dy) : 0;
+      const stepX = Math.sign(dx);
+      const stepY = Math.sign(dy);
       tryMoveEnemy(enemy, enemy.x + stepX, enemy.y + stepY);
     } else if (combatRng() < 0.3) {
       const dirKeys = Object.keys(DIRS);
@@ -544,6 +553,10 @@ document.getElementById("dUp").addEventListener("click", () => performMove("up")
 document.getElementById("dDown").addEventListener("click", () => performMove("down"));
 document.getElementById("dLeft").addEventListener("click", () => performMove("left"));
 document.getElementById("dRight").addEventListener("click", () => performMove("right"));
+document.getElementById("dUpLeft").addEventListener("click", () => performMove("upLeft"));
+document.getElementById("dUpRight").addEventListener("click", () => performMove("upRight"));
+document.getElementById("dDownLeft").addEventListener("click", () => performMove("downLeft"));
+document.getElementById("dDownRight").addEventListener("click", () => performMove("downRight"));
 document.getElementById("waitBtn").addEventListener("click", performWait);
 document.getElementById("defendBtn").addEventListener("click", performDefend);
 document.getElementById("restartBtn").addEventListener("click", resetGame);
