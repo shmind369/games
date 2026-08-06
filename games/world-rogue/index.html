@@ -5,6 +5,7 @@
   <title>WORLD ROGUE</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <style>
+    *, *::before, *::after { box-sizing: border-box; }
     html, body {
       margin: 0;
       height: 100%;
@@ -19,10 +20,23 @@
       -webkit-user-select: none;
       user-select: none;
     }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
     canvas { display: block; touch-action: none; }
 
+    /* Wonders-Dungeon-style screen split: play view on top, operation
+       panel below, each taking half the screen height. */
+    #gameArea {
+      position: relative;
+      flex: 1 1 50%;
+      min-height: 0;
+      overflow: hidden;
+    }
+
     #hud {
-      position: fixed;
+      position: absolute;
       top: max(8px, env(safe-area-inset-top));
       left: 10px;
       right: 10px;
@@ -66,7 +80,7 @@
     }
 
     #messageLog {
-      position: fixed;
+      position: absolute;
       top: max(70px, calc(env(safe-area-inset-top) + 60px));
       left: 10px;
       right: 10px;
@@ -80,17 +94,19 @@
     }
     #messageLog div { opacity: 0.92; }
 
+    /* Operation panel: solid lower half, distinct from the play view above. */
     #controls {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
+      position: relative;
+      flex: 1 1 50%;
+      min-height: 0;
       z-index: 20;
       display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
+      flex-direction: row;
+      justify-content: space-evenly;
+      align-items: center;
       padding: 10px 14px max(12px, env(safe-area-inset-bottom));
-      background: linear-gradient(180deg, rgba(16,21,26,0) 0%, rgba(16,21,26,0.85) 30%, rgba(16,21,26,0.85) 100%);
+      background: #161c26;
+      border-top: 2px solid rgba(255,255,255,0.12);
     }
     /* 8-direction pad (including diagonals), Mystery-Dungeon-genre style. */
     #dpad {
@@ -204,19 +220,21 @@
   </style>
 </head>
 <body>
-  <canvas id="game"></canvas>
+  <div id="gameArea">
+    <canvas id="game"></canvas>
 
-  <div id="hud">
-    <div id="statPanel">
-      <div class="row"><span class="lv">Lv <span id="lv">1</span></span><span id="hpText">HP 20/20</span></div>
-      <div id="hpBar"><div id="hpFill"></div></div>
-      <div class="row"><span id="xpText">XP 0/10</span></div>
-      <div id="xpBar"><div id="xpFill"></div></div>
+    <div id="hud">
+      <div id="statPanel">
+        <div class="row"><span class="lv">Lv <span id="lv">1</span></span><span id="hpText">HP 20/20</span></div>
+        <div id="hpBar"><div id="hpFill"></div></div>
+        <div class="row"><span id="xpText">XP 0/10</span></div>
+        <div id="xpBar"><div id="xpFill"></div></div>
+      </div>
+      <button id="mapToggle">🗺</button>
     </div>
-    <button id="mapToggle">🗺</button>
-  </div>
 
-  <div id="messageLog"></div>
+    <div id="messageLog"></div>
+  </div>
 
   <div id="controls">
     <div id="dpad">
