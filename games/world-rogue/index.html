@@ -108,20 +108,22 @@
       background: #161c26;
       border-top: 2px solid rgba(255,255,255,0.12);
     }
-    /* 8-direction pad (including diagonals), Mystery-Dungeon-genre style. */
+    /* 8-direction pad (including diagonals), Mystery-Dungeon-genre style.
+       Sized to match the reference screenshot: the pad spans roughly 60%
+       of the screen width, with large, easy-to-hit buttons. */
     #dpad {
       display: grid;
-      grid-template-columns: repeat(3, 46px);
-      grid-template-rows: repeat(3, 46px);
-      gap: 4px;
+      grid-template-columns: repeat(3, clamp(64px, 22vw, 92px));
+      grid-template-rows: repeat(3, clamp(64px, 22vw, 92px));
+      gap: clamp(6px, 2vw, 10px);
       flex: 0 0 auto;
     }
     .dbtn {
       border: none;
-      border-radius: 10px;
+      border-radius: 12px;
       background: rgba(255,255,255,0.14);
       color: #eee;
-      font-size: 17px;
+      font-size: clamp(24px, 8vw, 34px);
       touch-action: manipulation;
     }
     .dbtn:active { background: rgba(255,255,255,0.32); }
