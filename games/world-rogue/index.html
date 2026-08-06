@@ -92,28 +92,24 @@
       padding: 10px 14px max(12px, env(safe-area-inset-bottom));
       background: linear-gradient(180deg, rgba(16,21,26,0) 0%, rgba(16,21,26,0.85) 30%, rgba(16,21,26,0.85) 100%);
     }
+    /* 8-direction pad (including diagonals), Mystery-Dungeon-genre style. */
     #dpad {
-      position: relative;
-      width: 150px;
-      height: 150px;
+      display: grid;
+      grid-template-columns: repeat(3, 46px);
+      grid-template-rows: repeat(3, 46px);
+      gap: 4px;
       flex: 0 0 auto;
     }
     .dbtn {
-      position: absolute;
-      width: 48px;
-      height: 48px;
       border: none;
       border-radius: 10px;
       background: rgba(255,255,255,0.14);
       color: #eee;
-      font-size: 20px;
+      font-size: 17px;
       touch-action: manipulation;
     }
     .dbtn:active { background: rgba(255,255,255,0.32); }
-    #dUp { top: 0; left: 51px; }
-    #dDown { bottom: 0; left: 51px; }
-    #dLeft { top: 51px; left: 0; }
-    #dRight { top: 51px; right: 0; }
+    #dCenter { background: transparent; pointer-events: none; }
 
     #actionButtons {
       display: flex;
@@ -224,10 +220,15 @@
 
   <div id="controls">
     <div id="dpad">
+      <button id="dUpLeft" class="dbtn">↖</button>
       <button id="dUp" class="dbtn">▲</button>
+      <button id="dUpRight" class="dbtn">↗</button>
       <button id="dLeft" class="dbtn">◀</button>
+      <div id="dCenter"></div>
       <button id="dRight" class="dbtn">▶</button>
+      <button id="dDownLeft" class="dbtn">↙</button>
       <button id="dDown" class="dbtn">▼</button>
+      <button id="dDownRight" class="dbtn">↘</button>
     </div>
     <div id="actionButtons">
       <button id="waitBtn" class="actBtn">待機</button>
