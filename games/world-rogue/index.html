@@ -26,11 +26,16 @@
     }
     canvas { display: block; touch-action: none; }
 
-    /* Wonders-Dungeon-style screen split: play view on top, operation
-       panel below, each taking half the screen height. */
+    /* Fixed console-style screen split (Shiren-the-Wanderer-mobile-UI
+       inspired): play view on top (~55%), operation panel below (~45%).
+       This is the one place we split by ratio, since it has to track the
+       device's own screen height. Everything INSIDE each half below uses
+       fixed px baselines instead — buttons/HUD should look the same size
+       on a small phone and a big one, not grow to fill extra space. min()
+       is used only as a floor so genuinely tiny screens don't overflow. */
     #gameArea {
       position: relative;
-      flex: 1 1 50%;
+      flex: 1 1 55%;
       min-height: 0;
       overflow: hidden;
     }
@@ -43,7 +48,7 @@
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      font-size: clamp(11px, 3.2vw, 13px);
+      font-size: 12px;
       text-shadow: 0 1px 3px rgba(0,0,0,0.9);
       pointer-events: none;
       z-index: 20;
@@ -86,7 +91,7 @@
       right: 10px;
       z-index: 20;
       pointer-events: none;
-      font-size: clamp(11px, 3.2vw, 13px);
+      font-size: 12px;
       text-shadow: 0 1px 3px rgba(0,0,0,0.9);
       display: flex;
       flex-direction: column;
@@ -94,28 +99,31 @@
     }
     #messageLog div { opacity: 0.92; }
 
-    /* Operation panel: solid lower half, distinct from the play view above. */
+    /* Operation panel: solid lower ~45%, always visible, no scrolling,
+       fixed button positions — a console command panel, not a web page. */
     #controls {
       position: relative;
-      flex: 1 1 50%;
+      flex: 1 1 45%;
       min-height: 0;
+      overflow: hidden;
       z-index: 20;
       display: flex;
       flex-direction: row;
       justify-content: space-evenly;
       align-items: center;
-      padding: 10px 14px max(12px, env(safe-area-inset-bottom));
+      padding: 12px 14px max(12px, env(safe-area-inset-bottom));
       background: #161c26;
       border-top: 2px solid rgba(255,255,255,0.12);
     }
     /* 8-direction pad (including diagonals), Mystery-Dungeon-genre style.
-       Sized to match the reference screenshot: the pad spans roughly 60%
-       of the screen width, with large, easy-to-hit buttons. */
+       76px is the fixed target size (matches the reference screenshot's
+       proportions); min() only kicks in as a floor on screens narrower
+       than ~345px logical px, so the pad doesn't overflow tiny devices. */
     #dpad {
       display: grid;
-      grid-template-columns: repeat(3, clamp(64px, 22vw, 92px));
-      grid-template-rows: repeat(3, clamp(64px, 22vw, 92px));
-      gap: clamp(6px, 2vw, 10px);
+      grid-template-columns: repeat(3, min(76px, 22vw));
+      grid-template-rows: repeat(3, min(76px, 22vw));
+      gap: 8px;
       flex: 0 0 auto;
     }
     .dbtn {
@@ -123,7 +131,7 @@
       border-radius: 12px;
       background: rgba(255,255,255,0.14);
       color: #eee;
-      font-size: clamp(24px, 8vw, 34px);
+      font-size: min(30px, 8vw);
       touch-action: manipulation;
     }
     .dbtn:active { background: rgba(255,255,255,0.32); }
@@ -132,14 +140,15 @@
     #actionButtons {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
       flex: 0 0 auto;
     }
     .actBtn {
       border: none;
       border-radius: 10px;
-      padding: 12px 16px;
-      font-size: clamp(13px, 3.8vw, 15px);
+      padding: 14px min(18px, 4vw);
+      min-width: min(96px, 24vw);
+      font-size: min(15px, 3.8vw);
       background: rgba(255,255,255,0.14);
       color: #eee;
       touch-action: manipulation;
@@ -167,7 +176,7 @@
       border: 2px solid rgba(255,255,255,0.25);
     }
     #worldMapPanel button {
-      font-size: clamp(13px, 4vw, 15px);
+      font-size: min(15px, 4vw);
       padding: 8px 24px;
       border-radius: 8px;
       border: none;
@@ -191,10 +200,10 @@
       padding: 0 24px;
     }
     #overlay.show { display: flex; }
-    #overlay h1 { margin: 0; font-size: clamp(26px, 8vw, 38px); }
+    #overlay h1 { margin: 0; font-size: min(38px, 8vw); }
     #overlay p { margin: 0; opacity: 0.85; }
     #overlay button {
-      font-size: clamp(15px, 4.3vw, 17px);
+      font-size: min(17px, 4.3vw);
       padding: 10px 28px;
       border-radius: 8px;
       border: none;
@@ -214,7 +223,7 @@
       padding: 24px;
       background: #10151a;
       color: #eee;
-      font-size: clamp(16px, 5vw, 20px);
+      font-size: min(20px, 5vw);
     }
     @media (orientation: landscape) {
       #rotateOverlay { display: flex; }
