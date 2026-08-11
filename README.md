@@ -17,6 +17,7 @@
 - [whip-physics-3d](games/whip-physics-3d) — Three.js製、質量テーパリングVerletチェーンによる鞭打ち効果の物理シミュレーション
 - [world-rogue](games/world-rogue) — シームレスオープンフィールド型ターン制ローグライクRPG(第1弾: ワールド+8方向移動+戦闘+レベルアップ、2D)
 - [ship-it-sim](games/ship-it-sim) — HTML/CSS/JS/PHPでWebサービスを作りiOSアプリとして リリースするまでの開発工程を6つのミニゲームで駆け抜ける開発工程ミニゲー集(2D)
+- [counter-punch-3d](games/counter-punch-3d) — Three.js製、左右スワイプでパンチを躱しタップで反撃する一人称ボクシングアクション
 
 ## 公開ページ
 

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Counter Punch 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0a0a0f;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    canvas { display: block; touch-action: none; }
+
+    #hud {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      left: 12px;
+      right: 12px;
+      z-index: 30;
+      pointer-events: none;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+    .barRow { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .barLabel { font-size: 12px; font-weight: bold; min-width: 62px; }
+    .barTrack { flex: 1; height: 14px; border-radius: 7px; background: rgba(255,255,255,0.15); overflow: hidden; }
+    .barFill { height: 100%; transition: width 0.2s ease-out; }
+    #oppFill { background: linear-gradient(90deg, #ff6b6b, #ff9b6b); width: 100%; }
+    #playerFill { background: linear-gradient(90deg, #4ade80, #a3e635); width: 100%; }
+
+    #cue {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.7);
+      z-index: 30;
+      pointer-events: none;
+      font-size: 15px;
+      font-weight: bold;
+      padding: 10px 22px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.55);
+      border: 2px solid rgba(255,255,255,0.4);
+      opacity: 0;
+      transition: opacity 0.12s, transform 0.12s;
+      white-space: nowrap;
+    }
+    #cue.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    #cue.dodge { border-color: #ffe066; color: #ffe066; }
+    #cue.counter { border-color: #4ade80; color: #4ade80; }
+
+    #flash {
+      position: fixed;
+      inset: 0;
+      z-index: 25;
+      pointer-events: none;
+      background: rgba(255, 60, 60, 0.35);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #flash.show { opacity: 1; transition: none; }
+
+    #hint {
+      position: fixed;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      opacity: 0.6;
+      pointer-events: none;
+      z-index: 30;
+      text-align: center;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 14px;
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+      text-align: center;
+      padding: 0 24px;
+    }
+    .overlay.show { display: flex; }
+    .overlay h1 { margin: 0; font-size: clamp(28px, 9vw, 42px); }
+    .overlay p { margin: 0; opacity: 0.85; }
+    .overlay button {
+      font-size: clamp(15px, 4.3vw, 17px);
+      padding: 12px 32px;
+      border-radius: 10px;
+      border: none;
+      background: #4c8dff;
+      color: white;
+      touch-action: manipulation;
+      margin-top: 6px;
+    }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #0a0a0f;
+      color: #eee;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="barRow">
+      <div class="barLabel">CPU</div>
+      <div class="barTrack"><div class="barFill" id="oppFill"></div></div>
+    </div>
+    <div class="barRow">
+      <div class="barLabel">YOU</div>
+      <div class="barTrack"><div class="barFill" id="playerFill"></div></div>
+    </div>
+  </div>
+
+  <div id="cue"></div>
+  <div id="flash"></div>
+  <div id="hint">左右スワイプで躱し、隙ができたらタップでカウンター</div>
+
+  <div id="titleOverlay" class="overlay show">
+    <h1>COUNTER PUNCH 3D</h1>
+    <p>相手の繰り出すパンチを見切って左右にスワイプで躱し、隙ができたらタップで反撃しよう。</p>
+    <button id="startBtn">試合開始</button>
+  </div>
+
+  <div id="resultOverlay" class="overlay">
+    <h1 id="resultTitle">WIN!</h1>
+    <p id="resultSubtitle"></p>
+    <button id="retryBtn">もう一度</button>
+  </div>
+
+  <div id="rotateOverlay">縦向きにしてプレイしてください</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
