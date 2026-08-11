@@ -18,6 +18,7 @@
 - [world-rogue](games/world-rogue) — シームレスオープンフィールド型ターン制ローグライクRPG(第1弾: ワールド+8方向移動+戦闘+レベルアップ、2D)
 - [ship-it-sim](games/ship-it-sim) — HTML/CSS/JS/PHPでWebサービスを作りiOSアプリとして リリースするまでの開発工程を6つのミニゲームで駆け抜ける開発工程ミニゲー集(2D)
 - [counter-punch-3d](games/counter-punch-3d) — Three.js製、左右スワイプでパンチを躱しタップで反撃する一人称ボクシングアクション
+- [photo-spin-3d](games/photo-spin-3d) — 1枚の写真から簡易な奥行きを推測し、ドラッグ&ピンチで360度グルグル回して見られる疑似3Dビューア(Three.js製)
 
 ## 公開ページ
 
