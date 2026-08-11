@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>金ヶ崎退き口</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #14130f;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    body { display: flex; flex-direction: column; }
+    canvas { display: block; touch-action: none; }
+
+    #mapArea {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #topBar {
+      position: absolute;
+      top: max(8px, env(safe-area-inset-top));
+      left: 8px;
+      right: 8px;
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      pointer-events: none;
+    }
+    #turnInfo, #winInfo {
+      background: rgba(20, 16, 10, 0.75);
+      border-radius: 8px;
+      padding: 6px 10px;
+      pointer-events: auto;
+    }
+    #turnInfo .phase { font-weight: bold; }
+    #turnInfo .phase.player { color: #7ec8ff; }
+    #turnInfo .phase.enemy { color: #ff8b7e; }
+    #winInfo { max-width: 46%; font-size: 11px; line-height: 1.4; }
+
+    #banner {
+      position: absolute;
+      top: max(40px, calc(env(safe-area-inset-top) + 34px));
+      left: 8px;
+      right: 8px;
+      z-index: 20;
+      pointer-events: none;
+      text-align: center;
+      font-size: 12px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+      color: #ffe066;
+      opacity: 0.95;
+      min-height: 14px;
+    }
+
+    #actionMenu {
+      position: absolute;
+      z-index: 25;
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+      background: rgba(20, 16, 10, 0.92);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px;
+      padding: 6px;
+    }
+    #actionMenu.show { display: flex; }
+    #actionMenu button {
+      font-size: 13px;
+      padding: 8px 18px;
+      border-radius: 6px;
+      border: none;
+      background: rgba(255,255,255,0.12);
+      color: #eee;
+      touch-action: manipulation;
+      white-space: nowrap;
+    }
+    #actionMenu button:active { background: rgba(255,255,255,0.28); }
+    #actionMenu button:disabled { opacity: 0.4; }
+
+    #bottomPanel {
+      flex: 0 0 auto;
+      background: #1c1912;
+      border-top: 2px solid rgba(255,255,255,0.12);
+      padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 64px;
+    }
+    #unitInfo {
+      flex: 1 1 auto;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 2px 10px;
+      font-size: 12px;
+    }
+    #unitInfo .name { grid-column: 1 / -1; font-size: 14px; font-weight: bold; }
+    #unitInfo .name .cls { font-size: 11px; opacity: 0.7; font-weight: normal; margin-left: 6px; }
+    #unitInfo.empty { opacity: 0.4; }
+    #endTurnBtn {
+      flex: 0 0 auto;
+      font-size: 13px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #4c8dff;
+      color: #fff;
+      touch-action: manipulation;
+    }
+    #endTurnBtn:active { background: #3a72db; }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      text-align: center;
+      padding: 0 24px;
+    }
+    .overlay.show { display: flex; }
+    .overlay h1 { margin: 0; font-size: clamp(24px, 7vw, 34px); }
+    .overlay p { margin: 0; opacity: 0.85; max-width: 320px; line-height: 1.6; font-size: 13px; }
+    .overlay button {
+      font-size: clamp(15px, 4.3vw, 17px);
+      padding: 12px 30px;
+      border-radius: 10px;
+      border: none;
+      background: #4c8dff;
+      color: white;
+      touch-action: manipulation;
+      margin-top: 6px;
+    }
+
+    #forecastOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 45;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.55);
+    }
+    #forecastOverlay.show { display: flex; }
+    #forecastPanel {
+      background: #201c15;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 12px;
+      padding: 14px;
+      width: min(340px, 88vw);
+    }
+    #forecastPanel .row { display: flex; justify-content: space-between; font-size: 12px; margin: 4px 0; }
+    #forecastPanel .side { width: 47%; }
+    #forecastPanel .side .who { font-weight: bold; font-size: 13px; margin-bottom: 4px; }
+    #forecastPanel .sides { display: flex; justify-content: space-between; }
+    #forecastPanel .stat { display: flex; justify-content: space-between; font-size: 11px; opacity: 0.85; }
+    #forecastBtns { display: flex; gap: 8px; margin-top: 12px; }
+    #forecastBtns button {
+      flex: 1;
+      font-size: 13px;
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+      touch-action: manipulation;
+    }
+    #confirmAttackBtn { background: #d9544c; color: #fff; }
+    #cancelAttackBtn { background: rgba(255,255,255,0.14); color: #eee; }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #14130f;
+      color: #eee;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <div id="mapArea">
+    <canvas id="game"></canvas>
+    <div id="topBar">
+      <div id="turnInfo">ターン <span id="turnNum">1</span><br /><span id="phaseLabel" class="phase player">自軍フェイズ</span></div>
+      <div id="winInfo">信長を撤退地点へ。仲間を多く連れて帰るほど戦果は上がる。</div>
+    </div>
+    <div id="banner"></div>
+    <div id="actionMenu">
+      <button id="actAttackBtn">攻撃</button>
+      <button id="actSkillBtn">特殊技</button>
+      <button id="actWaitBtn">待機</button>
+      <button id="actCancelBtn">やり直す</button>
+    </div>
+  </div>
+
+  <div id="bottomPanel">
+    <div id="unitInfo" class="empty">ユニットを選択してください</div>
+    <button id="endTurnBtn">ターン終了</button>
+  </div>
+
+  <div id="forecastOverlay">
+    <div id="forecastPanel">
+      <div class="sides">
+        <div class="side">
+          <div class="who" id="fAtkName"></div>
+          <div class="stat"><span>攻撃力</span><span id="fAtkPower"></span></div>
+          <div class="stat"><span>命中率</span><span id="fAtkHit"></span></div>
+          <div class="stat"><span>予想ダメージ</span><span id="fAtkDmg"></span></div>
+          <div class="stat"><span>撃破確率</span><span id="fAtkKill"></span></div>
+        </div>
+        <div class="side">
+          <div class="who" id="fDefName"></div>
+          <div class="stat"><span>防御力</span><span id="fDefPower"></span></div>
+          <div class="stat"><span>反撃命中率</span><span id="fDefHit"></span></div>
+          <div class="stat"><span>反撃ダメージ</span><span id="fDefDmg"></span></div>
+          <div class="stat"><span>反撃撃破確率</span><span id="fDefKill"></span></div>
+        </div>
+      </div>
+      <div id="forecastBtns">
+        <button id="cancelAttackBtn">キャンセル</button>
+        <button id="confirmAttackBtn">攻撃する</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="titleOverlay" class="overlay show">
+    <h1>金ヶ崎退き口</h1>
+    <p>元亀元年(1570年)、越前・金ヶ崎。朝倉義景を攻めていた織田軍だが、同盟者・浅井長政の裏切りにより挟撃の危機に陥った。<br /><br />信長を撤退地点まで逃し、一人でも多くの武将を生きて連れ帰れ。</p>
+    <button id="startBtn">出陣</button>
+  </div>
+
+  <div id="resultOverlay" class="overlay">
+    <h1 id="resultTitle"></h1>
+    <p id="resultSubtitle"></p>
+    <button id="retryBtn">もう一度</button>
+  </div>
+
+  <div id="rotateOverlay">縦向きにしてプレイしてください</div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>
