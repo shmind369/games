@@ -19,6 +19,7 @@
 - [ship-it-sim](games/ship-it-sim) — HTML/CSS/JS/PHPでWebサービスを作りiOSアプリとして リリースするまでの開発工程を6つのミニゲームで駆け抜ける開発工程ミニゲー集(2D)
 - [counter-punch-3d](games/counter-punch-3d) — Three.js製、左右スワイプでパンチを躱しタップで反撃する一人称ボクシングアクション
 - [photo-spin-3d](games/photo-spin-3d) — 1枚の写真から簡易な奥行きを推測し、ドラッグ&ピンチで360度グルグル回して見られる疑似3Dビューア(Three.js製)
+- [kanegasaki-retreat](games/kanegasaki-retreat) — 「金ヶ崎の戦い」を題材にしたマス目移動のターン制戦術SRPG。敵の全滅ではなく織田軍の撤退が目的(2D)
 
 ## 公開ページ
 
