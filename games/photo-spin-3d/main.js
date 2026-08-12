@@ -1,123 +1,9 @@
 import * as THREE from "three";
-
-// ---------- Pure math helpers ----------
-function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-function lerp(a, b, t) { return a + (b - a) * t; }
-function clampIdx(v, min, max) { return Math.max(min, Math.min(max, v)); }
-
-// ---------- Heuristic depth estimation (no ML model available in this
-// environment — see README for why). Combines three classic monocular
-// depth cues: local detail/edge density (sharper = closer), distance
-// from center (subjects tend to be centered), and vertical position
-// (lower in frame = closer, a common ground-plane assumption). ----------
-function toGrayscale(imageData) {
-  const { data, width, height } = imageData;
-  const gray = new Float32Array(width * height);
-  for (let i = 0; i < width * height; i++) {
-    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
-  }
-  return gray;
-}
-function sobelMagnitude(gray, width, height) {
-  const out = new Float32Array(width * height);
-  const gx = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
-  const gy = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let sx = 0, sy = 0, k = 0;
-      for (let j = -1; j <= 1; j++) {
-        for (let i = -1; i <= 1; i++) {
-          const xi = clampIdx(x + i, 0, width - 1);
-          const yj = clampIdx(y + j, 0, height - 1);
-          const v = gray[yj * width + xi];
-          sx += v * gx[k]; sy += v * gy[k]; k++;
-        }
-      }
-      out[y * width + x] = Math.sqrt(sx * sx + sy * sy);
-    }
-  }
-  return out;
-}
-function boxBlur(src, width, height, radius) {
-  if (radius <= 0) return src.slice();
-  const tmp = new Float32Array(width * height);
-  const out = new Float32Array(width * height);
-  const size = radius * 2 + 1;
-  for (let y = 0; y < height; y++) {
-    let sum = 0;
-    for (let x = -radius; x <= radius; x++) sum += src[y * width + clampIdx(x, 0, width - 1)];
-    for (let x = 0; x < width; x++) {
-      tmp[y * width + x] = sum / size;
-      sum += src[y * width + clampIdx(x + radius + 1, 0, width - 1)] - src[y * width + clampIdx(x - radius, 0, width - 1)];
-    }
-  }
-  for (let x = 0; x < width; x++) {
-    let sum = 0;
-    for (let y = -radius; y <= radius; y++) sum += tmp[clampIdx(y, 0, height - 1) * width + x];
-    for (let y = 0; y < height; y++) {
-      out[y * width + x] = sum / size;
-      sum += tmp[clampIdx(y + radius + 1, 0, height - 1) * width + x] - tmp[clampIdx(y - radius, 0, height - 1) * width + x];
-    }
-  }
-  return out;
-}
-function normalize01(arr) {
-  let min = Infinity, max = -Infinity;
-  for (let i = 0; i < arr.length; i++) { if (arr[i] < min) min = arr[i]; if (arr[i] > max) max = arr[i]; }
-  const range = max - min || 1;
-  const out = new Float32Array(arr.length);
-  for (let i = 0; i < arr.length; i++) out[i] = (arr[i] - min) / range;
-  return out;
-}
-const DEPTH_WEIGHTS = { edge: 0.55, center: 0.30, vertical: 0.15 };
-function computeDepthMap(imageData, width, height, opts) {
-  const o = Object.assign({ ...DEPTH_WEIGHTS, blurRadius: 2 }, opts);
-  const gray = toGrayscale(imageData);
-  const edgesNorm = normalize01(boxBlur(sobelMagnitude(gray, width, height), width, height, o.blurRadius));
-  const combined = new Float32Array(width * height);
-  const cx = (width - 1) / 2, cy = (height - 1) / 2;
-  const maxDist = Math.sqrt(cx * cx + cy * cy) || 1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = y * width + x;
-      const centerScore = 1 - Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) / maxDist;
-      const vertScore = y / ((height - 1) || 1);
-      combined[i] = o.edge * edgesNorm[i] + o.center * centerScore + o.vertical * vertScore;
-    }
-  }
-  return boxBlur(normalize01(combined), width, height, o.blurRadius);
-}
-function makeDepthSampler(depthArray, width, height) {
-  return function (u, v) {
-    const x = clampIdx(u, 0, 1) * (width - 1);
-    const y = clampIdx(v, 0, 1) * (height - 1);
-    const x0 = Math.floor(x), x1 = Math.min(x0 + 1, width - 1);
-    const y0 = Math.floor(y), y1 = Math.min(y0 + 1, height - 1);
-    const fx = x - x0, fy = y - y0;
-    const d00 = depthArray[y0 * width + x0], d10 = depthArray[y0 * width + x1];
-    const d01 = depthArray[y1 * width + x0], d11 = depthArray[y1 * width + x1];
-    return lerp(lerp(d00, d10, fx), lerp(d01, d11, fx), fy);
-  };
-}
-function averageBorderColor(imageData, width, height) {
-  const { data } = imageData;
-  let r = 0, g = 0, b = 0, count = 0;
-  const step = Math.max(1, Math.floor(width / 48));
-  for (let x = 0; x < width; x += step) {
-    for (const y of [0, height - 1]) {
-      const i = (y * width + x) * 4;
-      r += data[i]; g += data[i + 1]; b += data[i + 2]; count++;
-    }
-  }
-  for (let y = 0; y < height; y += step) {
-    for (const x of [0, width - 1]) {
-      const i = (y * width + x) * 4;
-      r += data[i]; g += data[i + 1]; b += data[i + 2]; count++;
-    }
-  }
-  count = count || 1;
-  return { r: r / count / 255, g: g / count / 255, b: b / count / 255 };
-}
+import {
+  clamp, lerp, segmentSilhouette, computeInflationField, computeSoftAlpha,
+  makeFieldSampler, sampleColorBilinear, buildGridField, gridIndex,
+  computeCellInclusion, findRimEdges, buildIndices,
+} from "./depth.js";
 
 // ---------- Touch-control math ----------
 const PITCH_LIMIT = Math.PI / 2.4;
@@ -165,79 +51,156 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
-// ---------- Photo -> relief mesh pipeline ----------
-const ANALYSIS_SIZE = 96;
-const GRID_SEGMENTS = 40;
-const FRONT_MAX_DISP = 0.42;
-const BACK_MAX_DISP = 0.14;
-const BACK_OFFSET = 0.05;
+// ---------- Photo -> silhouette-bounded volumetric mesh pipeline ----------
+// Unlike a simple displaced plane (a flat card pushed in/out per-pixel), this
+// builds an actual rounded volume bounded by the subject's outline:
+//   1. segmentSilhouette cuts the subject out from its background.
+//   2. computeInflationField gives it a rounded cross-section (a distance
+//      transform from the silhouette edge run through a quarter-circle
+//      profile — the classic "balloon inflation" trick), tapering to exactly
+//      0 at the outline.
+//   3. Front/back surfaces are only emitted for grid cells inside the
+//      silhouette (background cells produce no geometry at all), and a rim
+//      strip traces the silhouette's actual outline to close the volume.
+// The back and the object's sides are never truly photographed, so their
+// appearance is inferred (mirrored + blurred + darkened front texture) —
+// see README for the honest scope of what this can and can't reconstruct.
+const ANALYSIS_SIZE = 128;
+const GRID_SEGMENTS = 88;
+const FRONT_MAX_DISP = 0.5;
+const BACK_MAX_DISP = 0.22;
+const BACK_OFFSET = 0.015;
+const INCLUDE_THRESHOLD = 0.5;
+// A wide alpha blur is what actually matters here: it widens the band (in
+// mesh-grid cells, not just analysis pixels) over which depth gets damped
+// toward 0 near the silhouette edge, turning an abrupt 1-2-cell "cliff" at
+// the boundary into a gentle multi-cell ramp — the single biggest factor in
+// avoiding a jagged, spiky rim on the finished mesh.
+const MASK_BLUR_RADIUS = 5;
 
-function buildDisplacedGeometry(depthSampler, planeW, planeH, segments, maxDisp, mirrorU) {
-  const geo = new THREE.PlaneGeometry(planeW, planeH, segments, segments);
-  const pos = geo.attributes.position;
-  const uv = geo.attributes.uv;
-  for (let i = 0; i < pos.count; i++) {
-    const u = uv.getX(i);
-    const v = uv.getY(i);
-    const d = depthSampler(mirrorU ? 1 - u : u, 1 - v);
-    pos.setZ(i, d * maxDisp);
+function buildSurfaceBuffers(planeW, planeH, segments, depthGrid, maxDisp) {
+  const n = segments + 1;
+  const positions = new Float32Array(n * n * 3);
+  const uvs = new Float32Array(n * n * 2);
+  for (let j = 0; j < n; j++) {
+    const rowFrac = j / segments;
+    for (let i = 0; i < n; i++) {
+      const colFrac = i / segments;
+      const gi = gridIndex(i, j, segments);
+      positions[gi * 3] = (colFrac - 0.5) * planeW;
+      positions[gi * 3 + 1] = (0.5 - rowFrac) * planeH;
+      positions[gi * 3 + 2] = depthGrid[gi] * maxDisp;
+      uvs[gi * 2] = colFrac;
+      uvs[gi * 2 + 1] = 1 - rowFrac;
+    }
   }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  return geo;
+  return { positions, uvs };
 }
-function perimeterGridCoords(segments) {
-  const coords = [];
-  for (let i = 0; i <= segments; i++) coords.push([i, 0]); // top row, left->right
-  for (let j = 1; j <= segments; j++) coords.push([segments, j]); // right col, top->bottom
-  for (let i = segments - 1; i >= 0; i--) coords.push([i, segments]); // bottom row, right->left
-  for (let j = segments - 1; j >= 1; j--) coords.push([0, j]); // left col, bottom->top
-  return coords;
-}
-function gridFlatIndex(i, j, segments) { return j * (segments + 1) + i; }
-function buildRimGeometry(frontGeo, backLocalPositions, segments) {
-  const coords = perimeterGridCoords(segments);
-  const frontPos = frontGeo.attributes.position;
-  const n = coords.length;
-  const verts = [];
-  for (let k = 0; k < n; k++) {
-    const [i, j] = coords[k];
-    const fi = gridFlatIndex(i, j, segments);
-    const fx = frontPos.getX(fi), fy = frontPos.getY(fi), fz = frontPos.getZ(fi);
-    // The back mesh is rotated 180deg around Y (flipping world X) and offset
-    // in -Z. To connect a straight, untwisted rim strip, the back vertex we
-    // stitch to must land at the SAME world (x,y) as the front vertex —
-    // which, because the rotation mirrors X, means sampling back's LOCAL
-    // grid at the horizontally-mirrored column (segments-i), not the same
-    // (i,j). See games/photo-spin-3d/README.md for the derivation.
-    const bi = gridFlatIndex(segments - i, j, segments) * 3;
-    const lx = backLocalPositions[bi], ly = backLocalPositions[bi + 1], lz = backLocalPositions[bi + 2];
-    const bx = -lx, by = ly, bz = -lz - BACK_OFFSET;
-    verts.push(fx, fy, fz, bx, by, bz);
-  }
-  const indices = [];
-  for (let k = 0; k < n; k++) {
-    const k2 = (k + 1) % n;
-    const f0 = k * 2, b0 = k * 2 + 1, f1 = k2 * 2, b1 = k2 * 2 + 1;
-    indices.push(f0, f1, b1, f0, b1, b0);
-  }
+
+function buildFilteredGeometry(positions, uvs, indices) {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
   geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
 }
 
-function buildPhotoObject(image, imageDataFull, depthArray, analysisSize, texW, texH) {
+// Rim vertices sit AT the silhouette's discretized edge, not deep inside it —
+// but the inflation profile has a steep (near-vertical) slope right at that
+// edge, so even the small mismatch between the alpha-based cell-inclusion
+// boundary and the depth field's own zero-crossing gets amplified into a
+// large, spiky z value if sampled directly. Sealing the rim flush at z=0
+// (front) / z=-BACK_OFFSET (back) sidesteps that entirely: it's exactly what
+// the surfaces are already tapering toward at their shared silhouette edge.
+function buildRimGeometry(rimEdges, frontPositions, segments, fullImageData, texW, texH) {
+  const verts = [];
+  const colors = [];
+  const indices = [];
+  for (const [[i0, j0], [i1, j1]] of rimEdges) {
+    const fi0 = gridIndex(i0, j0, segments) * 3, fi1 = gridIndex(i1, j1, segments) * 3;
+    const fx0 = frontPositions[fi0], fy0 = frontPositions[fi0 + 1];
+    const fx1 = frontPositions[fi1], fy1 = frontPositions[fi1 + 1];
+    const f0 = [fx0, fy0, 0];
+    const f1 = [fx1, fy1, 0];
+    const b0 = [fx0, fy0, -BACK_OFFSET];
+    const b1 = [fx1, fy1, -BACK_OFFSET];
+
+    const c0 = sampleColorBilinear(fullImageData, texW, texH, i0 / segments, j0 / segments);
+    const c1 = sampleColorBilinear(fullImageData, texW, texH, i1 / segments, j1 / segments);
+    const DARK = 0.62;
+
+    const base = verts.length / 3;
+    verts.push(...f0, ...f1, ...b1, ...b0);
+    colors.push(
+      c0.r, c0.g, c0.b,
+      c1.r, c1.g, c1.b,
+      c1.r * DARK, c1.g * DARK, c1.b * DARK,
+      c0.r * DARK, c0.g * DARK, c0.b * DARK,
+    );
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function buildPhotoObject(image, analysisData, fullImageData, texW, texH) {
   const aspect = image.width / image.height;
   const planeW = aspect >= 1 ? 1.4 : 1.4 * aspect;
   const planeH = aspect >= 1 ? 1.4 / aspect : 1.4;
-  const sampler = makeDepthSampler(depthArray, analysisSize, analysisSize);
 
-  const frontGeo = buildDisplacedGeometry(sampler, planeW, planeH, GRID_SEGMENTS, FRONT_MAX_DISP, false);
-  const backGeoRaw = buildDisplacedGeometry(sampler, planeW, planeH, GRID_SEGMENTS, BACK_MAX_DISP, true);
-  const backLocalPositions = backGeoRaw.attributes.position.array.slice();
-  const rimColor = averageBorderColor(imageDataFull, imageDataFull.width, imageDataFull.height);
+  const fgMask = segmentSilhouette(analysisData, ANALYSIS_SIZE, ANALYSIS_SIZE);
+  const inflation = computeInflationField(fgMask, ANALYSIS_SIZE, ANALYSIS_SIZE);
+  const softAlpha = computeSoftAlpha(fgMask, ANALYSIS_SIZE, ANALYSIS_SIZE, MASK_BLUR_RADIUS);
+  const depthSampler = makeFieldSampler(inflation, ANALYSIS_SIZE, ANALYSIS_SIZE);
+  const alphaSampler = makeFieldSampler(softAlpha, ANALYSIS_SIZE, ANALYSIS_SIZE);
+
+  const depthGridFront = buildGridField(depthSampler, GRID_SEGMENTS, false);
+  const depthGridBack = buildGridField(depthSampler, GRID_SEGMENTS, true);
+  const alphaGrid = buildGridField(alphaSampler, GRID_SEGMENTS, false);
+  const alphaGridMirrored = buildGridField(alphaSampler, GRID_SEGMENTS, true);
+  const cellIncluded = computeCellInclusion(alphaGrid, GRID_SEGMENTS, INCLUDE_THRESHOLD);
+  const indices = buildIndices(cellIncluded, GRID_SEGMENTS);
+  const rimEdges = findRimEdges(cellIncluded, GRID_SEGMENTS);
+
+  // Damp depth by the (soft, blurred) alpha confidence at each vertex. A
+  // boundary cell can pass the average-of-4-corners inclusion test while one
+  // of its own corners still sits deep inside the silhouette (large raw
+  // depth) — multiplying by alpha (which is ~0 right at the true edge and
+  // ~1 well inside) pulls that corner's depth back down in proportion to how
+  // close it actually is to the edge, smoothing out the last ring of
+  // boundary triangles instead of leaving them at their raw, possibly-large
+  // sampled depth.
+  for (let k = 0; k < depthGridFront.length; k++) depthGridFront[k] *= alphaGrid[k];
+  for (let k = 0; k < depthGridBack.length; k++) depthGridBack[k] *= alphaGridMirrored[k];
+
+  // Force the exact boundary vertices (the rim edge endpoints) to true zero
+  // depth on both surfaces. Alpha damping alone still leaves a small residual
+  // (a boundary cell only needs to average >0.5, so an individual corner can
+  // land at e.g. alpha=0.6 and keep a sliver of depth) — that sliver is small
+  // in absolute terms, but the rim strip connecting to it is built perfectly
+  // flat at z=0, so any nonzero residual here is a real, visible step
+  // between two thin, nearly-parallel surfaces right at the silhouette edge,
+  // which is exactly what shows up as z-fighting/moiré when viewed near
+  // edge-on. Snapping both surfaces' own boundary ring to match the rim
+  // exactly removes that step at the source.
+  const boundaryVerts = new Set();
+  for (const [[i0, j0], [i1, j1]] of rimEdges) {
+    boundaryVerts.add(gridIndex(i0, j0, GRID_SEGMENTS));
+    boundaryVerts.add(gridIndex(i1, j1, GRID_SEGMENTS));
+  }
+  for (const gi of boundaryVerts) { depthGridFront[gi] = 0; depthGridBack[gi] = 0; }
+
+  const front = buildSurfaceBuffers(planeW, planeH, GRID_SEGMENTS, depthGridFront, FRONT_MAX_DISP);
+  const back = buildSurfaceBuffers(planeW, planeH, GRID_SEGMENTS, depthGridBack, BACK_MAX_DISP);
+
+  const frontGeo = buildFilteredGeometry(front.positions, front.uvs, indices);
+  const backGeo = buildFilteredGeometry(back.positions, back.uvs, indices);
+  const rimGeo = buildRimGeometry(rimEdges, front.positions, GRID_SEGMENTS, fullImageData, texW, texH);
 
   const frontCanvas = document.createElement("canvas");
   frontCanvas.width = texW; frontCanvas.height = texH;
@@ -250,7 +213,7 @@ function buildPhotoObject(image, imageDataFull, depthArray, analysisSize, texW, 
   const bctx = backCanvas.getContext("2d");
   bctx.save();
   bctx.scale(-1, 1);
-  bctx.filter = "blur(6px) brightness(0.6)";
+  bctx.filter = "blur(6px) brightness(0.62) saturate(0.85)";
   bctx.drawImage(image, -texW, 0, texW, texH);
   bctx.restore();
   const backTexture = new THREE.CanvasTexture(backCanvas);
@@ -258,14 +221,12 @@ function buildPhotoObject(image, imageDataFull, depthArray, analysisSize, texW, 
 
   const frontMat = new THREE.MeshStandardMaterial({ map: frontTexture, roughness: 0.85, side: THREE.FrontSide });
   const backMat = new THREE.MeshStandardMaterial({ map: backTexture, roughness: 0.95, side: THREE.FrontSide });
-  const rimMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(rimColor.r, rimColor.g, rimColor.b), roughness: 1 });
+  const rimMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, side: THREE.DoubleSide });
 
   const frontMesh = new THREE.Mesh(frontGeo, frontMat);
-  const backMesh = new THREE.Mesh(backGeoRaw, backMat);
+  const backMesh = new THREE.Mesh(backGeo, backMat);
   backMesh.rotation.y = Math.PI;
   backMesh.position.z = -BACK_OFFSET;
-
-  const rimGeo = buildRimGeometry(frontGeo, backLocalPositions, GRID_SEGMENTS);
   const rimMesh = new THREE.Mesh(rimGeo, rimMat);
 
   const group = new THREE.Group();
@@ -314,7 +275,6 @@ async function loadPhotoFile(file) {
   const actx = analysisCanvas.getContext("2d");
   actx.drawImage(image, 0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
   const analysisData = actx.getImageData(0, 0, ANALYSIS_SIZE, ANALYSIS_SIZE);
-  const depthArray = computeDepthMap(analysisData, ANALYSIS_SIZE, ANALYSIS_SIZE);
 
   const fullCanvas = document.createElement("canvas");
   fullCanvas.width = texW; fullCanvas.height = texH;
@@ -325,7 +285,7 @@ async function loadPhotoFile(file) {
     objectGroup.remove(currentPhotoGroup);
     disposeGroup(currentPhotoGroup);
   }
-  currentPhotoGroup = buildPhotoObject(image, fullImageData, depthArray, ANALYSIS_SIZE, texW, texH);
+  currentPhotoGroup = buildPhotoObject(image, analysisData, fullImageData, texW, texH);
   objectGroup.add(currentPhotoGroup);
   objectGroup.rotation.set(0, 0, 0);
   camDist = CAM_DEFAULT_DIST;
