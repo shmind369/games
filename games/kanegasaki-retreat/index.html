@@ -104,6 +104,24 @@
       gap: 10px;
       min-height: 64px;
     }
+    #unitPortrait {
+      flex: 0 0 auto;
+      width: 52px;
+      height: 52px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.3);
+      background-size: cover;
+      background-position: top center;
+      image-rendering: pixelated;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+    }
+    #unitPortrait.show { display: flex; }
     #unitInfo {
       flex: 1 1 auto;
       display: grid;
@@ -187,6 +205,105 @@
     }
     #confirmAttackBtn { background: #d9544c; color: #fff; }
     #cancelAttackBtn { background: rgba(255,255,255,0.14); color: #eee; }
+
+    #battleOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 48;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.6);
+    }
+    #battleOverlay.show { display: flex; }
+    #battleStage {
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 0 14px;
+    }
+    .battleUnit { position: relative; width: 40vw; max-width: 165px; text-align: center; }
+    .battleVs { font-size: 12px; font-weight: bold; opacity: 0.65; padding-bottom: 64px; }
+    .battleUnitName {
+      font-size: 12px;
+      font-weight: bold;
+      margin-top: 6px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+    .battleHpBarWrap {
+      background: rgba(0,0,0,0.5);
+      border-radius: 4px;
+      padding: 2px;
+      margin-bottom: 4px;
+    }
+    .battleHpBar {
+      height: 8px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.15);
+      overflow: hidden;
+    }
+    .battleHpFill { height: 100%; background: #4ade80; transition: width 0.45s ease; }
+    .battleHpFill.low { background: #facc15; }
+    .battleHpFill.critical { background: #ef4444; }
+    .battlePortraitWrap { position: relative; width: 100%; aspect-ratio: 1 / 1.08; }
+    .battlePortraitWrap.flip { transform: scaleX(-1); }
+    /* The fallback glyph (no dedicated portrait art) is plain text, unlike
+       a face image it does NOT read correctly mirrored — counter-flip it
+       back so it's legible even on the mirrored (right/defender) side. */
+    .battlePortraitWrap.flip .glyphText { display: inline-block; transform: scaleX(-1); }
+    .battlePortraitInner {
+      width: 100%;
+      height: 100%;
+      border-radius: 8px;
+      border: 2px solid rgba(255,255,255,0.3);
+      background-size: cover;
+      background-position: top center;
+      image-rendering: pixelated;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14vw;
+      font-weight: bold;
+      color: #fff;
+      transition: transform 0.14s ease, filter 0.14s ease, opacity 0.3s ease;
+    }
+    .battlePortraitInner.lunge-forward { transform: translateX(16px); }
+    .battlePortraitInner.flash { filter: brightness(2.3) saturate(0.25); }
+    .battlePortraitInner.shake { animation: battleShake 0.3s ease; }
+    @keyframes battleShake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-6px); }
+      40% { transform: translateX(6px); }
+      60% { transform: translateX(-4px); }
+      80% { transform: translateX(4px); }
+    }
+    .battlePortraitInner.defeated {
+      filter: grayscale(1) brightness(0.45);
+      opacity: 0.25;
+      transform: scale(0.82) translateY(12px);
+    }
+    .battleDamageNumber {
+      position: absolute;
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 20px;
+      font-weight: bold;
+      color: #fff;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.9), 0 0 8px rgba(255,80,60,0.9);
+      pointer-events: none;
+      opacity: 0;
+    }
+    .battleDamageNumber.miss { color: #ccc; text-shadow: 0 2px 4px rgba(0,0,0,0.9); }
+    .battleDamageNumber.show { animation: battleDmgPop 0.85s ease forwards; }
+    @keyframes battleDmgPop {
+      0% { opacity: 0; transform: translateX(-50%) translateY(0) scale(0.6); }
+      15% { opacity: 1; transform: translateX(-50%) translateY(-14px) scale(1.15); }
+      30% { transform: translateX(-50%) translateY(-18px) scale(1); }
+      100% { opacity: 0; transform: translateX(-50%) translateY(-40px) scale(1); }
+    }
 
     #dialogueOverlay {
       position: fixed;
@@ -301,8 +418,31 @@
   </div>
 
   <div id="bottomPanel">
+    <div id="unitPortrait"></div>
     <div id="unitInfo" class="empty">ユニットを選択してください</div>
     <button id="endTurnBtn">ターン終了</button>
+  </div>
+
+  <div id="battleOverlay">
+    <div id="battleStage">
+      <div class="battleUnit left">
+        <div class="battleHpBarWrap"><div class="battleHpBar"><div id="battleLeftHpFill" class="battleHpFill"></div></div></div>
+        <div class="battlePortraitWrap">
+          <div id="battleLeftPortrait" class="battlePortraitInner"><span class="glyphText"></span></div>
+        </div>
+        <div id="battleLeftName" class="battleUnitName"></div>
+        <div id="battleLeftDamage" class="battleDamageNumber"></div>
+      </div>
+      <div class="battleVs">VS</div>
+      <div class="battleUnit right">
+        <div class="battleHpBarWrap"><div class="battleHpBar"><div id="battleRightHpFill" class="battleHpFill"></div></div></div>
+        <div class="battlePortraitWrap flip">
+          <div id="battleRightPortrait" class="battlePortraitInner"><span class="glyphText"></span></div>
+        </div>
+        <div id="battleRightName" class="battleUnitName"></div>
+        <div id="battleRightDamage" class="battleDamageNumber"></div>
+      </div>
+    </div>
   </div>
 
   <div id="forecastOverlay">
