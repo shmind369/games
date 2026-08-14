@@ -188,6 +188,84 @@
     #confirmAttackBtn { background: #d9544c; color: #fff; }
     #cancelAttackBtn { background: rgba(255,255,255,0.14); color: #eee; }
 
+    #dialogueOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: none;
+      background: linear-gradient(180deg, #1a140c 0%, #2c2013 55%, #1a140c 100%);
+    }
+    #dialogueOverlay.show { display: block; }
+    #dlgChapterTitle {
+      position: absolute;
+      top: max(26px, env(safe-area-inset-top));
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 14px;
+      letter-spacing: 0.12em;
+      color: #ffe066;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.9);
+    }
+    .dlgPortrait {
+      position: absolute;
+      bottom: 148px;
+      width: 48vw;
+      max-width: 250px;
+      image-rendering: pixelated;
+      filter: brightness(0.4) saturate(0.55);
+      transition: filter 0.2s ease, transform 0.2s ease, opacity 0.2s ease;
+      opacity: 1;
+    }
+    .dlgPortrait.hide { opacity: 0; }
+    .dlgPortrait.left { left: -14px; transform: scaleX(1); }
+    .dlgPortrait.left.active { filter: brightness(1) saturate(1); transform: scaleX(1) scale(1.05); }
+    .dlgPortrait.right { right: -14px; transform: scaleX(-1); }
+    .dlgPortrait.right.active { filter: brightness(1) saturate(1); transform: scaleX(-1) scale(1.05); }
+    #dlgBox {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      background: rgba(10, 8, 5, 0.9);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 10px;
+      padding: 14px 16px;
+      min-height: 96px;
+    }
+    #dlgBox.narration { text-align: center; }
+    #dlgName {
+      font-size: 13px;
+      font-weight: bold;
+      color: #ffe066;
+      margin-bottom: 6px;
+      min-height: 16px;
+    }
+    #dlgText {
+      font-size: 14px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+    #dlgBox.narration #dlgText { font-style: italic; opacity: 0.9; }
+    #dlgHint {
+      text-align: right;
+      font-size: 10px;
+      opacity: 0.6;
+      margin-top: 6px;
+    }
+    #dlgSkipBtn {
+      position: absolute;
+      top: max(22px, env(safe-area-inset-top));
+      right: 12px;
+      font-size: 11px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: none;
+      background: rgba(255,255,255,0.14);
+      color: #eee;
+      touch-action: manipulation;
+    }
+
     #rotateOverlay {
       position: fixed;
       inset: 0;
@@ -262,6 +340,18 @@
     <h1 id="resultTitle"></h1>
     <p id="resultSubtitle"></p>
     <button id="retryBtn">もう一度</button>
+  </div>
+
+  <div id="dialogueOverlay">
+    <div id="dlgChapterTitle"></div>
+    <img id="dlgPortraitLeft" class="dlgPortrait left hide" src="" alt="" />
+    <img id="dlgPortraitRight" class="dlgPortrait right hide" src="" alt="" />
+    <button id="dlgSkipBtn">スキップ</button>
+    <div id="dlgBox">
+      <div id="dlgName"></div>
+      <div id="dlgText"></div>
+      <div id="dlgHint">タップして続ける ▶</div>
+    </div>
   </div>
 
   <div id="rotateOverlay">縦向きにしてプレイしてください</div>
