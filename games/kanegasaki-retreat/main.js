@@ -279,6 +279,7 @@ const turnNumEl = document.getElementById("turnNum");
 const phaseLabelEl = document.getElementById("phaseLabel");
 const bannerEl = document.getElementById("banner");
 const unitInfoEl = document.getElementById("unitInfo");
+const unitPortraitEl = document.getElementById("unitPortrait");
 const endTurnBtn = document.getElementById("endTurnBtn");
 const actionMenuEl = document.getElementById("actionMenu");
 const actAttackBtn = document.getElementById("actAttackBtn");
@@ -323,6 +324,12 @@ const PORTRAIT_SRC = {
   mitsuhide: "assets/portraits/mitsuhide.png",
   ikeda: "assets/portraits/ikeda.png",
   hideyoshi: "assets/portraits/hideyoshi.png",
+  hisahide: "assets/portraits/hisahide.png",
+  kutsuki: "assets/portraits/kutsuki.png",
+  yoshikage: "assets/portraits/yoshikage.png",
+  nagamasa: "assets/portraits/nagamasa.png",
+  // kagetsune / ashigaru_a / ashigaru_b have no dedicated art — they fall
+  // back to a colored glyph tile (see setPortraitEl) rather than an image.
 };
 const CHAR_NAMES = {
   nobunaga: "織田信長",
@@ -483,11 +490,33 @@ function updateHud() {
   phaseLabelEl.className = "phase " + (game.phase === "player" ? "player" : "enemy");
   updateUnitInfo();
 }
+// Fills a portrait element (either the bottom-panel thumbnail or a battle
+// animation slot) with the unit's real portrait art if available, or a
+// colored glyph tile (matching the on-map token style) as a fallback for
+// templates with no dedicated art (kagetsune, ashigaru_a, ashigaru_b).
+function setPortraitEl(el, unit) {
+  const src = PORTRAIT_SRC[unit.template];
+  // Battle-overlay portrait slots wrap their glyph in a `.glyphText` span
+  // that's counter-flipped in CSS when the slot itself is mirrored (see
+  // .battlePortraitWrap.flip); the plain bottom-panel thumbnail has no such
+  // span and never gets mirrored, so it just falls back to the element itself.
+  const glyphTarget = el.querySelector(".glyphText") || el;
+  if (src) {
+    el.style.backgroundImage = `url(${src})`;
+    el.style.backgroundColor = "";
+    glyphTarget.textContent = "";
+  } else {
+    el.style.backgroundImage = "none";
+    el.style.backgroundColor = SIDE_COLORS[unit.side];
+    glyphTarget.textContent = unitGlyph(unit);
+  }
+}
 function updateUnitInfo() {
   const sel = game.selectedId ? getUnit(game.selectedId) : null;
   if (!sel) {
     unitInfoEl.classList.add("empty");
     unitInfoEl.innerHTML = "ユニットを選択してください";
+    unitPortraitEl.classList.remove("show");
     return;
   }
   unitInfoEl.classList.remove("empty");
@@ -499,6 +528,8 @@ function updateUnitInfo() {
     <div>防御 ${sel.def}</div>
     <div>移動 ${sel.mov}</div>
   `;
+  setPortraitEl(unitPortraitEl, sel);
+  unitPortraitEl.classList.add("show");
 }
 
 // ---------- Selection / movement flow ----------
@@ -604,10 +635,17 @@ function cancelForecast() {
   const unit = getUnit(game.selectedId);
   showActionMenu(unit);
 }
+// Applies the full attack + optional-counter exchange exactly as before
+// (same RNG draw order, same mutations, same banner text), but also returns
+// a structured step list describing what happened, so a battle animation
+// can play through the exchange visually without re-deriving or re-rolling
+// anything — the steps are a record of the mutation that already happened,
+// not a separate simulation.
 function resolveCombat(attackerId, defenderId) {
   const attacker = getUnit(attackerId), defender = getUnit(defenderId);
   const defTerrain = game.grid[idx(defender.x, defender.y)];
   const atkTerrain = game.grid[idx(attacker.x, attacker.y)];
+  const steps = [];
   const hitA = computeHitChance(attacker, defender, defTerrain);
   let msg = "";
   if (game.combatRng() * 100 < hitA) {
@@ -616,14 +654,18 @@ function resolveCombat(attackerId, defenderId) {
     const gained = applyExp(attacker, expForDamage(dmg));
     Object.assign(attacker, gained);
     msg = `${attacker.name}の攻撃！ ${dmg}ダメージ`;
+    steps.push({ actorId: attackerId, targetId: defenderId, hit: true, damage: dmg, targetHpAfter: defender.hp, defeated: false });
   } else {
     msg = `${attacker.name}の攻撃は外れた`;
+    steps.push({ actorId: attackerId, targetId: defenderId, hit: false, damage: 0, targetHpAfter: defender.hp, defeated: false });
   }
   if (defender.hp <= 0) {
     const gained = applyExp(attacker, expForKill(defender.lv));
     Object.assign(attacker, gained);
-    setBanner(`${msg}／${defender.name}を撃破！`);
-    return;
+    msg = `${msg}／${defender.name}を撃破！`;
+    steps[steps.length - 1].defeated = true;
+    setBanner(msg);
+    return { steps, message: msg };
   }
   if (manhattan(attacker.x, attacker.y, defender.x, defender.y) <= defender.range) {
     const hitD = computeHitChance(defender, attacker, atkTerrain);
@@ -633,26 +675,122 @@ function resolveCombat(attackerId, defenderId) {
       const gained2 = applyExp(defender, expForDamage(dmg2));
       Object.assign(defender, gained2);
       msg += `／反撃！ ${dmg2}ダメージ`;
+      steps.push({ actorId: defenderId, targetId: attackerId, hit: true, damage: dmg2, targetHpAfter: attacker.hp, defeated: false });
       if (attacker.hp <= 0) {
         const gained3 = applyExp(defender, expForKill(attacker.lv));
         Object.assign(defender, gained3);
         msg += `／${attacker.name}を撃破！`;
+        steps[steps.length - 1].defeated = true;
       }
     } else {
       msg += "／反撃は外れた";
+      steps.push({ actorId: defenderId, targetId: attackerId, hit: false, damage: 0, targetHpAfter: attacker.hp, defeated: false });
     }
   }
   setBanner(msg);
+  return { steps, message: msg };
 }
 function confirmAttack() {
   const { attackerId, defenderId } = game.pendingAttack;
   forecastOverlayEl.classList.remove("show");
-  resolveCombat(attackerId, defenderId);
   game.pendingAttack = null;
-  const attacker = getUnit(attackerId);
-  if (attacker.hp > 0) attacker.acted = true;
-  deselect();
-  checkAndAdvance();
+  playBattleAnimation(attackerId, defenderId, () => {
+    const attacker = getUnit(attackerId);
+    if (attacker.hp > 0) attacker.acted = true;
+    deselect();
+    checkAndAdvance();
+  });
+}
+
+// ---------- Battle animation (simple Fire Emblem-style attack exchange) ----------
+const battleOverlayEl = document.getElementById("battleOverlay");
+const battleLeftPortraitEl = document.getElementById("battleLeftPortrait");
+const battleRightPortraitEl = document.getElementById("battleRightPortrait");
+const battleLeftNameEl = document.getElementById("battleLeftName");
+const battleRightNameEl = document.getElementById("battleRightName");
+const battleLeftHpFillEl = document.getElementById("battleLeftHpFill");
+const battleRightHpFillEl = document.getElementById("battleRightHpFill");
+const battleLeftDamageEl = document.getElementById("battleLeftDamage");
+const battleRightDamageEl = document.getElementById("battleRightDamage");
+
+function setHpFillEl(el, hp, maxHp) {
+  const ratio = clamp(hp / maxHp, 0, 1);
+  el.style.width = `${ratio * 100}%`;
+  el.classList.toggle("low", ratio > 0.25 && ratio <= 0.5);
+  el.classList.toggle("critical", ratio <= 0.25);
+}
+function showDamageNumber(el, text, isMiss) {
+  el.textContent = text;
+  el.classList.remove("show");
+  void el.offsetWidth; // restart the CSS animation even if it's showing the same text again
+  el.classList.toggle("miss", !!isMiss);
+  el.classList.add("show");
+}
+
+// Attacker is always drawn on the left, defender on the right — the portrait
+// wrap on the right side is CSS-mirrored (scaleX(-1)) so both face each
+// other, same convention as the opening cutscene. The lunge/shake/flash
+// classes go on the *inner* (unmirrored) element, so "lunge forward" always
+// just means translateX(+16px) in local space: on the left that reads as
+// moving toward the center on screen, and on the mirrored right side the
+// same local translate also reads as moving toward the center — no
+// side-specific animation variants needed.
+function playBattleAnimation(attackerId, defenderId, onComplete) {
+  const attackerBefore = { ...getUnit(attackerId) };
+  const defenderBefore = { ...getUnit(defenderId) };
+
+  const result = resolveCombat(attackerId, defenderId); // mutates game state, returns the step log
+
+  battleLeftNameEl.textContent = attackerBefore.name;
+  battleRightNameEl.textContent = defenderBefore.name;
+  setPortraitEl(battleLeftPortraitEl, attackerBefore);
+  setPortraitEl(battleRightPortraitEl, defenderBefore);
+  battleLeftPortraitEl.className = "battlePortraitInner";
+  battleRightPortraitEl.className = "battlePortraitInner";
+  battleLeftDamageEl.classList.remove("show");
+  battleRightDamageEl.classList.remove("show");
+  setHpFillEl(battleLeftHpFillEl, attackerBefore.hp, attackerBefore.maxHp);
+  setHpFillEl(battleRightHpFillEl, defenderBefore.hp, defenderBefore.maxHp);
+  battleOverlayEl.classList.add("show");
+
+  const hpTrack = { [attackerId]: attackerBefore.hp, [defenderId]: defenderBefore.hp };
+  const maxHpTrack = { [attackerId]: attackerBefore.maxHp, [defenderId]: defenderBefore.maxHp };
+
+  function playStep(i) {
+    if (i >= result.steps.length) {
+      setTimeout(() => {
+        battleOverlayEl.classList.remove("show");
+        onComplete();
+      }, 380);
+      return;
+    }
+    const step = result.steps[i];
+    const actorIsAttacker = step.actorId === attackerId;
+    const actorPortrait = actorIsAttacker ? battleLeftPortraitEl : battleRightPortraitEl;
+    const targetPortrait = actorIsAttacker ? battleRightPortraitEl : battleLeftPortraitEl;
+    const targetHpFill = actorIsAttacker ? battleRightHpFillEl : battleLeftHpFillEl;
+    const targetDamageEl = actorIsAttacker ? battleRightDamageEl : battleLeftDamageEl;
+
+    actorPortrait.classList.add("lunge-forward");
+    setTimeout(() => {
+      actorPortrait.classList.remove("lunge-forward");
+      if (step.hit) {
+        targetPortrait.classList.add("flash", "shake");
+        showDamageNumber(targetDamageEl, `-${step.damage}`, false);
+        setTimeout(() => targetPortrait.classList.remove("flash"), 130);
+        setTimeout(() => targetPortrait.classList.remove("shake"), 320);
+      } else {
+        showDamageNumber(targetDamageEl, "MISS", true);
+      }
+      hpTrack[step.targetId] = step.targetHpAfter;
+      setHpFillEl(targetHpFill, hpTrack[step.targetId], maxHpTrack[step.targetId]);
+      if (step.defeated) {
+        setTimeout(() => targetPortrait.classList.add("defeated"), 200);
+      }
+      setTimeout(() => playStep(i + 1), 650);
+    }, 150);
+  }
+  playStep(0);
 }
 
 function useSkill() {
@@ -709,14 +847,19 @@ function runEnemyPhase() {
     if (unit.hp <= 0) { setTimeout(step, 10); return; }
     const action = pickEnemyAction(unit, game.grid, game.units);
     if (action.moveTo) { unit.x = action.moveTo.x; unit.y = action.moveTo.y; }
-    if (action.attackId) {
-      resolveCombat(unit.id, action.attackId);
-      render();
-    }
     render();
-    const outcome = checkOutcome(game);
-    if (outcome) { finishGame(outcome); return; }
-    setTimeout(step, 220);
+    if (action.attackId) {
+      playBattleAnimation(unit.id, action.attackId, () => {
+        render();
+        const outcome = checkOutcome(game);
+        if (outcome) { finishGame(outcome); return; }
+        setTimeout(step, 220);
+      });
+    } else {
+      const outcome = checkOutcome(game);
+      if (outcome) { finishGame(outcome); return; }
+      setTimeout(step, 220);
+    }
   }
   step();
 }
