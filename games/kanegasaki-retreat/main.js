@@ -312,6 +312,136 @@ function resize() {
 window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 
+// ---------- Opening cutscene (Fire Emblem-style chapter intro) ----------
+// Oda Nobunaga stays fixed on the right for the whole scene (every line is
+// either him or someone reporting to him); whoever else is currently
+// speaking occupies the left slot and stays there — dimmed, not hidden —
+// while Nobunaga responds, matching how these back-and-forth intros read.
+const PORTRAIT_SRC = {
+  nobunaga: "assets/portraits/nobunaga.png",
+  ieyasu: "assets/portraits/ieyasu.png",
+  mitsuhide: "assets/portraits/mitsuhide.png",
+  ikeda: "assets/portraits/ikeda.png",
+  hideyoshi: "assets/portraits/hideyoshi.png",
+};
+const CHAR_NAMES = {
+  nobunaga: "織田信長",
+  ieyasu: "徳川家康",
+  mitsuhide: "明智光秀",
+  ikeda: "池田勝正",
+  hideyoshi: "木下藤吉郎",
+};
+const SCENE_SCRIPT = [
+  { speaker: "ieyasu", text: "上様、ご報告申し上げます。\n金ヶ崎城、落ちました。" },
+  { speaker: "nobunaga", text: "よし。ならば、このまま越前へ進むぞ。" },
+  { speaker: "mitsuhide", text: "……お待ちください、上様。" },
+  { speaker: "nobunaga", text: "どうした、光秀。" },
+  { speaker: "mitsuhide", text: "何やら……様子がおかしゅうございます。" },
+  { speaker: null, text: "――その時。" },
+  { speaker: "ikeda", text: "申し上げます！！！" },
+  { speaker: "nobunaga", text: "何事だ。" },
+  { speaker: "ikeda", text: "浅井軍が……！" },
+  { speaker: "ikeda", text: "我らの退路へ向け、進軍しております！" },
+  { speaker: "nobunaga", text: "……" },
+  { speaker: "nobunaga", text: "ははははは！" },
+  { speaker: "nobunaga", text: "長政が、そんな馬鹿なことをするわけがなかろう。" },
+  { speaker: "ikeda", text: "……確かでございます！" },
+  { speaker: "nobunaga", text: "…………" },
+  { speaker: "nobunaga", text: "……馬鹿な。" },
+  { speaker: "nobunaga", text: "ありえぬ……。" },
+  { speaker: "ieyasu", text: "上様！" },
+  { speaker: "ieyasu", text: "一刻の猶予もございませぬ！" },
+  { speaker: "ieyasu", text: "このままでは挟み撃ちとなり、我らは全滅でございます！" },
+  { speaker: "ieyasu", text: "ご決断を！！" },
+  { speaker: "nobunaga", text: "…………" },
+  { speaker: "nobunaga", text: "……撤退じゃ。" },
+  { speaker: "hideyoshi", text: "お館様！" },
+  { speaker: "hideyoshi", text: "ここは、この藤吉郎に殿をお任せくだされ！" },
+  { speaker: "nobunaga", text: "……死ぬ気か。" },
+  { speaker: "hideyoshi", text: "なんの、この藤吉郎。" },
+  { speaker: "hideyoshi", text: "お館様が天下に立たれるまで、死にませぬ。" },
+  { speaker: "nobunaga", text: "……そうか。" },
+  { speaker: "nobunaga", text: "ならば……" },
+  { speaker: "nobunaga", text: "生きて、また会おうぞ。" },
+  { speaker: "hideyoshi", text: "はっ！" },
+  { speaker: null, text: "――織田軍、撤退開始。" },
+];
+
+const dialogueOverlayEl = document.getElementById("dialogueOverlay");
+const dlgChapterTitleEl = document.getElementById("dlgChapterTitle");
+const dlgPortraitLeftEl = document.getElementById("dlgPortraitLeft");
+const dlgPortraitRightEl = document.getElementById("dlgPortraitRight");
+const dlgBoxEl = document.getElementById("dlgBox");
+const dlgNameEl = document.getElementById("dlgName");
+const dlgTextEl = document.getElementById("dlgText");
+const dlgSkipBtn = document.getElementById("dlgSkipBtn");
+
+let dlgIndex = 0;
+let dlgLeftChar = null;
+let dlgRightChar = null;
+let dlgOnComplete = null;
+
+function renderDialogueLine() {
+  const line = SCENE_SCRIPT[dlgIndex];
+  if (line.speaker === null) {
+    dlgBoxEl.classList.add("narration");
+    dlgNameEl.textContent = "";
+    dlgTextEl.textContent = line.text;
+    dlgPortraitLeftEl.classList.remove("active");
+    dlgPortraitRightEl.classList.remove("active");
+    return;
+  }
+  dlgBoxEl.classList.remove("narration");
+  if (line.speaker !== "nobunaga") dlgLeftChar = line.speaker;
+
+  if (dlgLeftChar) {
+    dlgPortraitLeftEl.src = PORTRAIT_SRC[dlgLeftChar];
+    dlgPortraitLeftEl.classList.remove("hide");
+  }
+  if (dlgRightChar) {
+    dlgPortraitRightEl.src = PORTRAIT_SRC[dlgRightChar];
+    dlgPortraitRightEl.classList.remove("hide");
+  }
+  dlgPortraitLeftEl.classList.toggle("active", line.speaker === dlgLeftChar);
+  dlgPortraitRightEl.classList.toggle("active", line.speaker === "nobunaga");
+  dlgNameEl.textContent = CHAR_NAMES[line.speaker];
+  dlgTextEl.textContent = line.text;
+}
+
+function advanceDialogue() {
+  dlgIndex++;
+  if (dlgIndex >= SCENE_SCRIPT.length) { endScene(); return; }
+  renderDialogueLine();
+}
+
+function endScene() {
+  dialogueOverlayEl.classList.remove("show");
+  const cb = dlgOnComplete;
+  dlgOnComplete = null;
+  if (cb) cb();
+}
+
+function playOpeningScene(onComplete) {
+  dlgIndex = 0;
+  dlgLeftChar = null;
+  dlgRightChar = "nobunaga"; // present for the whole scene, revealed on first render
+  dlgOnComplete = onComplete;
+  dlgChapterTitleEl.textContent = "第十一章　金ヶ崎の退き口";
+  dlgPortraitLeftEl.classList.add("hide");
+  dlgPortraitRightEl.classList.add("hide");
+  dialogueOverlayEl.classList.add("show");
+  renderDialogueLine();
+}
+
+dialogueOverlayEl.addEventListener("pointerdown", (e) => {
+  if (e.target === dlgSkipBtn) return;
+  advanceDialogue();
+});
+dlgSkipBtn.addEventListener("pointerdown", (e) => {
+  e.stopPropagation();
+  endScene();
+});
+
 // ---------- Game orchestration ----------
 let game = null;
 function newGame() {
@@ -781,5 +911,8 @@ actCancelBtn.addEventListener("click", cancelMove);
 confirmAttackBtn.addEventListener("click", confirmAttack);
 cancelAttackBtn.addEventListener("click", cancelForecast);
 endTurnBtn.addEventListener("click", () => { if (game && game.phase === "player" && !game.outcome) endPlayerTurn(); });
-startBtn.addEventListener("click", startGame);
+startBtn.addEventListener("click", () => {
+  titleOverlayEl.classList.remove("show");
+  playOpeningScene(startGame);
+});
 retryBtn.addEventListener("click", restartGame);
