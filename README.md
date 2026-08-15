@@ -22,6 +22,7 @@
 - [kanegasaki-retreat](games/kanegasaki-retreat) — 「金ヶ崎の戦い」を題材にしたマス目移動のターン制戦術SRPG。敵の全滅ではなく織田軍の撤退が目的(2D)
 - [corridor-walk-3d](games/corridor-walk-3d) — 1枚の廊下の写真を固定背景に、ラジコン操作で3Dキャラを歩かせる初代バイオハザード風プロトタイプ(Three.js製)
 - [midnight-rooftop-3d](games/midnight-rooftop-3d) — 深夜のビルに侵入し、合鍵を集めて屋上へ脱出する一人称視点の3D迷路探索ゲーム(Three.js製)
+- [manor-walk-3d](games/manor-walk-3d) — 部屋ごとに切り替わる固定カメラとタンク操作で洋館を歩き回るサバイバルホラー風探索デモ(Three.js製)
 
 ## 公開ページ
 
