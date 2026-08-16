@@ -636,17 +636,29 @@ function syncMonsterMeshes(dt, now) {
       }
     }
 
-    // Pounce toward the player while an attack is landing.
-    let lungeX = 0, lungeZ = 0;
+    // Charge into the player when an attack lands: a fast, forceful rush
+    // forward (sharp ease-out) that then eases back out — reads as a
+    // deliberate shoulder-check rather than a gentle bob.
+    let lungeX = 0, lungeZ = 0, lungeTilt = 0, lungeScale = MONSTER_SCALE;
     if (rec.lungeStart) {
-      const LUNGE_MS = 260, LUNGE_DIST = 0.5;
+      const LUNGE_MS = 300, LUNGE_DIST = 0.85, RUSH_FRAC = 0.35;
       const p = (now - rec.lungeStart) / LUNGE_MS;
       if (p >= 1) {
         rec.lungeStart = 0;
-      } else {
-        const mag = Math.sin(Math.min(1, p) * Math.PI) * LUNGE_DIST;
+      } else if (p < RUSH_FRAC) {
+        const rp = p / RUSH_FRAC;
+        const mag = LUNGE_DIST * (1 - (1 - rp) * (1 - rp));
         lungeX = rec.lungeDx * mag;
         lungeZ = rec.lungeDz * mag;
+        lungeTilt = (mag / LUNGE_DIST) * 0.32;
+        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.12);
+      } else {
+        const rp = (p - RUSH_FRAC) / (1 - RUSH_FRAC);
+        const mag = LUNGE_DIST * (1 - rp * rp);
+        lungeX = rec.lungeDx * mag;
+        lungeZ = rec.lungeDz * mag;
+        lungeTilt = (mag / LUNGE_DIST) * 0.32;
+        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.12);
       }
     }
 
@@ -660,6 +672,8 @@ function syncMonsterMeshes(dt, now) {
 
     rec.mesh.position.x = rec.vx + lungeX + shakeX;
     rec.mesh.position.z = rec.vz + lungeZ + shakeZ;
+    rec.mesh.rotation.x = lungeTilt;
+    rec.mesh.scale.setScalar(lungeScale);
     const shouldFlash = now < rec.flashUntil;
     if (shouldFlash !== rec.flashing) { setMonsterFlash(rec.mesh, shouldFlash); rec.flashing = shouldFlash; }
   }
