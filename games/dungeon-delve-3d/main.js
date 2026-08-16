@@ -509,6 +509,14 @@ function doTurnRight() {
   if (player.swingUntil && now < player.swingUntil) return;
   player = { ...player, heading: turnRight(player.heading) };
 }
+function doStrafeLeft() {
+  if (!started || gameOver || win) return;
+  handleMoveEvent(attemptMove(player, floor, turnLeft(player.heading), performance.now()));
+}
+function doStrafeRight() {
+  if (!started || gameOver || win) return;
+  handleMoveEvent(attemptMove(player, floor, turnRight(player.heading), performance.now()));
+}
 // Attack cooldown gauge — mirrors the exact swing+recovery window that
 // startAttack()/canAttack() already gate real attacks on, so the gauge is
 // never just decorative: it fills over precisely the span during which a
@@ -537,20 +545,67 @@ function bindTapButton(id, handler) {
 bindTapButton("attackBtn", doAttack);
 
 // ---------- Swipe controls (replaces the old d-pad) ----------
-// Up = advance (bumping into a monster attacks it instead), down = step
-// back, left/right = turn 45°. A short tap (below the distance threshold)
-// is ignored so it doesn't fire an accidental move.
+// Up = advance, down = step back. Left/right is split by hold time: a
+// quick flick-and-release turns 45°, but holding past STRAFE_HOLD_MS
+// while still past the distance threshold switches to a continuous
+// side-step (crab walk) that keeps repeating until the finger lifts —
+// the turn is never fired once strafing has taken over. A short tap
+// (below the distance threshold) is ignored so it doesn't fire an
+// accidental move.
 const SWIPE_THRESHOLD = 28;
-let swipeStart = null;
+const STRAFE_HOLD_MS = 160;
+const STRAFE_STEP_MS = 200;
+let swipeStart = null; // { x, y, id, t }
+let lastPointerX = 0, lastPointerY = 0;
+let strafeDir = null; // null | "left" | "right"
+let strafeCheckTimer = null;
+let strafeRepeatTimer = null;
+
+function stopStrafeCheck() {
+  if (strafeCheckTimer) { clearInterval(strafeCheckTimer); strafeCheckTimer = null; }
+}
+function stopStrafing() {
+  strafeDir = null;
+  if (strafeRepeatTimer) { clearInterval(strafeRepeatTimer); strafeRepeatTimer = null; }
+}
+function beginStrafing(dir) {
+  strafeDir = dir;
+  stopStrafeCheck();
+  const step = dir === "left" ? doStrafeLeft : doStrafeRight;
+  step();
+  strafeRepeatTimer = setInterval(step, STRAFE_STEP_MS);
+}
+function checkStrafeEngage() {
+  if (!swipeStart || strafeDir) return;
+  if (performance.now() - swipeStart.t < STRAFE_HOLD_MS) return;
+  const dx = lastPointerX - swipeStart.x, dy = lastPointerY - swipeStart.y;
+  if (Math.abs(dx) >= SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+    beginStrafing(dx > 0 ? "right" : "left");
+  }
+}
+
 canvas.addEventListener("pointerdown", (e) => {
-  swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId, t: performance.now() };
+  lastPointerX = e.clientX;
+  lastPointerY = e.clientY;
   canvas.setPointerCapture(e.pointerId);
+  stopStrafeCheck();
+  strafeCheckTimer = setInterval(checkStrafeEngage, 40);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!swipeStart || e.pointerId !== swipeStart.id) return;
+  lastPointerX = e.clientX;
+  lastPointerY = e.clientY;
 });
 canvas.addEventListener("pointerup", (e) => {
   if (!swipeStart || e.pointerId !== swipeStart.id) return;
+  stopStrafeCheck();
+  const wasStrafing = !!strafeDir;
+  stopStrafing();
   const dx = e.clientX - swipeStart.x;
   const dy = e.clientY - swipeStart.y;
   swipeStart = null;
+  if (wasStrafing) return; // holding already consumed this gesture
   if (Math.hypot(dx, dy) < SWIPE_THRESHOLD) return;
   if (Math.abs(dx) > Math.abs(dy)) {
     if (dx > 0) doTurnRight(); else doTurnLeft();
@@ -558,7 +613,11 @@ canvas.addEventListener("pointerup", (e) => {
     if (dy < 0) doForward(); else doBackward();
   }
 });
-canvas.addEventListener("pointercancel", () => { swipeStart = null; });
+canvas.addEventListener("pointercancel", () => {
+  stopStrafeCheck();
+  stopStrafing();
+  swipeStart = null;
+});
 
 document.getElementById("startBtn").addEventListener("pointerdown", (e) => {
   e.preventDefault();
