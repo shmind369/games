@@ -15,20 +15,31 @@ export const FLOOR_GOAL = 5;
 
 // Monsters ignore the player until within this many grid steps, so a fresh
 // floor never opens with several monsters converging on the spawn point at
-// once (spawn placement below keeps every monster further away than this).
-const AGGRO_RADIUS = 4;
+// once (spawn placement below prefers cells further away than this, falling
+// back to "the farthest half of the floor" on small maps where that isn't
+// possible). Diagonal movement shortens path lengths, so this is generous
+// on purpose.
+const AGGRO_RADIUS = 6;
 
-// Compass headings: 0=N(dy-1), 1=E(dx+1), 2=S(dy+1), 3=W(dx-1).
+// 8-way compass headings, 45° apart: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW.
 export const HEADING_DELTA = [
   { dx: 0, dy: -1 },
+  { dx: 1, dy: -1 },
   { dx: 1, dy: 0 },
+  { dx: 1, dy: 1 },
   { dx: 0, dy: 1 },
+  { dx: -1, dy: 1 },
   { dx: -1, dy: 0 },
+  { dx: -1, dy: -1 },
 ];
+// Cardinal-only subset, used by the dungeon carver so corridors stay
+// axis-aligned (diagonal mobility is a player/monster movement rule, not a
+// map-generation one).
+const CARDINAL_DELTA = [HEADING_DELTA[0], HEADING_DELTA[2], HEADING_DELTA[4], HEADING_DELTA[6]];
 
-export function turnLeft(heading) { return (heading + 3) % 4; }
-export function turnRight(heading) { return (heading + 1) % 4; }
-export function oppositeHeading(heading) { return (heading + 2) % 4; }
+export function turnLeft(heading) { return (heading + 7) % 8; }
+export function turnRight(heading) { return (heading + 1) % 8; }
+export function oppositeHeading(heading) { return (heading + 4) % 8; }
 export function forwardCell(x, y, heading) {
   const d = HEADING_DELTA[heading];
   return { x: x + d.dx, y: y + d.dy };
@@ -37,6 +48,20 @@ export function forwardCell(x, y, heading) {
 export function tileAt(floor, x, y) {
   if (x < 0 || y < 0 || x >= floor.width || y >= floor.height) return TILE.WALL;
   return floor.grid[y][x];
+}
+
+// Diagonal headings (odd indices) are only passable if both flanking
+// cardinal cells are open too — otherwise you could cut across a solid
+// wall corner. Returns the target cell, or null if the step is blocked.
+function canStepTo(floor, x, y, heading) {
+  const target = forwardCell(x, y, heading);
+  if (tileAt(floor, target.x, target.y) === TILE.WALL) return null;
+  if (heading % 2 === 1) {
+    const c1 = forwardCell(x, y, (heading + 7) % 8);
+    const c2 = forwardCell(x, y, (heading + 1) % 8);
+    if (tileAt(floor, c1.x, c1.y) === TILE.WALL || tileAt(floor, c2.x, c2.y) === TILE.WALL) return null;
+  }
+  return target;
 }
 
 // ---------- RNG (mulberry32) ----------
@@ -81,12 +106,12 @@ function bfsDistances(floor, startX, startY) {
   let head = 0;
   while (head < queue.length) {
     const { x, y } = queue[head++];
-    for (const d of HEADING_DELTA) {
-      const nx = x + d.dx, ny = y + d.dy;
-      if (tileAt(floor, nx, ny) === TILE.WALL) continue;
-      if (dist[ny][nx] !== Infinity) continue;
-      dist[ny][nx] = dist[y][x] + 1;
-      queue.push({ x: nx, y: ny });
+    for (let h = 0; h < HEADING_DELTA.length; h++) {
+      const next = canStepTo(floor, x, y, h);
+      if (!next) continue;
+      if (dist[next.y][next.x] !== Infinity) continue;
+      dist[next.y][next.x] = dist[y][x] + 1;
+      queue.push(next);
     }
   }
   return dist;
@@ -102,7 +127,7 @@ function carve(size, rng) {
   let guard = 0;
   while (floorCells.length < target && guard < size * size * 40) {
     guard++;
-    const d = HEADING_DELTA[Math.floor(rng() * 4)];
+    const d = CARDINAL_DELTA[Math.floor(rng() * 4)];
     const nx = x + d.dx, ny = y + d.dy;
     if (nx < 1 || ny < 1 || nx >= size - 1 || ny >= size - 1) {
       const p = pick(floorCells, rng);
@@ -139,9 +164,16 @@ export function generateFloor(floorNumber, rng) {
   grid[stairs.y][stairs.x] = TILE.STAIRS;
 
   const occupied = new Set([`${start.x},${start.y}`, `${stairs.x},${stairs.y}`]);
-  // Keep monster spawns just outside AGGRO_RADIUS so a floor never opens
-  // with multiple monsters already awake and converging on the player.
-  const farCells = floorCells.filter((c) => dist[c.y][c.x] > AGGRO_RADIUS && !occupied.has(`${c.x},${c.y}`));
+  // Keep monster spawns out past AGGRO_RADIUS so a floor never opens with
+  // several monsters already awake and converging on the player. Diagonal
+  // shortcuts make BFS distances shorter than a cardinal-only map would
+  // give, and small early floors don't always have enough cells past a
+  // fixed radius — so fall back to "farthest half of the floor" instead of
+  // failing to place monsters at all.
+  const candidates = floorCells.filter((c) => !occupied.has(`${c.x},${c.y}`));
+  candidates.sort((a, b) => dist[b.y][b.x] - dist[a.y][a.x]);
+  const beyondAggro = candidates.filter((c) => dist[c.y][c.x] > AGGRO_RADIUS);
+  const farCells = beyondAggro.length >= 4 ? beyondAggro : candidates.slice(0, Math.max(4, Math.ceil(candidates.length / 2)));
 
   function takeCell(pool) {
     if (pool.length === 0) return null;
@@ -202,7 +234,7 @@ export function generateFloor(floorNumber, rng) {
 // ---------- Player / run lifecycle ----------
 export function createPlayer(now) {
   return {
-    x: 0, y: 0, heading: 1,
+    x: 0, y: 0, heading: 2, // 2 = East
     hp: 24, maxHp: 24,
     weapon: WEAPONS.dagger,
     floorNumber: 1,
@@ -228,11 +260,11 @@ export function attemptMove(player, floor, stepHeading, now) {
   if (player.swingUntil && now < player.swingUntil) {
     return { player, event: { type: "busy" } };
   }
-  const target = forwardCell(player.x, player.y, stepHeading);
-  const tile = tileAt(floor, target.x, target.y);
-  if (tile === TILE.WALL) {
+  const target = canStepTo(floor, player.x, player.y, stepHeading);
+  if (!target) {
     return { player, event: { type: "blocked" } };
   }
+  const tile = tileAt(floor, target.x, target.y);
   if (monsterAt(floor, target.x, target.y)) {
     return { player, event: { type: "blockedByMonster" } };
   }
@@ -268,7 +300,7 @@ export function descend(player, rng, now) {
   const newPlayer = {
     ...player,
     floorNumber: nextFloorNumber,
-    x: floor.start.x, y: floor.start.y, heading: 1,
+    x: floor.start.x, y: floor.start.y, heading: 2,
   };
   return { event: { type: "descend" }, player: newPlayer, floor };
 }
@@ -303,12 +335,12 @@ export function finishAttack(player, floor, rng, now) {
 
 function bestStepToward(floor, x, y, distField, occupied) {
   let best = null, bestDist = distField[y][x];
-  for (const d of HEADING_DELTA) {
-    const nx = x + d.dx, ny = y + d.dy;
-    if (tileAt(floor, nx, ny) === TILE.WALL) continue;
-    if (occupied.has(`${nx},${ny}`)) continue;
-    const dd = distField[ny][nx];
-    if (dd < bestDist) { bestDist = dd; best = { x: nx, y: ny }; }
+  for (let h = 0; h < HEADING_DELTA.length; h++) {
+    const next = canStepTo(floor, x, y, h);
+    if (!next) continue;
+    if (occupied.has(`${next.x},${next.y}`)) continue;
+    const dd = distField[next.y][next.x];
+    if (dd < bestDist) { bestDist = dd; best = next; }
   }
   return best;
 }
@@ -322,12 +354,14 @@ export function stepMonsters(floor, player, now, rng) {
   const occupied = new Set(floor.monsters.map((m) => `${m.x},${m.y}`));
 
   for (const m of floor.monsters) {
-    const manhattan = Math.abs(player.x - m.x) + Math.abs(player.y - m.y);
+    // Chebyshev distance: with 8-way movement, diagonal neighbors count as
+    // 1 step away too, same as cardinal ones.
+    const dist = Math.max(Math.abs(player.x - m.x), Math.abs(player.y - m.y));
     if (!m.awake) {
-      if (manhattan > AGGRO_RADIUS) continue;
+      if (dist > AGGRO_RADIUS) continue;
       m.awake = true;
     }
-    if (manhattan === 1) {
+    if (dist === 1) {
       if (now >= m.attackReadyAt) {
         const dmg = Math.max(1, m.atk + variance(rng));
         player.hp -= dmg;
@@ -335,7 +369,7 @@ export function stepMonsters(floor, player, now, rng) {
         events.push({ type: "monsterAttack", monsterId: m.id, monsterType: m.type, dmg });
         if (player.hp <= 0) events.push({ type: "playerDefeated" });
       }
-    } else if (manhattan > 1 && now >= m.moveReadyAt) {
+    } else if (dist > 1 && now >= m.moveReadyAt) {
       occupied.delete(`${m.x},${m.y}`);
       const next = bestStepToward(floor, m.x, m.y, distField, occupied);
       if (next) { m.x = next.x; m.y = next.y; }
