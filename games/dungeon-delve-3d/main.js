@@ -491,9 +491,7 @@ function handleMoveEvent(result) {
 
 function doForward() {
   if (!started || gameOver || win) return;
-  const result = attemptMove(player, floor, player.heading, performance.now());
-  if (result.event.type === "blockedByMonster") { doAttack(); return; }
-  handleMoveEvent(result);
+  handleMoveEvent(attemptMove(player, floor, player.heading, performance.now()));
 }
 function doBackward() {
   if (!started || gameOver || win) return;
