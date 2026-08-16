@@ -78,12 +78,16 @@ function shuffle(arr, rng) {
 }
 
 // ---------- Weapons & monsters ----------
-// swingTime/recoveryTime are 3x the original pacing — the full cooldown
-// cycle (and the gauge that mirrors it) was refilling too fast.
+// swingTime is the visible swing motion (kept at its original, snappy
+// pacing) and is also when the hit resolves. recoveryTime is everything
+// after that before the next swing is allowed — sized so
+// swingTime + recoveryTime equals 3x the original total cooldown (the
+// cooldown was refilling too fast; the swing animation itself was not
+// the problem).
 export const WEAPONS = {
-  dagger: { id: "dagger", name: "ダガー", atk: 3, swingTime: 660, recoveryTime: 660 },
-  sword: { id: "sword", name: "ソード", atk: 6, swingTime: 960, recoveryTime: 960 },
-  axe: { id: "axe", name: "アックス", atk: 10, swingTime: 1500, recoveryTime: 1350 },
+  dagger: { id: "dagger", name: "ダガー", atk: 3, swingTime: 220, recoveryTime: 1100 },
+  sword: { id: "sword", name: "ソード", atk: 6, swingTime: 320, recoveryTime: 1600 },
+  axe: { id: "axe", name: "アックス", atk: 10, swingTime: 500, recoveryTime: 2350 },
 };
 
 export const MONSTERS = {
@@ -288,7 +292,7 @@ export function generateFloor(floorNumber, rng) {
       x: cell.x, y: cell.y,
       hp: tpl.hp, maxHp: tpl.hp, atk: tpl.atk,
       moveInterval: tpl.moveInterval, attackInterval: tpl.attackInterval,
-      moveReadyAt: 0, attackReadyAt: 0, awake: false,
+      moveReadyAt: 0, attackReadyAt: 0, awake: false, windingUp: false,
     });
   }
 
@@ -444,19 +448,29 @@ export function stepMonsters(floor, player, now, rng) {
       m.awake = true;
     }
     if (dist === 1) {
-      if (now >= m.attackReadyAt) {
+      if (!m.windingUp) {
+        // Just closed to melee range this tick — telegraph the first hit
+        // instead of landing it the instant the monster arrives.
+        m.windingUp = true;
+        m.attackReadyAt = now + m.attackInterval;
+      } else if (now >= m.attackReadyAt) {
         const dmg = Math.max(1, m.atk + variance(rng));
         player.hp -= dmg;
         m.attackReadyAt = now + m.attackInterval;
         events.push({ type: "monsterAttack", monsterId: m.id, monsterType: m.type, dmg });
         if (player.hp <= 0) events.push({ type: "playerDefeated" });
       }
-    } else if (dist > 1 && now >= m.moveReadyAt) {
-      occupied.delete(`${m.x},${m.y}`);
-      const next = bestStepToward(floor, m.x, m.y, distField, occupied);
-      if (next) { m.x = next.x; m.y = next.y; }
-      occupied.add(`${m.x},${m.y}`);
-      m.moveReadyAt = now + m.moveInterval;
+    } else {
+      // Stepped out of melee range — cancel any pending wind-up so
+      // re-entering later starts a fresh telegraph, not an instant hit.
+      m.windingUp = false;
+      if (dist > 1 && now >= m.moveReadyAt) {
+        occupied.delete(`${m.x},${m.y}`);
+        const next = bestStepToward(floor, m.x, m.y, distField, occupied);
+        if (next) { m.x = next.x; m.y = next.y; }
+        occupied.add(`${m.x},${m.y}`);
+        m.moveReadyAt = now + m.moveInterval;
+      }
     }
   }
   return events;
