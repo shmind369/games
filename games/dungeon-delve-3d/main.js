@@ -338,7 +338,7 @@ let started = false;
 let gameOver = false;
 let win = false;
 
-function headingToYaw(heading) { return -heading * (Math.PI / 4); }
+function headingToYaw(heading) { return -heading * (Math.PI / 2); }
 function shortestAngleLerp(current, target, t) {
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
