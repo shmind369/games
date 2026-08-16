@@ -25,6 +25,31 @@ scene.add(new THREE.HemisphereLight(0xf0eee8, 0x4a4a52, 0.95));
 scene.add(new THREE.AmbientLight(0x9c9aa2, 0.95));
 const torch = new THREE.PointLight(0xfff2df, 2.3, 13, 1.7);
 camera.add(torch);
+
+// First-person fist viewmodel — bare-knuckle punch effect for the attack.
+// Attached to the camera so it rides along in view space; only shown while
+// a swing is in progress (see the render loop), thrusting toward -Z (the
+// camera's forward direction) and retracting as the swing completes.
+const fistGroup = new THREE.Group();
+const fistSkinMat = new THREE.MeshStandardMaterial({ color: 0xc99169, roughness: 0.75 });
+const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.38), fistSkinMat);
+forearm.position.set(0, 0, 0.16);
+fistGroup.add(forearm);
+const fist = new THREE.Mesh(new THREE.BoxGeometry(0.21, 0.19, 0.21), fistSkinMat);
+fist.position.set(0, 0, -0.08);
+fistGroup.add(fist);
+const knuckleGeo = new THREE.BoxGeometry(0.06, 0.06, 0.04);
+const knuckleMat = new THREE.MeshStandardMaterial({ color: 0xb87d58, roughness: 0.8 });
+for (const kx of [-0.06, 0, 0.06]) {
+  const knuckle = new THREE.Mesh(knuckleGeo, knuckleMat);
+  knuckle.position.set(kx, 0.05, -0.18);
+  fistGroup.add(knuckle);
+}
+fistGroup.position.set(0.08, -0.3, -0.5);
+fistGroup.rotation.y = -0.15;
+fistGroup.visible = false;
+camera.add(fistGroup);
+
 scene.add(camera);
 
 function resize() {
@@ -366,6 +391,8 @@ const titleOverlay = document.getElementById("titleOverlay");
 const winOverlay = document.getElementById("winOverlay");
 const deathOverlay = document.getElementById("deathOverlay");
 const deathFloorEl = document.getElementById("deathFloor");
+const attackBtnEl = document.getElementById("attackBtn");
+const attackGaugeFill = document.getElementById("attackGaugeFill");
 
 let messageTimer = null;
 function showMessage(text, ms = 1400) {
@@ -484,9 +511,25 @@ function doTurnRight() {
   if (player.swingUntil && now < player.swingUntil) return;
   player = { ...player, heading: turnRight(player.heading) };
 }
+// Attack cooldown gauge — mirrors the exact swing+recovery window that
+// startAttack()/canAttack() already gate real attacks on, so the gauge is
+// never just decorative: it fills over precisely the span during which a
+// new attack is actually refused.
+let attackCycleStart = 0;
+let attackCycleTotal = 0;
 function doAttack() {
   if (!started || gameOver || win) return;
-  startAttack(player, performance.now());
+  const now = performance.now();
+  const swingMs = startAttack(player, now);
+  if (swingMs != null) {
+    attackCycleStart = now;
+    attackCycleTotal = swingMs + player.weapon.recoveryTime;
+  }
+}
+function updateAttackGauge(now) {
+  const progress = attackCycleTotal <= 0 ? 1 : Math.min(1, (now - attackCycleStart) / attackCycleTotal);
+  attackGaugeFill.style.width = `${progress * 100}%`;
+  attackBtnEl.classList.toggle("ready", progress >= 1);
 }
 
 function bindTapButton(id, handler) {
@@ -765,7 +808,14 @@ function loop(t) {
   if (player.swingUntil) {
     const swingTotal = player.weapon.swingTime;
     const progress = 1 - Math.max(0, player.swingUntil - t) / swingTotal;
-    bob = Math.sin(Math.min(1, progress) * Math.PI) * 0.1;
+    const punch = Math.sin(Math.min(1, progress) * Math.PI);
+    bob = punch * 0.1;
+    fistGroup.visible = true;
+    fistGroup.position.z = -0.5 - punch * 0.42;
+    fistGroup.position.y = -0.3 + punch * 0.08;
+    fistGroup.rotation.x = -punch * 0.5;
+  } else {
+    fistGroup.visible = false;
   }
   camera.position.set(visual.x, EYE_H - bob, visual.z);
   camera.rotation.y = visual.yaw;
@@ -775,6 +825,7 @@ function loop(t) {
   updateDeathFx(t);
   updateDoorAnim(t);
   updateScreenShake(t);
+  updateAttackGauge(t);
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
