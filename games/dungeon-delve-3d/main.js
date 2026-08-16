@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {
-  TILE, FLOOR_GOAL, turnLeft, turnRight, oppositeHeading,
+  TILE, FLOOR_GOAL, HEADING_DELTA, turnLeft, turnRight, oppositeHeading,
   makeRng, initRun, attemptMove, descend,
   startAttack, finishAttack, stepMonsters,
 } from "./dungeon.js";
@@ -34,19 +34,164 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
-const wallMat = new THREE.MeshStandardMaterial({ color: 0x6a5b74, roughness: 0.85 });
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x433a4a, roughness: 0.9 });
-const ceilMat = new THREE.MeshStandardMaterial({ color: 0x3a3143, roughness: 0.94, side: THREE.DoubleSide });
+// ---------- Procedural stone/wood textures (no external image assets) ----------
+function makeCanvas(size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  return { canvas, ctx: canvas.getContext("2d") };
+}
+
+function createStoneBlockTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#26222c";
+  ctx.fillRect(0, 0, size, size);
+  const cols = 4, rows = 6;
+  const bw = size / cols, bh = size / rows;
+  for (let ry = 0; ry < rows; ry++) {
+    const offset = (ry % 2) * (bw / 2);
+    for (let rx = -1; rx <= cols; rx++) {
+      const x = rx * bw + offset, y = ry * bh;
+      const shade = 148 + Math.floor(Math.random() * 34 - 17);
+      ctx.fillStyle = `rgb(${shade},${shade - 4},${shade + 6})`;
+      const pad = 3;
+      ctx.fillRect(x + pad, y + pad, bw - pad * 2, bh - pad * 2);
+      for (let i = 0; i < 8; i++) {
+        ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.18})`;
+        ctx.fillRect(x + pad + Math.random() * (bw - pad * 2), y + pad + Math.random() * (bh - pad * 2), 2, 2);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createFlagstoneTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#1c1922";
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 26; i++) {
+    const cx = Math.random() * size, cy = Math.random() * size;
+    const r = 18 + Math.random() * 20;
+    const sides = 5 + Math.floor(Math.random() * 3);
+    const shade = 92 + Math.floor(Math.random() * 38);
+    ctx.fillStyle = `rgb(${shade},${shade - 4},${shade + 6})`;
+    ctx.beginPath();
+    for (let s = 0; s < sides; s++) {
+      const ang = (s / sides) * Math.PI * 2 + Math.random() * 0.3;
+      const rr = r * (0.75 + Math.random() * 0.35);
+      const px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
+      if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createWoodDoorTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#4a3018";
+  ctx.fillRect(0, 0, size, size);
+  const planks = 6;
+  const pw = size / planks;
+  for (let i = 0; i < planks; i++) {
+    const shade = Math.floor(Math.random() * 22 - 6);
+    ctx.fillStyle = `rgb(${112 + shade},${72 + Math.floor(shade * 0.6)},${40 + Math.floor(shade * 0.3)})`;
+    ctx.fillRect(i * pw + 2, 0, pw - 4, size);
+    ctx.strokeStyle = "rgba(25,12,4,0.4)";
+    for (let g = 0; g < 4; g++) {
+      const gx = i * pw + 5 + Math.random() * (pw - 10);
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx + (Math.random() * 6 - 3), size);
+      ctx.stroke();
+    }
+  }
+  ctx.fillStyle = "#241811";
+  ctx.fillRect(0, size * 0.16, size, 9);
+  ctx.fillRect(0, size * 0.78, size, 9);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+const stoneWallTexture = createStoneBlockTexture();
+const flagstoneTexture = createFlagstoneTexture();
+const woodDoorTexture = createWoodDoorTexture();
+
+const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xd8d0e0, roughness: 0.88 });
+const floorMat = new THREE.MeshStandardMaterial({ map: flagstoneTexture, color: 0xcfc7da, roughness: 0.92 });
+const ceilMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xb8aec6, roughness: 0.94, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
 const weaponMat = new THREE.MeshStandardMaterial({ color: 0x5cc8ff, emissive: 0x0d5a99, emissiveIntensity: 1.1, roughness: 0.35 });
+const doorMat = new THREE.MeshStandardMaterial({ map: woodDoorTexture, color: 0xffffff, roughness: 0.8 });
+const buttonFrameMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xd8d0e0, roughness: 0.88 });
 
-const MONSTER_NAMES = { rat: "ネズミ", skeleton: "スケルトン", ogre: "オーガ" };
+const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", ogre: "オーガ" };
+
+// Builds a blocky voxel zombie out of boxes (Minecraft-style), each monster
+// instance getting its own material clones so hit-flash doesn't bleed
+// across other zombies sharing the same geometry.
+function createZombieVoxel() {
+  const group = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0x5c7a44, emissive: 0x14200e, emissiveIntensity: 0.6, roughness: 0.85 });
+  const clothMat = new THREE.MeshStandardMaterial({ color: 0x3c4a3a, emissive: 0x0c140c, emissiveIntensity: 0.6, roughness: 0.9 });
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xff4020, emissive: 0xff2000, emissiveIntensity: 1.6, roughness: 0.5 });
+
+  const legGeo = new THREE.BoxGeometry(0.16, 0.5, 0.16);
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(legGeo, skinMat);
+    leg.position.set(side * 0.1, 0.25, 0);
+    group.add(leg);
+  }
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.45, 0.24), clothMat);
+  torso.position.set(0, 0.725, 0);
+  group.add(torso);
+
+  const armGeo = new THREE.BoxGeometry(0.14, 0.42, 0.14);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(armGeo, skinMat);
+    arm.position.set(side * 0.28, 0.78, 0);
+    arm.rotation.x = -0.9; // classic zombie arms-forward reach
+    group.add(arm);
+  }
+
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), skinMat);
+  head.position.set(0, 1.09, 0);
+  group.add(head);
+
+  const eyeGeo = new THREE.BoxGeometry(0.05, 0.05, 0.03);
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, eyeMat);
+    eye.position.set(side * 0.07, 1.11, 0.15);
+    group.add(eye);
+  }
+  return group;
+}
 
 const MONSTER_VISUALS = {
-  rat: { geo: () => new THREE.IcosahedronGeometry(0.17, 0), color: 0x8a6d4a, emissive: 0x2a1c0c, y: 0.18 },
-  skeleton: { geo: () => new THREE.ConeGeometry(0.22, 0.62, 6), color: 0xdbe0c8, emissive: 0x2c2e22, y: 0.32 },
-  ogre: { geo: () => new THREE.BoxGeometry(0.5, 0.9, 0.5), color: 0x7a2b2b, emissive: 0x3a0e0e, y: 0.46 },
+  zombie: { create: createZombieVoxel, y: 0 },
+  skeleton: {
+    create: () => new THREE.Mesh(
+      new THREE.ConeGeometry(0.22, 0.62, 6),
+      new THREE.MeshStandardMaterial({ color: 0xdbe0c8, emissive: 0x2c2e22, emissiveIntensity: 0.6, roughness: 0.7 }),
+    ),
+    y: 0.32,
+  },
+  ogre: {
+    create: () => new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.9, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x7a2b2b, emissive: 0x3a0e0e, emissiveIntensity: 0.6, roughness: 0.7 }),
+    ),
+    y: 0.46,
+  },
 };
 
 const mazeGroup = new THREE.Group();
@@ -58,11 +203,19 @@ function floorTileMaterial(tile) {
   return tile === TILE.STAIRS ? stairsMat : floorMat;
 }
 
+let doorMesh = null;
+let buttonMesh = null;
+const doorRestY = WALL_H / 2;
+const doorOpenY = doorRestY + WALL_H + 0.1;
+
 function buildFloorMesh(floor) {
   mazeGroup.clear();
+  doorMesh = null;
+  buttonMesh = null;
   const floorGeo = new THREE.PlaneGeometry(CELL, CELL);
   const ceilGeo = new THREE.PlaneGeometry(CELL, CELL);
   const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
+  const doorGeo = new THREE.BoxGeometry(CELL * 0.96, WALL_H * 0.96, CELL * 0.4);
 
   for (let y = 0; y < floor.height; y++) {
     for (let x = 0; x < floor.width; x++) {
@@ -74,6 +227,22 @@ function buildFloorMesh(floor) {
         mazeGroup.add(wallMesh);
         continue;
       }
+      if (tile === TILE.BUTTON) {
+        const wallMesh = new THREE.Mesh(wallGeo, buttonFrameMat);
+        wallMesh.position.set(wx, WALL_H / 2, wz);
+        mazeGroup.add(wallMesh);
+        const dir = HEADING_DELTA[floor.button.facing];
+        const panelGeo = dir.dx !== 0
+          ? new THREE.BoxGeometry(0.06, 0.42, 0.42)
+          : new THREE.BoxGeometry(0.42, 0.42, 0.06);
+        const panelMat = new THREE.MeshStandardMaterial({ color: 0x7a2a24, emissive: 0x4a1008, emissiveIntensity: 1.0, roughness: 0.5 });
+        const panel = new THREE.Mesh(panelGeo, panelMat);
+        panel.position.set(wx + dir.dx * (CELL / 2 - 0.03), 1.2, wz + dir.dy * (CELL / 2 - 0.03));
+        mazeGroup.add(panel);
+        buttonMesh = panel;
+        continue;
+      }
+
       const f = new THREE.Mesh(floorGeo, floorTileMaterial(tile));
       f.rotation.x = -Math.PI / 2;
       f.position.set(wx, 0, wz);
@@ -82,6 +251,14 @@ function buildFloorMesh(floor) {
       c.rotation.x = Math.PI / 2;
       c.position.set(wx, WALL_H, wz);
       mazeGroup.add(c);
+
+      if (tile === TILE.DOOR) {
+        const door = new THREE.Mesh(doorGeo, doorMat);
+        door.position.set(wx, floor.door && floor.door.open ? doorOpenY : doorRestY, wz);
+        door.userData.animState = floor.door && floor.door.open ? "done" : null;
+        mazeGroup.add(door);
+        doorMesh = door;
+      }
     }
   }
 }
@@ -171,6 +348,11 @@ function handleMoveEvent(result) {
   const event = result.event;
   if (event.type === "blocked" || event.type === "busy") return;
   if (event.type === "blockedByMonster") { showMessage("何かがいる!"); return; }
+  if (event.type === "buttonPressed") {
+    showMessage("ガコン…どこかで扉が開いた音がした");
+    if (buttonMesh) { buttonMesh.material.color.set(0x3fd15a); buttonMesh.material.emissive.set(0x0a5c1c); }
+    return;
+  }
   if (event.type === "itemPickup") {
     if (event.kind === "potion") showMessage(`ポーションを見つけた (HP+${event.heal})`);
     else showMessage(`${event.weapon.name}を手に入れた!`);
@@ -270,10 +452,18 @@ const monsterMeshMap = new Map();
 const itemMeshMap = new Map();
 const deathFx = [];
 
+function setMonsterFlash(mesh, on) {
+  mesh.traverse((child) => {
+    if (child.isMesh) child.material.emissiveIntensity = on ? 2.4 : child.userData.baseEmissive ?? 0.6;
+  });
+}
+
 function createMonsterMesh(type) {
   const v = MONSTER_VISUALS[type];
-  const mat = new THREE.MeshStandardMaterial({ color: v.color, emissive: v.emissive, emissiveIntensity: 0.6, roughness: 0.7 });
-  const mesh = new THREE.Mesh(v.geo(), mat);
+  const mesh = v.create();
+  mesh.traverse((child) => {
+    if (child.isMesh) child.userData.baseEmissive = child.material.emissiveIntensity;
+  });
   return mesh;
 }
 
@@ -290,14 +480,15 @@ function syncMonsterMeshes(dt, now) {
       const mesh = createMonsterMesh(m.type);
       mesh.position.set(m.x * CELL, v.y, m.y * CELL);
       monsterGroup.add(mesh);
-      rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0 };
+      rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false };
       monsterMeshMap.set(m.id, rec);
     }
     rec.vx += (m.x * CELL - rec.vx) * rate;
     rec.vz += (m.y * CELL - rec.vz) * rate;
     rec.mesh.position.x = rec.vx;
     rec.mesh.position.z = rec.vz;
-    rec.mesh.material.emissiveIntensity = now < rec.flashUntil ? 2.4 : 0.6;
+    const shouldFlash = now < rec.flashUntil;
+    if (shouldFlash !== rec.flashing) { setMonsterFlash(rec.mesh, shouldFlash); rec.flashing = shouldFlash; }
   }
 }
 
@@ -339,6 +530,21 @@ function updateDeathFx(now) {
       deathFx.splice(i, 1);
     }
   }
+}
+
+const DOOR_ANIM_MS = 700;
+function updateDoorAnim(now) {
+  if (!doorMesh || !floor.door || !floor.door.open) return;
+  if (doorMesh.userData.animState === "done") return;
+  if (!doorMesh.userData.animState) {
+    doorMesh.userData.animState = "animating";
+    doorMesh.userData.animStartT = now;
+    doorMesh.userData.animFromY = doorMesh.position.y;
+  }
+  const p = Math.min(1, (now - doorMesh.userData.animStartT) / DOOR_ANIM_MS);
+  const eased = 1 - Math.pow(1 - p, 3);
+  doorMesh.position.y = doorMesh.userData.animFromY + (doorOpenY - doorMesh.userData.animFromY) * eased;
+  if (p >= 1) doorMesh.userData.animState = "done";
 }
 
 // ---------- Render loop ----------
@@ -385,6 +591,7 @@ function loop(t) {
   syncMonsterMeshes(dt, t);
   syncItemMeshes(t);
   updateDeathFx(t);
+  updateDoorAnim(t);
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);

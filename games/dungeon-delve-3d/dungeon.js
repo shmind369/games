@@ -8,7 +8,7 @@
 // place instead — recreating the whole floor/monster tree on every
 // animation frame would be wasteful and buys nothing here.
 
-export const TILE = { WALL: 0, FLOOR: 1, STAIRS: 2 };
+export const TILE = { WALL: 0, FLOOR: 1, STAIRS: 2, DOOR: 3, BUTTON: 4 };
 
 // How many floors deep the player must reach to clear the run.
 export const FLOOR_GOAL = 5;
@@ -50,16 +50,25 @@ export function tileAt(floor, x, y) {
   return floor.grid[y][x];
 }
 
+// WALL and BUTTON tiles always block movement (a button is a wall-mounted
+// switch, never a walkable cell). A DOOR blocks only while closed.
+export function isBlockingTile(floor, x, y) {
+  const t = tileAt(floor, x, y);
+  if (t === TILE.WALL || t === TILE.BUTTON) return true;
+  if (t === TILE.DOOR) return !(floor.door && floor.door.open);
+  return false;
+}
+
 // Diagonal headings (odd indices) are only passable if both flanking
 // cardinal cells are open too — otherwise you could cut across a solid
 // wall corner. Returns the target cell, or null if the step is blocked.
 function canStepTo(floor, x, y, heading) {
   const target = forwardCell(x, y, heading);
-  if (tileAt(floor, target.x, target.y) === TILE.WALL) return null;
+  if (isBlockingTile(floor, target.x, target.y)) return null;
   if (heading % 2 === 1) {
     const c1 = forwardCell(x, y, (heading + 7) % 8);
     const c2 = forwardCell(x, y, (heading + 1) % 8);
-    if (tileAt(floor, c1.x, c1.y) === TILE.WALL || tileAt(floor, c2.x, c2.y) === TILE.WALL) return null;
+    if (isBlockingTile(floor, c1.x, c1.y) || isBlockingTile(floor, c2.x, c2.y)) return null;
   }
   return target;
 }
@@ -77,6 +86,13 @@ export function makeRng(seed) {
 
 function pick(arr, rng) { return arr[Math.floor(rng() * arr.length)]; }
 function variance(rng) { return Math.floor(rng() * 3) - 1; } // -1, 0, +1
+function shuffle(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 // ---------- Weapons & monsters ----------
 export const WEAPONS = {
@@ -86,15 +102,15 @@ export const WEAPONS = {
 };
 
 export const MONSTERS = {
-  rat: { type: "rat", hp: 5, atk: 2, moveInterval: 900, attackInterval: 900 },
+  zombie: { type: "zombie", hp: 7, atk: 2, moveInterval: 1200, attackInterval: 1000 },
   skeleton: { type: "skeleton", hp: 12, atk: 4, moveInterval: 1100, attackInterval: 950 },
   ogre: { type: "ogre", hp: 22, atk: 7, moveInterval: 1400, attackInterval: 1150 },
 };
 
 function monsterPoolForFloor(floorNumber) {
-  if (floorNumber >= 4) return ["rat", "rat", "skeleton", "skeleton", "ogre"];
-  if (floorNumber >= 3) return ["rat", "rat", "skeleton"];
-  return ["rat"];
+  if (floorNumber >= 4) return ["zombie", "zombie", "skeleton", "skeleton", "ogre"];
+  if (floorNumber >= 3) return ["zombie", "zombie", "skeleton"];
+  return ["zombie"];
 }
 
 // ---------- Procedural generation ----------
@@ -149,10 +165,87 @@ function carve(size, rng) {
 
 let entityIdSeq = 1;
 
+// Seals off a dead-end corridor tip behind a closed door, with a switch
+// mounted on a wall elsewhere on the floor that opens it — a small optional
+// side-vault, never on the only path to the stairs. Mutates floor.grid,
+// floor.door, floor.button, floor.items and `occupied` in place; does
+// nothing if the generated layout doesn't offer a safe spot for one.
+function placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng) {
+  const grid = floor.grid;
+  function cardinalDegree(x, y) {
+    let n = 0;
+    for (const d of CARDINAL_DELTA) {
+      if (tileAt(floor, x + d.dx, y + d.dy) !== TILE.WALL) n++;
+    }
+    return n;
+  }
+
+  const deadEnds = floorCells.filter((c) => {
+    if ((c.x === start.x && c.y === start.y) || (c.x === stairs.x && c.y === stairs.y)) return false;
+    return cardinalDegree(c.x, c.y) === 1;
+  });
+  shuffle(deadEnds, rng);
+
+  for (const pocket of deadEnds) {
+    let doorPos = null;
+    for (const d of CARDINAL_DELTA) {
+      const nx = pocket.x + d.dx, ny = pocket.y + d.dy;
+      if (tileAt(floor, nx, ny) !== TILE.WALL) { doorPos = { x: nx, y: ny }; break; }
+    }
+    if (!doorPos) continue;
+    if ((doorPos.x === start.x && doorPos.y === start.y) || (doorPos.x === stairs.x && doorPos.y === stairs.y)) continue;
+    // Must be a plain corridor cell (only connects onward + to the pocket),
+    // never a junction — otherwise sealing it could cut off other areas too.
+    if (cardinalDegree(doorPos.x, doorPos.y) !== 2) continue;
+
+    const prevTile = grid[doorPos.y][doorPos.x];
+    grid[doorPos.y][doorPos.x] = TILE.DOOR;
+    const testDist = bfsDistances(floor, start.x, start.y);
+    const stairsReachable = testDist[stairs.y][stairs.x] !== Infinity;
+    const pocketSealed = testDist[pocket.y][pocket.x] === Infinity;
+    if (!(stairsReachable && pocketSealed)) {
+      grid[doorPos.y][doorPos.x] = prevTile;
+      continue;
+    }
+
+    // Mount the button on a wall segment next to some other reachable cell.
+    // doorPos/pocket must already be excluded here — doorPos is itself a
+    // blocking tile while closed, so a "reachable neighbor" chosen before
+    // this point could be the door cell itself, leaving the button stranded.
+    occupied.add(`${doorPos.x},${doorPos.y}`);
+    occupied.add(`${pocket.x},${pocket.y}`);
+    const wallSpots = [];
+    for (const c of floorCells) {
+      if (occupied.has(`${c.x},${c.y}`)) continue;
+      for (let ci = 0; ci < CARDINAL_DELTA.length; ci++) {
+        const d = CARDINAL_DELTA[ci];
+        const wx = c.x + d.dx, wy = c.y + d.dy;
+        if (tileAt(floor, wx, wy) === TILE.WALL) {
+          wallSpots.push({ x: wx, y: wy, facing: (ci * 2 + 4) % 8 });
+        }
+      }
+    }
+    if (wallSpots.length === 0) {
+      grid[doorPos.y][doorPos.x] = prevTile;
+      occupied.delete(`${doorPos.x},${doorPos.y}`);
+      occupied.delete(`${pocket.x},${pocket.y}`);
+      continue;
+    }
+    const spot = pick(wallSpots, rng);
+    grid[spot.y][spot.x] = TILE.BUTTON;
+
+    floor.door = { x: doorPos.x, y: doorPos.y, open: false };
+    floor.button = { x: spot.x, y: spot.y, facing: spot.facing };
+    occupied.add(`${spot.x},${spot.y}`);
+    floor.items.push({ id: entityIdSeq++, kind: "potion", x: pocket.x, y: pocket.y, heal: 10 });
+    return;
+  }
+}
+
 export function generateFloor(floorNumber, rng) {
   const size = 11 + Math.min(floorNumber - 1, 2) * 2; // 11 -> 13 -> 15 (caps at floor 3+)
   const { grid, floorCells, start } = carve(size, rng);
-  const floor = { width: size, height: size, grid, monsters: [], items: [] };
+  const floor = { width: size, height: size, grid, monsters: [], items: [], door: null, button: null };
 
   const dist = bfsDistances(floor, start.x, start.y);
   let stairs = start;
@@ -164,6 +257,7 @@ export function generateFloor(floorNumber, rng) {
   grid[stairs.y][stairs.x] = TILE.STAIRS;
 
   const occupied = new Set([`${start.x},${start.y}`, `${stairs.x},${stairs.y}`]);
+  placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng);
   // Keep monster spawns out past AGGRO_RADIUS so a floor never opens with
   // several monsters already awake and converging on the player. Diagonal
   // shortcuts make BFS distances shorter than a cardinal-only map would
@@ -199,7 +293,7 @@ export function generateFloor(floorNumber, rng) {
     }
     let type = pick(pool, rng);
     if (type === "ogre") {
-      if (ogrePlaced) type = "rat";
+      if (ogrePlaced) type = "zombie";
       else ogrePlaced = true;
     }
     const tpl = MONSTERS[type];
@@ -262,6 +356,11 @@ export function attemptMove(player, floor, stepHeading, now) {
   }
   const target = canStepTo(floor, player.x, player.y, stepHeading);
   if (!target) {
+    const raw = forwardCell(player.x, player.y, stepHeading);
+    if (tileAt(floor, raw.x, raw.y) === TILE.BUTTON && floor.door && !floor.door.open) {
+      floor.door.open = true;
+      return { player, event: { type: "buttonPressed" } };
+    }
     return { player, event: { type: "blocked" } };
   }
   const tile = tileAt(floor, target.x, target.y);
