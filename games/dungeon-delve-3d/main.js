@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import {
-  TILE, FLOOR_GOAL, turnLeft, turnRight, oppositeHeading,
+  TILE, FLOOR_GOAL, HEADING_DELTA, turnLeft, turnRight, oppositeHeading,
   makeRng, initRun, attemptMove, descend,
   startAttack, finishAttack, stepMonsters,
 } from "./dungeon.js";
@@ -15,12 +15,15 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x241c28, 9, 26);
+scene.fog = new THREE.Fog(0x38363c, 9, 27);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 40);
 
-scene.add(new THREE.HemisphereLight(0x9a89b8, 0x2a2436, 0.85));
-scene.add(new THREE.AmbientLight(0x6c5d80, 1.05));
-const torch = new THREE.PointLight(0xffc082, 2.8, 14, 1.6);
+// Neutral white/gray lighting — the old build leaned purple, which tinted
+// every surface; a stone dungeon needs colorless light so the wall/floor
+// textures read as actual white-gray stone instead of "purple but paler".
+scene.add(new THREE.HemisphereLight(0xf0eee8, 0x4a4a52, 0.95));
+scene.add(new THREE.AmbientLight(0x9c9aa2, 0.95));
+const torch = new THREE.PointLight(0xfff2df, 2.3, 13, 1.7);
 camera.add(torch);
 scene.add(camera);
 
@@ -34,19 +37,225 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
-const wallMat = new THREE.MeshStandardMaterial({ color: 0x6a5b74, roughness: 0.85 });
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x433a4a, roughness: 0.9 });
-const ceilMat = new THREE.MeshStandardMaterial({ color: 0x3a3143, roughness: 0.94, side: THREE.DoubleSide });
+// ---------- Procedural stone/wood textures (no external image assets) ----------
+function makeCanvas(size) {
+  const canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  return { canvas, ctx: canvas.getContext("2d") };
+}
+
+// White/light-gray ashlar blocks with visible mortar lines — individual
+// bricks need to stay legible, not blur into a smooth tiled pattern, so the
+// per-block shading step is deliberately coarse (few flat shades, hard
+// edges) rather than a smooth gradient.
+function createStoneBlockTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#5c5a5e"; // mortar/grout: darker neutral gray
+  ctx.fillRect(0, 0, size, size);
+  const cols = 4, rows = 6;
+  const bw = size / cols, bh = size / rows;
+  for (let ry = 0; ry < rows; ry++) {
+    const offset = (ry % 2) * (bw / 2);
+    for (let rx = -1; rx <= cols; rx++) {
+      const x = rx * bw + offset, y = ry * bh;
+      const shade = 198 + Math.floor(Math.random() * 34 - 17); // white-to-light-gray, block to block
+      ctx.fillStyle = `rgb(${shade},${shade - 2},${shade - 4})`; // near-neutral, faint warm dust tint
+      const pad = 3;
+      ctx.fillRect(x + pad, y + pad, bw - pad * 2, bh - pad * 2);
+      // grime speckle + a few darker weathered patches per block
+      for (let i = 0; i < 10; i++) {
+        ctx.fillStyle = `rgba(70,66,64,${Math.random() * 0.22})`;
+        ctx.fillRect(x + pad + Math.random() * (bw - pad * 2), y + pad + Math.random() * (bh - pad * 2), 2, 2);
+      }
+      if (Math.random() < 0.5) {
+        const sx = x + pad + Math.random() * (bw - pad * 2) * 0.6;
+        const sy = y + pad + Math.random() * (bh - pad * 2) * 0.6;
+        ctx.fillStyle = `rgba(90,86,84,${0.1 + Math.random() * 0.12})`;
+        ctx.fillRect(sx, sy, (bw - pad * 2) * 0.4, (bh - pad * 2) * 0.35);
+      }
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// Old flagstone floor: irregular, differently-shaped/sized white-gray slabs
+// with dark grout gaps and per-stone brightness variation.
+function createFlagstoneTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#403e40"; // grout between stones
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 30; i++) {
+    const cx = Math.random() * size, cy = Math.random() * size;
+    const r = 16 + Math.random() * 26;
+    const sides = 5 + Math.floor(Math.random() * 4);
+    const shade = 168 + Math.floor(Math.random() * 55); // white-to-light-gray, stone to stone
+    ctx.fillStyle = `rgb(${shade},${shade - 2},${shade - 5})`;
+    ctx.beginPath();
+    for (let s = 0; s < sides; s++) {
+      const ang = (s / sides) * Math.PI * 2 + Math.random() * 0.35;
+      const rr = r * (0.7 + Math.random() * 0.4);
+      const px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
+      if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    // faint crack/grime detail inside the stone
+    ctx.fillStyle = `rgba(60,58,58,${0.08 + Math.random() * 0.1})`;
+    ctx.beginPath();
+    ctx.arc(cx + (Math.random() - 0.5) * r, cy + (Math.random() - 0.5) * r, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// Flat old concrete ceiling: a handful of large panel seams, not brickwork —
+// mostly uniform, brighter than the walls, with fine dirt/stain speckle for
+// age rather than any regular block pattern.
+function createConcreteCeilingTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  const base = 210;
+  ctx.fillStyle = `rgb(${base},${base - 1},${base - 3})`;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 900; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const s = 1 + Math.random() * 2.5;
+    const dark = Math.random() < 0.72;
+    const shade = dark ? -(8 + Math.random() * 26) : Math.random() * 8;
+    ctx.fillStyle = `rgba(${60 + Math.max(0, shade + 60)},${58},${56},${0.08 + Math.random() * 0.14})`;
+    ctx.fillRect(x, y, s, s);
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = Math.random() * size, y = Math.random() * size, r = 12 + Math.random() * 24;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, "rgba(70,66,64,0.22)");
+    grad.addColorStop(1, "rgba(70,66,64,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "rgba(96,92,90,0.85)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(size / 2, 0); ctx.lineTo(size / 2, size);
+  ctx.moveTo(0, size / 2); ctx.lineTo(size, size / 2);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function createWoodDoorTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  ctx.fillStyle = "#4a3018";
+  ctx.fillRect(0, 0, size, size);
+  const planks = 6;
+  const pw = size / planks;
+  for (let i = 0; i < planks; i++) {
+    const shade = Math.floor(Math.random() * 22 - 6);
+    ctx.fillStyle = `rgb(${112 + shade},${72 + Math.floor(shade * 0.6)},${40 + Math.floor(shade * 0.3)})`;
+    ctx.fillRect(i * pw + 2, 0, pw - 4, size);
+    ctx.strokeStyle = "rgba(25,12,4,0.4)";
+    for (let g = 0; g < 4; g++) {
+      const gx = i * pw + 5 + Math.random() * (pw - 10);
+      ctx.beginPath();
+      ctx.moveTo(gx, 0);
+      ctx.lineTo(gx + (Math.random() * 6 - 3), size);
+      ctx.stroke();
+    }
+  }
+  ctx.fillStyle = "#241811";
+  ctx.fillRect(0, size * 0.16, size, 9);
+  ctx.fillRect(0, size * 0.78, size, 9);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+const stoneWallTexture = createStoneBlockTexture();
+const flagstoneTexture = createFlagstoneTexture();
+const concreteCeilingTexture = createConcreteCeilingTexture();
+const woodDoorTexture = createWoodDoorTexture();
+
+// Near-white tints (not pure #fff — a hint of dust keeps it from blowing
+// out) so the textures' own baked-in shading carries the "old stone" read
+// instead of a color tint doing the work. Ceiling reads a shade brighter
+// than the walls, as concrete rather than block-jointed masonry.
+const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
+const floorMat = new THREE.MeshStandardMaterial({ map: flagstoneTexture, color: 0xe6e4e0, roughness: 0.95 });
+const ceilMat = new THREE.MeshStandardMaterial({ map: concreteCeilingTexture, color: 0xf4f2ee, roughness: 0.96, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
 const weaponMat = new THREE.MeshStandardMaterial({ color: 0x5cc8ff, emissive: 0x0d5a99, emissiveIntensity: 1.1, roughness: 0.35 });
+const doorMat = new THREE.MeshStandardMaterial({ map: woodDoorTexture, color: 0xffffff, roughness: 0.8 });
+const buttonFrameMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
 
-const MONSTER_NAMES = { rat: "ネズミ", skeleton: "スケルトン", ogre: "オーガ" };
+const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", ogre: "オーガ" };
+
+// Builds a blocky voxel zombie out of boxes (Minecraft-style), each monster
+// instance getting its own material clones so hit-flash doesn't bleed
+// across other zombies sharing the same geometry.
+function createZombieVoxel() {
+  const group = new THREE.Group();
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0x5c7a44, emissive: 0x14200e, emissiveIntensity: 0.6, roughness: 0.85 });
+  const clothMat = new THREE.MeshStandardMaterial({ color: 0x3c4a3a, emissive: 0x0c140c, emissiveIntensity: 0.6, roughness: 0.9 });
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xff4020, emissive: 0xff2000, emissiveIntensity: 1.6, roughness: 0.5 });
+
+  const legGeo = new THREE.BoxGeometry(0.16, 0.5, 0.16);
+  for (const side of [-1, 1]) {
+    const leg = new THREE.Mesh(legGeo, skinMat);
+    leg.position.set(side * 0.1, 0.25, 0);
+    group.add(leg);
+  }
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.45, 0.24), clothMat);
+  torso.position.set(0, 0.725, 0);
+  group.add(torso);
+
+  const armGeo = new THREE.BoxGeometry(0.14, 0.42, 0.14);
+  for (const side of [-1, 1]) {
+    const arm = new THREE.Mesh(armGeo, skinMat);
+    arm.position.set(side * 0.28, 0.78, 0);
+    arm.rotation.x = -0.9; // classic zombie arms-forward reach
+    group.add(arm);
+  }
+
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.28, 0.28), skinMat);
+  head.position.set(0, 1.09, 0);
+  group.add(head);
+
+  const eyeGeo = new THREE.BoxGeometry(0.05, 0.05, 0.03);
+  for (const side of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, eyeMat);
+    eye.position.set(side * 0.07, 1.11, 0.15);
+    group.add(eye);
+  }
+  return group;
+}
 
 const MONSTER_VISUALS = {
-  rat: { geo: () => new THREE.IcosahedronGeometry(0.17, 0), color: 0x8a6d4a, emissive: 0x2a1c0c, y: 0.18 },
-  skeleton: { geo: () => new THREE.ConeGeometry(0.22, 0.62, 6), color: 0xdbe0c8, emissive: 0x2c2e22, y: 0.32 },
-  ogre: { geo: () => new THREE.BoxGeometry(0.5, 0.9, 0.5), color: 0x7a2b2b, emissive: 0x3a0e0e, y: 0.46 },
+  zombie: { create: createZombieVoxel, y: 0 },
+  skeleton: {
+    create: () => new THREE.Mesh(
+      new THREE.ConeGeometry(0.22, 0.62, 6),
+      new THREE.MeshStandardMaterial({ color: 0xdbe0c8, emissive: 0x2c2e22, emissiveIntensity: 0.6, roughness: 0.7 }),
+    ),
+    y: 0.32,
+  },
+  ogre: {
+    create: () => new THREE.Mesh(
+      new THREE.BoxGeometry(0.5, 0.9, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x7a2b2b, emissive: 0x3a0e0e, emissiveIntensity: 0.6, roughness: 0.7 }),
+    ),
+    y: 0.46,
+  },
 };
 
 const mazeGroup = new THREE.Group();
@@ -58,11 +267,19 @@ function floorTileMaterial(tile) {
   return tile === TILE.STAIRS ? stairsMat : floorMat;
 }
 
+let doorMesh = null;
+let buttonMesh = null;
+const doorRestY = WALL_H / 2;
+const doorOpenY = doorRestY + WALL_H + 0.1;
+
 function buildFloorMesh(floor) {
   mazeGroup.clear();
+  doorMesh = null;
+  buttonMesh = null;
   const floorGeo = new THREE.PlaneGeometry(CELL, CELL);
   const ceilGeo = new THREE.PlaneGeometry(CELL, CELL);
   const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
+  const doorGeo = new THREE.BoxGeometry(CELL * 0.96, WALL_H * 0.96, CELL * 0.4);
 
   for (let y = 0; y < floor.height; y++) {
     for (let x = 0; x < floor.width; x++) {
@@ -74,6 +291,22 @@ function buildFloorMesh(floor) {
         mazeGroup.add(wallMesh);
         continue;
       }
+      if (tile === TILE.BUTTON) {
+        const wallMesh = new THREE.Mesh(wallGeo, buttonFrameMat);
+        wallMesh.position.set(wx, WALL_H / 2, wz);
+        mazeGroup.add(wallMesh);
+        const dir = HEADING_DELTA[floor.button.facing];
+        const panelGeo = dir.dx !== 0
+          ? new THREE.BoxGeometry(0.06, 0.42, 0.42)
+          : new THREE.BoxGeometry(0.42, 0.42, 0.06);
+        const panelMat = new THREE.MeshStandardMaterial({ color: 0x7a2a24, emissive: 0x4a1008, emissiveIntensity: 1.0, roughness: 0.5 });
+        const panel = new THREE.Mesh(panelGeo, panelMat);
+        panel.position.set(wx + dir.dx * (CELL / 2 - 0.03), 1.2, wz + dir.dy * (CELL / 2 - 0.03));
+        mazeGroup.add(panel);
+        buttonMesh = panel;
+        continue;
+      }
+
       const f = new THREE.Mesh(floorGeo, floorTileMaterial(tile));
       f.rotation.x = -Math.PI / 2;
       f.position.set(wx, 0, wz);
@@ -82,6 +315,14 @@ function buildFloorMesh(floor) {
       c.rotation.x = Math.PI / 2;
       c.position.set(wx, WALL_H, wz);
       mazeGroup.add(c);
+
+      if (tile === TILE.DOOR) {
+        const door = new THREE.Mesh(doorGeo, doorMat);
+        door.position.set(wx, floor.door && floor.door.open ? doorOpenY : doorRestY, wz);
+        door.userData.animState = floor.door && floor.door.open ? "done" : null;
+        mazeGroup.add(door);
+        doorMesh = door;
+      }
     }
   }
 }
@@ -171,6 +412,11 @@ function handleMoveEvent(result) {
   const event = result.event;
   if (event.type === "blocked" || event.type === "busy") return;
   if (event.type === "blockedByMonster") { showMessage("何かがいる!"); return; }
+  if (event.type === "buttonPressed") {
+    showMessage("ガコン…どこかで扉が開いた音がした");
+    if (buttonMesh) { buttonMesh.material.color.set(0x3fd15a); buttonMesh.material.emissive.set(0x0a5c1c); }
+    return;
+  }
   if (event.type === "itemPickup") {
     if (event.kind === "potion") showMessage(`ポーションを見つけた (HP+${event.heal})`);
     else showMessage(`${event.weapon.name}を手に入れた!`);
@@ -270,10 +516,21 @@ const monsterMeshMap = new Map();
 const itemMeshMap = new Map();
 const deathFx = [];
 
+function setMonsterFlash(mesh, on) {
+  mesh.traverse((child) => {
+    if (child.isMesh) child.material.emissiveIntensity = on ? 2.4 : child.userData.baseEmissive ?? 0.6;
+  });
+}
+
+const MONSTER_SCALE = 2;
+
 function createMonsterMesh(type) {
   const v = MONSTER_VISUALS[type];
-  const mat = new THREE.MeshStandardMaterial({ color: v.color, emissive: v.emissive, emissiveIntensity: 0.6, roughness: 0.7 });
-  const mesh = new THREE.Mesh(v.geo(), mat);
+  const mesh = v.create();
+  mesh.scale.setScalar(MONSTER_SCALE);
+  mesh.traverse((child) => {
+    if (child.isMesh) child.userData.baseEmissive = child.material.emissiveIntensity;
+  });
   return mesh;
 }
 
@@ -288,16 +545,17 @@ function syncMonsterMeshes(dt, now) {
     const v = MONSTER_VISUALS[m.type];
     if (!rec) {
       const mesh = createMonsterMesh(m.type);
-      mesh.position.set(m.x * CELL, v.y, m.y * CELL);
+      mesh.position.set(m.x * CELL, v.y * MONSTER_SCALE, m.y * CELL);
       monsterGroup.add(mesh);
-      rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0 };
+      rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false };
       monsterMeshMap.set(m.id, rec);
     }
     rec.vx += (m.x * CELL - rec.vx) * rate;
     rec.vz += (m.y * CELL - rec.vz) * rate;
     rec.mesh.position.x = rec.vx;
     rec.mesh.position.z = rec.vz;
-    rec.mesh.material.emissiveIntensity = now < rec.flashUntil ? 2.4 : 0.6;
+    const shouldFlash = now < rec.flashUntil;
+    if (shouldFlash !== rec.flashing) { setMonsterFlash(rec.mesh, shouldFlash); rec.flashing = shouldFlash; }
   }
 }
 
@@ -332,13 +590,28 @@ function updateDeathFx(now) {
   for (let i = deathFx.length - 1; i >= 0; i--) {
     const fx = deathFx[i];
     const t = 1 - Math.max(0, fx.until - now) / 300;
-    fx.mesh.scale.setScalar(Math.max(0.001, 1 - t));
+    fx.mesh.scale.setScalar(Math.max(0.001, MONSTER_SCALE * (1 - t)));
     fx.mesh.position.y += 0.01;
     if (t >= 1) {
       monsterGroup.remove(fx.mesh);
       deathFx.splice(i, 1);
     }
   }
+}
+
+const DOOR_ANIM_MS = 700;
+function updateDoorAnim(now) {
+  if (!doorMesh || !floor.door || !floor.door.open) return;
+  if (doorMesh.userData.animState === "done") return;
+  if (!doorMesh.userData.animState) {
+    doorMesh.userData.animState = "animating";
+    doorMesh.userData.animStartT = now;
+    doorMesh.userData.animFromY = doorMesh.position.y;
+  }
+  const p = Math.min(1, (now - doorMesh.userData.animStartT) / DOOR_ANIM_MS);
+  const eased = 1 - Math.pow(1 - p, 3);
+  doorMesh.position.y = doorMesh.userData.animFromY + (doorOpenY - doorMesh.userData.animFromY) * eased;
+  if (p >= 1) doorMesh.userData.animState = "done";
 }
 
 // ---------- Render loop ----------
@@ -385,6 +658,7 @@ function loop(t) {
   syncMonsterMeshes(dt, t);
   syncItemMeshes(t);
   updateDeathFx(t);
+  updateDoorAnim(t);
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
