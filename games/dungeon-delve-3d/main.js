@@ -522,9 +522,12 @@ function setMonsterFlash(mesh, on) {
   });
 }
 
+const MONSTER_SCALE = 2;
+
 function createMonsterMesh(type) {
   const v = MONSTER_VISUALS[type];
   const mesh = v.create();
+  mesh.scale.setScalar(MONSTER_SCALE);
   mesh.traverse((child) => {
     if (child.isMesh) child.userData.baseEmissive = child.material.emissiveIntensity;
   });
@@ -542,7 +545,7 @@ function syncMonsterMeshes(dt, now) {
     const v = MONSTER_VISUALS[m.type];
     if (!rec) {
       const mesh = createMonsterMesh(m.type);
-      mesh.position.set(m.x * CELL, v.y, m.y * CELL);
+      mesh.position.set(m.x * CELL, v.y * MONSTER_SCALE, m.y * CELL);
       monsterGroup.add(mesh);
       rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false };
       monsterMeshMap.set(m.id, rec);
@@ -587,7 +590,7 @@ function updateDeathFx(now) {
   for (let i = deathFx.length - 1; i >= 0; i--) {
     const fx = deathFx[i];
     const t = 1 - Math.max(0, fx.until - now) / 300;
-    fx.mesh.scale.setScalar(Math.max(0.001, 1 - t));
+    fx.mesh.scale.setScalar(Math.max(0.001, MONSTER_SCALE * (1 - t)));
     fx.mesh.position.y += 0.01;
     if (t >= 1) {
       monsterGroup.remove(fx.mesh);
