@@ -15,12 +15,15 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x241c28, 9, 26);
+scene.fog = new THREE.Fog(0x38363c, 9, 27);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 40);
 
-scene.add(new THREE.HemisphereLight(0x9a89b8, 0x2a2436, 0.85));
-scene.add(new THREE.AmbientLight(0x6c5d80, 1.05));
-const torch = new THREE.PointLight(0xffc082, 2.8, 14, 1.6);
+// Neutral white/gray lighting — the old build leaned purple, which tinted
+// every surface; a stone dungeon needs colorless light so the wall/floor
+// textures read as actual white-gray stone instead of "purple but paler".
+scene.add(new THREE.HemisphereLight(0xf0eee8, 0x4a4a52, 0.95));
+scene.add(new THREE.AmbientLight(0x9c9aa2, 0.95));
+const torch = new THREE.PointLight(0xfff2df, 2.3, 13, 1.7);
 camera.add(torch);
 scene.add(camera);
 
@@ -41,10 +44,14 @@ function makeCanvas(size) {
   return { canvas, ctx: canvas.getContext("2d") };
 }
 
+// White/light-gray ashlar blocks with visible mortar lines — individual
+// bricks need to stay legible, not blur into a smooth tiled pattern, so the
+// per-block shading step is deliberately coarse (few flat shades, hard
+// edges) rather than a smooth gradient.
 function createStoneBlockTexture() {
   const size = 256;
   const { canvas, ctx } = makeCanvas(size);
-  ctx.fillStyle = "#26222c";
+  ctx.fillStyle = "#5c5a5e"; // mortar/grout: darker neutral gray
   ctx.fillRect(0, 0, size, size);
   const cols = 4, rows = 6;
   const bw = size / cols, bh = size / rows;
@@ -52,13 +59,20 @@ function createStoneBlockTexture() {
     const offset = (ry % 2) * (bw / 2);
     for (let rx = -1; rx <= cols; rx++) {
       const x = rx * bw + offset, y = ry * bh;
-      const shade = 148 + Math.floor(Math.random() * 34 - 17);
-      ctx.fillStyle = `rgb(${shade},${shade - 4},${shade + 6})`;
+      const shade = 198 + Math.floor(Math.random() * 34 - 17); // white-to-light-gray, block to block
+      ctx.fillStyle = `rgb(${shade},${shade - 2},${shade - 4})`; // near-neutral, faint warm dust tint
       const pad = 3;
       ctx.fillRect(x + pad, y + pad, bw - pad * 2, bh - pad * 2);
-      for (let i = 0; i < 8; i++) {
-        ctx.fillStyle = `rgba(0,0,0,${Math.random() * 0.18})`;
+      // grime speckle + a few darker weathered patches per block
+      for (let i = 0; i < 10; i++) {
+        ctx.fillStyle = `rgba(70,66,64,${Math.random() * 0.22})`;
         ctx.fillRect(x + pad + Math.random() * (bw - pad * 2), y + pad + Math.random() * (bh - pad * 2), 2, 2);
+      }
+      if (Math.random() < 0.5) {
+        const sx = x + pad + Math.random() * (bw - pad * 2) * 0.6;
+        const sy = y + pad + Math.random() * (bh - pad * 2) * 0.6;
+        ctx.fillStyle = `rgba(90,86,84,${0.1 + Math.random() * 0.12})`;
+        ctx.fillRect(sx, sy, (bw - pad * 2) * 0.4, (bh - pad * 2) * 0.35);
       }
     }
   }
@@ -67,27 +81,72 @@ function createStoneBlockTexture() {
   return tex;
 }
 
+// Old flagstone floor: irregular, differently-shaped/sized white-gray slabs
+// with dark grout gaps and per-stone brightness variation.
 function createFlagstoneTexture() {
   const size = 256;
   const { canvas, ctx } = makeCanvas(size);
-  ctx.fillStyle = "#1c1922";
+  ctx.fillStyle = "#403e40"; // grout between stones
   ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 30; i++) {
     const cx = Math.random() * size, cy = Math.random() * size;
-    const r = 18 + Math.random() * 20;
-    const sides = 5 + Math.floor(Math.random() * 3);
-    const shade = 92 + Math.floor(Math.random() * 38);
-    ctx.fillStyle = `rgb(${shade},${shade - 4},${shade + 6})`;
+    const r = 16 + Math.random() * 26;
+    const sides = 5 + Math.floor(Math.random() * 4);
+    const shade = 168 + Math.floor(Math.random() * 55); // white-to-light-gray, stone to stone
+    ctx.fillStyle = `rgb(${shade},${shade - 2},${shade - 5})`;
     ctx.beginPath();
     for (let s = 0; s < sides; s++) {
-      const ang = (s / sides) * Math.PI * 2 + Math.random() * 0.3;
-      const rr = r * (0.75 + Math.random() * 0.35);
+      const ang = (s / sides) * Math.PI * 2 + Math.random() * 0.35;
+      const rr = r * (0.7 + Math.random() * 0.4);
       const px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
       if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.closePath();
     ctx.fill();
+    // faint crack/grime detail inside the stone
+    ctx.fillStyle = `rgba(60,58,58,${0.08 + Math.random() * 0.1})`;
+    ctx.beginPath();
+    ctx.arc(cx + (Math.random() - 0.5) * r, cy + (Math.random() - 0.5) * r, r * 0.3, 0, Math.PI * 2);
+    ctx.fill();
   }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+// Flat old concrete ceiling: a handful of large panel seams, not brickwork —
+// mostly uniform, brighter than the walls, with fine dirt/stain speckle for
+// age rather than any regular block pattern.
+function createConcreteCeilingTexture() {
+  const size = 256;
+  const { canvas, ctx } = makeCanvas(size);
+  const base = 210;
+  ctx.fillStyle = `rgb(${base},${base - 1},${base - 3})`;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 900; i++) {
+    const x = Math.random() * size, y = Math.random() * size;
+    const s = 1 + Math.random() * 2.5;
+    const dark = Math.random() < 0.72;
+    const shade = dark ? -(8 + Math.random() * 26) : Math.random() * 8;
+    ctx.fillStyle = `rgba(${60 + Math.max(0, shade + 60)},${58},${56},${0.08 + Math.random() * 0.14})`;
+    ctx.fillRect(x, y, s, s);
+  }
+  for (let i = 0; i < 5; i++) {
+    const x = Math.random() * size, y = Math.random() * size, r = 12 + Math.random() * 24;
+    const grad = ctx.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, "rgba(70,66,64,0.22)");
+    grad.addColorStop(1, "rgba(70,66,64,0)");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = "rgba(96,92,90,0.85)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(size / 2, 0); ctx.lineTo(size / 2, size);
+  ctx.moveTo(0, size / 2); ctx.lineTo(size, size / 2);
+  ctx.stroke();
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   return tex;
@@ -123,16 +182,21 @@ function createWoodDoorTexture() {
 
 const stoneWallTexture = createStoneBlockTexture();
 const flagstoneTexture = createFlagstoneTexture();
+const concreteCeilingTexture = createConcreteCeilingTexture();
 const woodDoorTexture = createWoodDoorTexture();
 
-const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xd8d0e0, roughness: 0.88 });
-const floorMat = new THREE.MeshStandardMaterial({ map: flagstoneTexture, color: 0xcfc7da, roughness: 0.92 });
-const ceilMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xb8aec6, roughness: 0.94, side: THREE.DoubleSide });
+// Near-white tints (not pure #fff — a hint of dust keeps it from blowing
+// out) so the textures' own baked-in shading carries the "old stone" read
+// instead of a color tint doing the work. Ceiling reads a shade brighter
+// than the walls, as concrete rather than block-jointed masonry.
+const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
+const floorMat = new THREE.MeshStandardMaterial({ map: flagstoneTexture, color: 0xe6e4e0, roughness: 0.95 });
+const ceilMat = new THREE.MeshStandardMaterial({ map: concreteCeilingTexture, color: 0xf4f2ee, roughness: 0.96, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
 const weaponMat = new THREE.MeshStandardMaterial({ color: 0x5cc8ff, emissive: 0x0d5a99, emissiveIntensity: 1.1, roughness: 0.35 });
 const doorMat = new THREE.MeshStandardMaterial({ map: woodDoorTexture, color: 0xffffff, roughness: 0.8 });
-const buttonFrameMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xd8d0e0, roughness: 0.88 });
+const buttonFrameMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
 
 const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", ogre: "オーガ" };
 
