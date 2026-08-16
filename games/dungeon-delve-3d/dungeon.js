@@ -17,29 +17,20 @@ export const FLOOR_GOAL = 5;
 // floor never opens with several monsters converging on the spawn point at
 // once (spawn placement below prefers cells further away than this, falling
 // back to "the farthest half of the floor" on small maps where that isn't
-// possible). Diagonal movement shortens path lengths, so this is generous
-// on purpose.
-const AGGRO_RADIUS = 6;
+// possible).
+const AGGRO_RADIUS = 4;
 
-// 8-way compass headings, 45° apart: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW.
+// Compass headings: 0=N(dy-1), 1=E(dx+1), 2=S(dy+1), 3=W(dx-1).
 export const HEADING_DELTA = [
   { dx: 0, dy: -1 },
-  { dx: 1, dy: -1 },
   { dx: 1, dy: 0 },
-  { dx: 1, dy: 1 },
   { dx: 0, dy: 1 },
-  { dx: -1, dy: 1 },
   { dx: -1, dy: 0 },
-  { dx: -1, dy: -1 },
 ];
-// Cardinal-only subset, used by the dungeon carver so corridors stay
-// axis-aligned (diagonal mobility is a player/monster movement rule, not a
-// map-generation one).
-const CARDINAL_DELTA = [HEADING_DELTA[0], HEADING_DELTA[2], HEADING_DELTA[4], HEADING_DELTA[6]];
 
-export function turnLeft(heading) { return (heading + 7) % 8; }
-export function turnRight(heading) { return (heading + 1) % 8; }
-export function oppositeHeading(heading) { return (heading + 4) % 8; }
+export function turnLeft(heading) { return (heading + 3) % 4; }
+export function turnRight(heading) { return (heading + 1) % 4; }
+export function oppositeHeading(heading) { return (heading + 2) % 4; }
 export function forwardCell(x, y, heading) {
   const d = HEADING_DELTA[heading];
   return { x: x + d.dx, y: y + d.dy };
@@ -59,17 +50,9 @@ export function isBlockingTile(floor, x, y) {
   return false;
 }
 
-// Diagonal headings (odd indices) are only passable if both flanking
-// cardinal cells are open too — otherwise you could cut across a solid
-// wall corner. Returns the target cell, or null if the step is blocked.
 function canStepTo(floor, x, y, heading) {
   const target = forwardCell(x, y, heading);
   if (isBlockingTile(floor, target.x, target.y)) return null;
-  if (heading % 2 === 1) {
-    const c1 = forwardCell(x, y, (heading + 7) % 8);
-    const c2 = forwardCell(x, y, (heading + 1) % 8);
-    if (isBlockingTile(floor, c1.x, c1.y) || isBlockingTile(floor, c2.x, c2.y)) return null;
-  }
   return target;
 }
 
@@ -143,7 +126,7 @@ function carve(size, rng) {
   let guard = 0;
   while (floorCells.length < target && guard < size * size * 40) {
     guard++;
-    const d = CARDINAL_DELTA[Math.floor(rng() * 4)];
+    const d = HEADING_DELTA[Math.floor(rng() * 4)];
     const nx = x + d.dx, ny = y + d.dy;
     if (nx < 1 || ny < 1 || nx >= size - 1 || ny >= size - 1) {
       const p = pick(floorCells, rng);
@@ -174,7 +157,7 @@ function placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng) {
   const grid = floor.grid;
   function cardinalDegree(x, y) {
     let n = 0;
-    for (const d of CARDINAL_DELTA) {
+    for (const d of HEADING_DELTA) {
       if (tileAt(floor, x + d.dx, y + d.dy) !== TILE.WALL) n++;
     }
     return n;
@@ -188,7 +171,7 @@ function placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng) {
 
   for (const pocket of deadEnds) {
     let doorPos = null;
-    for (const d of CARDINAL_DELTA) {
+    for (const d of HEADING_DELTA) {
       const nx = pocket.x + d.dx, ny = pocket.y + d.dy;
       if (tileAt(floor, nx, ny) !== TILE.WALL) { doorPos = { x: nx, y: ny }; break; }
     }
@@ -217,11 +200,11 @@ function placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng) {
     const wallSpots = [];
     for (const c of floorCells) {
       if (occupied.has(`${c.x},${c.y}`)) continue;
-      for (let ci = 0; ci < CARDINAL_DELTA.length; ci++) {
-        const d = CARDINAL_DELTA[ci];
+      for (let ci = 0; ci < HEADING_DELTA.length; ci++) {
+        const d = HEADING_DELTA[ci];
         const wx = c.x + d.dx, wy = c.y + d.dy;
         if (tileAt(floor, wx, wy) === TILE.WALL) {
-          wallSpots.push({ x: wx, y: wy, facing: (ci * 2 + 4) % 8 });
+          wallSpots.push({ x: wx, y: wy, facing: (ci + 2) % 4 });
         }
       }
     }
@@ -328,7 +311,7 @@ export function generateFloor(floorNumber, rng) {
 // ---------- Player / run lifecycle ----------
 export function createPlayer(now) {
   return {
-    x: 0, y: 0, heading: 2, // 2 = East
+    x: 0, y: 0, heading: 1, // 1 = East
     hp: 24, maxHp: 24,
     weapon: WEAPONS.dagger,
     floorNumber: 1,
@@ -399,7 +382,7 @@ export function descend(player, rng, now) {
   const newPlayer = {
     ...player,
     floorNumber: nextFloorNumber,
-    x: floor.start.x, y: floor.start.y, heading: 2,
+    x: floor.start.x, y: floor.start.y, heading: 1,
   };
   return { event: { type: "descend" }, player: newPlayer, floor };
 }
@@ -453,9 +436,7 @@ export function stepMonsters(floor, player, now, rng) {
   const occupied = new Set(floor.monsters.map((m) => `${m.x},${m.y}`));
 
   for (const m of floor.monsters) {
-    // Chebyshev distance: with 8-way movement, diagonal neighbors count as
-    // 1 step away too, same as cardinal ones.
-    const dist = Math.max(Math.abs(player.x - m.x), Math.abs(player.y - m.y));
+    const dist = Math.abs(player.x - m.x) + Math.abs(player.y - m.y);
     if (!m.awake) {
       if (dist > AGGRO_RADIUS) continue;
       m.awake = true;

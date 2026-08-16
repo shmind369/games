@@ -181,7 +181,8 @@ function createWoodDoorTexture() {
 }
 
 const stoneWallTexture = createStoneBlockTexture();
-const flagstoneTexture = createFlagstoneTexture();
+// createFlagstoneTexture() is unused for now — the floor is a flat gray
+// with a per-tile grid overlay instead (see floorMat / gridLineMat below).
 const concreteCeilingTexture = createConcreteCeilingTexture();
 const woodDoorTexture = createWoodDoorTexture();
 
@@ -190,7 +191,8 @@ const woodDoorTexture = createWoodDoorTexture();
 // instead of a color tint doing the work. Ceiling reads a shade brighter
 // than the walls, as concrete rather than block-jointed masonry.
 const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
-const floorMat = new THREE.MeshStandardMaterial({ map: flagstoneTexture, color: 0xe6e4e0, roughness: 0.95 });
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 0.95 });
+const gridLineMat = new THREE.LineBasicMaterial({ color: 0x141414 });
 const ceilMat = new THREE.MeshStandardMaterial({ map: concreteCeilingTexture, color: 0xf4f2ee, roughness: 0.96, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
@@ -279,6 +281,7 @@ function buildFloorMesh(floor) {
   doorMesh = null;
   buttonMesh = null;
   const floorGeo = new THREE.PlaneGeometry(CELL, CELL);
+  const floorGridGeo = new THREE.EdgesGeometry(floorGeo);
   const ceilGeo = new THREE.PlaneGeometry(CELL, CELL);
   const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
   const doorGeo = new THREE.BoxGeometry(CELL * 0.96, WALL_H * 0.96, CELL * 0.4);
@@ -313,6 +316,10 @@ function buildFloorMesh(floor) {
       f.rotation.x = -Math.PI / 2;
       f.position.set(wx, 0, wz);
       mazeGroup.add(f);
+      const grid = new THREE.LineSegments(floorGridGeo, gridLineMat);
+      grid.rotation.x = -Math.PI / 2;
+      grid.position.set(wx, 0.003, wz);
+      mazeGroup.add(grid);
       const c = new THREE.Mesh(ceilGeo, ceilMat);
       c.rotation.x = Math.PI / 2;
       c.position.set(wx, WALL_H, wz);
@@ -338,7 +345,7 @@ let started = false;
 let gameOver = false;
 let win = false;
 
-function headingToYaw(heading) { return -heading * (Math.PI / 4); }
+function headingToYaw(heading) { return -heading * (Math.PI / 2); }
 function shortestAngleLerp(current, target, t) {
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
