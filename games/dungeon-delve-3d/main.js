@@ -258,6 +258,8 @@ const MONSTER_VISUALS = {
   },
 };
 
+const MONSTER_BURST_COLOR = { zombie: 0x5c7a44, skeleton: 0xdbe0c8, ogre: 0x7a2b2b };
+
 const mazeGroup = new THREE.Group();
 const monsterGroup = new THREE.Group();
 const itemGroup = new THREE.Group();
@@ -353,7 +355,6 @@ const hudWeapon = document.getElementById("weaponLabel");
 const hpFill = document.getElementById("hpFill");
 const hpText = document.getElementById("hpText");
 const messageEl = document.getElementById("message");
-const hitFlash = document.getElementById("hitFlash");
 const titleOverlay = document.getElementById("titleOverlay");
 const winOverlay = document.getElementById("winOverlay");
 const deathOverlay = document.getElementById("deathOverlay");
@@ -367,9 +368,26 @@ function showMessage(text, ms = 1400) {
   messageTimer = setTimeout(() => messageEl.classList.remove("show"), ms);
 }
 
-function flashHit() {
-  hitFlash.classList.add("show");
-  setTimeout(() => hitFlash.classList.remove("show"), 160);
+// Whole-screen shake (replaces the old red damage flash). Driven off a
+// CSS transform on <body>: a transform on an ancestor makes it the
+// containing block for position:fixed descendants too, so this moves the
+// canvas and every HUD overlay together.
+let screenShakeUntil = 0;
+let screenShakeMag = 0;
+function triggerScreenShake(mag = 10, ms = 220) {
+  screenShakeUntil = performance.now() + ms;
+  screenShakeMag = mag;
+}
+function updateScreenShake(now) {
+  if (now < screenShakeUntil) {
+    const p = (screenShakeUntil - now) / 220;
+    const mag = screenShakeMag * p;
+    const sx = (Math.random() * 2 - 1) * mag;
+    const sy = (Math.random() * 2 - 1) * mag;
+    document.body.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`;
+  } else if (document.body.style.transform) {
+    document.body.style.transform = "";
+  }
 }
 
 function updateHud() {
@@ -547,13 +565,50 @@ function syncMonsterMeshes(dt, now) {
       const mesh = createMonsterMesh(m.type);
       mesh.position.set(m.x * CELL, v.y * MONSTER_SCALE, m.y * CELL);
       monsterGroup.add(mesh);
-      rec = { mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false };
+      rec = {
+        mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false,
+        hitShakeUntil: 0, lungeStart: 0, lungeDx: 0, lungeDz: 0, yaw: mesh.rotation.y,
+      };
       monsterMeshMap.set(m.id, rec);
     }
     rec.vx += (m.x * CELL - rec.vx) * rate;
     rec.vz += (m.y * CELL - rec.vz) * rate;
-    rec.mesh.position.x = rec.vx;
-    rec.mesh.position.z = rec.vz;
+
+    // Face the player once awake — covers both closing the distance and
+    // standing in an attack.
+    if (m.awake) {
+      const dx = player.x - m.x, dz = player.y - m.y;
+      if (dx !== 0 || dz !== 0) {
+        const targetYaw = Math.atan2(-dx, -dz);
+        rec.yaw = shortestAngleLerp(rec.yaw, targetYaw, 1 - Math.exp(-dt * 10));
+        rec.mesh.rotation.y = rec.yaw;
+      }
+    }
+
+    // Pounce toward the player while an attack is landing.
+    let lungeX = 0, lungeZ = 0;
+    if (rec.lungeStart) {
+      const LUNGE_MS = 260, LUNGE_DIST = 0.5;
+      const p = (now - rec.lungeStart) / LUNGE_MS;
+      if (p >= 1) {
+        rec.lungeStart = 0;
+      } else {
+        const mag = Math.sin(Math.min(1, p) * Math.PI) * LUNGE_DIST;
+        lungeX = rec.lungeDx * mag;
+        lungeZ = rec.lungeDz * mag;
+      }
+    }
+
+    // Small jitter while reeling from a hit.
+    let shakeX = 0, shakeZ = 0;
+    if (now < rec.hitShakeUntil) {
+      const amt = 0.05 * MONSTER_SCALE;
+      shakeX = (Math.random() * 2 - 1) * amt;
+      shakeZ = (Math.random() * 2 - 1) * amt;
+    }
+
+    rec.mesh.position.x = rec.vx + lungeX + shakeX;
+    rec.mesh.position.z = rec.vz + lungeZ + shakeZ;
     const shouldFlash = now < rec.flashUntil;
     if (shouldFlash !== rec.flashing) { setMonsterFlash(rec.mesh, shouldFlash); rec.flashing = shouldFlash; }
   }
@@ -579,23 +634,60 @@ function syncItemMeshes(t) {
   }
 }
 
-function triggerDeathFx(monsterId) {
+const DEATH_FX_MS = 480;
+const DEATH_FX_GRAVITY = 6;
+
+// Pop the monster into a handful of flying voxel shards instead of just
+// shrinking it in place.
+function triggerDeathFx(monsterId, monsterType) {
   const rec = monsterMeshMap.get(monsterId);
   if (!rec) return;
   monsterMeshMap.delete(monsterId);
-  deathFx.push({ mesh: rec.mesh, until: performance.now() + 300 });
+  const pos = rec.mesh.position.clone();
+  monsterGroup.remove(rec.mesh);
+
+  const color = MONSTER_BURST_COLOR[monsterType] ?? 0x888888;
+  const shardSize = 0.11 * MONSTER_SCALE;
+  const shardGeo = new THREE.BoxGeometry(shardSize, shardSize, shardSize);
+  const now = performance.now();
+  const shardCount = 9;
+  for (let i = 0; i < shardCount; i++) {
+    const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.5, roughness: 0.8 });
+    const shard = new THREE.Mesh(shardGeo, mat);
+    shard.position.copy(pos);
+    shard.position.y += 0.5 * MONSTER_SCALE;
+    monsterGroup.add(shard);
+    const ang = Math.random() * Math.PI * 2;
+    const speed = (1.6 + Math.random() * 2.2) * (MONSTER_SCALE / 2);
+    deathFx.push({
+      mesh: shard,
+      startPos: shard.position.clone(),
+      vx: Math.cos(ang) * speed,
+      vz: Math.sin(ang) * speed,
+      vy: (2 + Math.random() * 2.4) * (MONSTER_SCALE / 2),
+      spinX: (Math.random() - 0.5) * 12,
+      spinY: (Math.random() - 0.5) * 12,
+      start: now,
+    });
+  }
 }
 
 function updateDeathFx(now) {
   for (let i = deathFx.length - 1; i >= 0; i--) {
     const fx = deathFx[i];
-    const t = 1 - Math.max(0, fx.until - now) / 300;
-    fx.mesh.scale.setScalar(Math.max(0.001, MONSTER_SCALE * (1 - t)));
-    fx.mesh.position.y += 0.01;
-    if (t >= 1) {
+    const t = (now - fx.start) / 1000;
+    const p = (now - fx.start) / DEATH_FX_MS;
+    if (p >= 1) {
       monsterGroup.remove(fx.mesh);
       deathFx.splice(i, 1);
+      continue;
     }
+    fx.mesh.position.x = fx.startPos.x + fx.vx * t;
+    fx.mesh.position.z = fx.startPos.z + fx.vz * t;
+    fx.mesh.position.y = fx.startPos.y + fx.vy * t - 0.5 * DEATH_FX_GRAVITY * t * t;
+    fx.mesh.rotation.x += fx.spinX * 0.02;
+    fx.mesh.rotation.y += fx.spinY * 0.02;
+    fx.mesh.scale.setScalar(Math.max(0.001, 1 - p));
   }
 }
 
@@ -623,16 +715,29 @@ function loop(t) {
   if (started && !gameOver && !win) {
     const events = stepMonsters(floor, player, t, rng);
     for (const ev of events) {
-      if (ev.type === "monsterAttack") { flashHit(); }
-      else if (ev.type === "playerDefeated") { endGame("death"); }
+      if (ev.type === "monsterAttack") {
+        triggerScreenShake();
+        const rec = monsterMeshMap.get(ev.monsterId);
+        const mObj = floor.monsters.find((mm) => mm.id === ev.monsterId);
+        if (rec && mObj) {
+          const dx = player.x - mObj.x, dz = player.y - mObj.y;
+          const len = Math.hypot(dx, dz) || 1;
+          rec.lungeStart = t;
+          rec.lungeDx = dx / len;
+          rec.lungeDz = dz / len;
+        }
+      } else if (ev.type === "playerDefeated") { endGame("death"); }
     }
     if (player.swingUntil && t >= player.swingUntil) {
       const ev = finishAttack(player, floor, rng, t);
       if (ev.type === "attackHit") {
         const name = MONSTER_NAMES[ev.monsterType] || ev.monsterType;
         showMessage(ev.killed ? `${name}を倒した!` : `${ev.dmg}のダメージ!`, 900);
-        if (ev.killed) triggerDeathFx(ev.monsterId);
-        else { const rec = monsterMeshMap.get(ev.monsterId); if (rec) rec.flashUntil = t + 150; }
+        if (ev.killed) triggerDeathFx(ev.monsterId, ev.monsterType);
+        else {
+          const rec = monsterMeshMap.get(ev.monsterId);
+          if (rec) { rec.flashUntil = t + 150; rec.hitShakeUntil = t + 220; }
+        }
       }
     }
     updateHud();
@@ -659,6 +764,7 @@ function loop(t) {
   syncItemMeshes(t);
   updateDeathFx(t);
   updateDoorAnim(t);
+  updateScreenShake(t);
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);

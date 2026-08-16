@@ -102,9 +102,9 @@ export const WEAPONS = {
 };
 
 export const MONSTERS = {
-  zombie: { type: "zombie", hp: 7, atk: 2, moveInterval: 1200, attackInterval: 1000 },
-  skeleton: { type: "skeleton", hp: 12, atk: 4, moveInterval: 1100, attackInterval: 950 },
-  ogre: { type: "ogre", hp: 22, atk: 7, moveInterval: 1400, attackInterval: 1150 },
+  zombie: { type: "zombie", hp: 7, atk: 2, moveInterval: 2400, attackInterval: 2000 },
+  skeleton: { type: "skeleton", hp: 12, atk: 4, moveInterval: 2200, attackInterval: 1900 },
+  ogre: { type: "ogre", hp: 22, atk: 7, moveInterval: 2800, attackInterval: 2300 },
 };
 
 function monsterPoolForFloor(floorNumber) {
