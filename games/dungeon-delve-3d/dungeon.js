@@ -78,10 +78,12 @@ function shuffle(arr, rng) {
 }
 
 // ---------- Weapons & monsters ----------
+// swingTime/recoveryTime are 3x the original pacing — the full cooldown
+// cycle (and the gauge that mirrors it) was refilling too fast.
 export const WEAPONS = {
-  dagger: { id: "dagger", name: "ダガー", atk: 3, swingTime: 220, recoveryTime: 220 },
-  sword: { id: "sword", name: "ソード", atk: 6, swingTime: 320, recoveryTime: 320 },
-  axe: { id: "axe", name: "アックス", atk: 10, swingTime: 500, recoveryTime: 450 },
+  dagger: { id: "dagger", name: "ダガー", atk: 3, swingTime: 660, recoveryTime: 660 },
+  sword: { id: "sword", name: "ソード", atk: 6, swingTime: 960, recoveryTime: 960 },
+  axe: { id: "axe", name: "アックス", atk: 10, swingTime: 1500, recoveryTime: 1350 },
 };
 
 export const MONSTERS = {

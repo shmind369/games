@@ -526,7 +526,7 @@ function doAttack() {
 }
 function updateAttackGauge(now) {
   const progress = attackCycleTotal <= 0 ? 1 : Math.min(1, (now - attackCycleStart) / attackCycleTotal);
-  attackGaugeFill.style.width = `${progress * 100}%`;
+  attackGaugeFill.style.height = `${progress * 100}%`;
   attackBtnEl.classList.toggle("ready", progress >= 1);
 }
 
@@ -636,12 +636,13 @@ function syncMonsterMeshes(dt, now) {
       }
     }
 
-    // Charge into the player when an attack lands: a fast, forceful rush
-    // forward (sharp ease-out) that then eases back out — reads as a
-    // deliberate shoulder-check rather than a gentle bob.
+    // Charge into the player when an attack lands: a very sudden, forceful
+    // slam forward (sharp ease-out over a short rush window) that then
+    // eases back out — reads as genuinely colliding with the player rather
+    // than a polite lean-in.
     let lungeX = 0, lungeZ = 0, lungeTilt = 0, lungeScale = MONSTER_SCALE;
     if (rec.lungeStart) {
-      const LUNGE_MS = 300, LUNGE_DIST = 0.85, RUSH_FRAC = 0.35;
+      const LUNGE_MS = 280, LUNGE_DIST = 1.3, RUSH_FRAC = 0.2;
       const p = (now - rec.lungeStart) / LUNGE_MS;
       if (p >= 1) {
         rec.lungeStart = 0;
@@ -650,15 +651,15 @@ function syncMonsterMeshes(dt, now) {
         const mag = LUNGE_DIST * (1 - (1 - rp) * (1 - rp));
         lungeX = rec.lungeDx * mag;
         lungeZ = rec.lungeDz * mag;
-        lungeTilt = (mag / LUNGE_DIST) * 0.32;
-        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.12);
+        lungeTilt = (mag / LUNGE_DIST) * 0.45;
+        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.22);
       } else {
         const rp = (p - RUSH_FRAC) / (1 - RUSH_FRAC);
         const mag = LUNGE_DIST * (1 - rp * rp);
         lungeX = rec.lungeDx * mag;
         lungeZ = rec.lungeDz * mag;
-        lungeTilt = (mag / LUNGE_DIST) * 0.32;
-        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.12);
+        lungeTilt = (mag / LUNGE_DIST) * 0.45;
+        lungeScale = MONSTER_SCALE * (1 + (mag / LUNGE_DIST) * 0.22);
       }
     }
 
@@ -781,7 +782,7 @@ function loop(t) {
     const events = stepMonsters(floor, player, t, rng);
     for (const ev of events) {
       if (ev.type === "monsterAttack") {
-        triggerScreenShake();
+        triggerScreenShake(14, 260);
         const rec = monsterMeshMap.get(ev.monsterId);
         const mObj = floor.monsters.find((mm) => mm.id === ev.monsterId);
         if (rec && mObj) {
