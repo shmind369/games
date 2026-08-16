@@ -547,33 +547,28 @@ bindTapButton("attackBtn", doAttack);
 // ---------- Swipe controls (replaces the old d-pad) ----------
 // Up = advance, down = step back. Left/right is split by hold time: a
 // quick flick-and-release turns 45°, but holding past STRAFE_HOLD_MS
-// while still past the distance threshold switches to a continuous
-// side-step (crab walk) that keeps repeating until the finger lifts —
-// the turn is never fired once strafing has taken over. A short tap
-// (below the distance threshold) is ignored so it doesn't fire an
-// accidental move.
+// while still past the distance threshold fires exactly one side-step
+// (crab walk) — not a repeat — and then stays consumed until the finger
+// lifts and a fresh gesture starts; the turn is never fired for the same
+// gesture once strafing has taken over. A short tap (below the distance
+// threshold) is ignored so it doesn't fire an accidental move.
 const SWIPE_THRESHOLD = 28;
 const STRAFE_HOLD_MS = 160;
-const STRAFE_STEP_MS = 200;
 let swipeStart = null; // { x, y, id, t }
 let lastPointerX = 0, lastPointerY = 0;
-let strafeDir = null; // null | "left" | "right"
+let strafeDir = null; // null | "left" | "right" — set once per held gesture, not repeated
 let strafeCheckTimer = null;
-let strafeRepeatTimer = null;
 
 function stopStrafeCheck() {
   if (strafeCheckTimer) { clearInterval(strafeCheckTimer); strafeCheckTimer = null; }
 }
 function stopStrafing() {
   strafeDir = null;
-  if (strafeRepeatTimer) { clearInterval(strafeRepeatTimer); strafeRepeatTimer = null; }
 }
 function beginStrafing(dir) {
   strafeDir = dir;
   stopStrafeCheck();
-  const step = dir === "left" ? doStrafeLeft : doStrafeRight;
-  step();
-  strafeRepeatTimer = setInterval(step, STRAFE_STEP_MS);
+  (dir === "left" ? doStrafeLeft : doStrafeRight)();
 }
 function checkStrafeEngage() {
   if (!swipeStart || strafeDir) return;
