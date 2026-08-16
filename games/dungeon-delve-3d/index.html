@@ -92,18 +92,41 @@
     }
 
     #attackBtn {
-      width: 84px;
-      height: 84px;
-      border-radius: 999px;
-      border: none;
-      background: #c23b3b;
+      position: relative;
+      width: 136px;
+      height: 58px;
+      border-radius: 14px;
+      border: 2px solid rgba(255,255,255,0.25);
+      background: #2a1414;
       color: #fff;
       font-size: 15px;
       font-weight: bold;
       touch-action: manipulation;
-      box-shadow: 0 0 16px rgba(194,59,59,0.7);
+      box-shadow: 0 0 16px rgba(194,59,59,0.5);
+      overflow: hidden;
+      padding: 0;
     }
-    #attackBtn:active { background: #9c2c2c; }
+    #attackBtn:active #attackLabel { filter: brightness(0.85); }
+    #attackGaugeFill {
+      position: absolute;
+      inset: 0;
+      width: 0%;
+      background: linear-gradient(90deg, #7a2020, #c23b3b);
+    }
+    #attackBtn.ready #attackGaugeFill {
+      background: linear-gradient(90deg, #c23b3b, #ff6a4d);
+      box-shadow: 0 0 12px rgba(255,106,77,0.8) inset;
+    }
+    #attackLabel {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
 
     .overlay {
       position: fixed;
@@ -166,16 +189,18 @@
   <div id="message"></div>
 
   <div id="controls">
-    <button id="attackBtn">たたく</button>
+    <button id="attackBtn">
+      <div id="attackGaugeFill"></div>
+      <span id="attackLabel">たたく</span>
+    </button>
   </div>
 
   <div id="titleOverlay" class="overlay show">
     <h1>DUNGEON DELVE 3D</h1>
     <p>
       たった1人でダンジョンに潜る、ライトな「ダンジョンマスター」風ローグライク。<br /><br />
-      画面を上下左右にスワイプして操作する。上スワイプで前進(正面にモンスターが
-      いれば自動で攻撃)、下スワイプで後退、左右スワイプでその場90°旋回。
-      「たたく」ボタンでも攻撃できる。<br /><br />
+      画面を上下左右にスワイプして操作する。上スワイプで前進、下スワイプで後退、
+      左右スワイプでその場90°旋回。攻撃は「たたく」ボタンで。<br /><br />
       ゾンビは横や後ろからもリアルタイムで襲ってくる――向き直って迎え撃とう。
       <br /><br />
       壁の中には、押すとどこかの扉が開くスイッチが隠れていることがある。<br /><br />
