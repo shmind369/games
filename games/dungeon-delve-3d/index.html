@@ -97,38 +97,12 @@
 
     #controls {
       position: fixed;
-      left: 0;
-      right: 0;
-      bottom: max(18px, env(safe-area-inset-bottom));
+      right: 16px;
+      bottom: max(22px, env(safe-area-inset-bottom));
       z-index: 20;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-end;
-      padding: 0 16px;
     }
-    #dpad {
-      display: grid;
-      grid-template-columns: 56px 56px 56px;
-      grid-template-rows: 56px 56px 56px;
-      gap: 6px;
-    }
-    .dbtn {
-      border: none;
-      border-radius: 12px;
-      background: rgba(255,255,255,0.12);
-      color: #fff;
-      font-size: 22px;
-      touch-action: manipulation;
-    }
-    .dbtn:active { background: rgba(255,255,255,0.28); }
-    #btnTurnLeft { grid-column: 1; grid-row: 2; }
-    #btnForward { grid-column: 2; grid-row: 1; }
-    #btnTurnRight { grid-column: 3; grid-row: 2; }
-    #btnBackward { grid-column: 2; grid-row: 3; }
 
     #attackBtn {
-      align-self: flex-end;
-      margin-bottom: 22px;
       width: 84px;
       height: 84px;
       border-radius: 999px;
@@ -204,12 +178,6 @@
   <div id="hitFlash"></div>
 
   <div id="controls">
-    <div id="dpad">
-      <button id="btnTurnLeft" class="dbtn">◀</button>
-      <button id="btnForward" class="dbtn">▲</button>
-      <button id="btnTurnRight" class="dbtn">▶</button>
-      <button id="btnBackward" class="dbtn">▼</button>
-    </div>
     <button id="attackBtn">たたく</button>
   </div>
 
@@ -217,8 +185,11 @@
     <h1>DUNGEON DELVE 3D</h1>
     <p>
       たった1人でダンジョンに潜る、ライトな「ダンジョンマスター」風ローグライク。<br /><br />
-      ▲▼で前進・後退、◀▶でその場旋回。正面にいるモンスターは「たたく」で攻撃できるが、
-      モンスターは横や後ろからもリアルタイムで襲ってくる――向き直って迎え撃とう。<br /><br />
+      画面を上下左右にスワイプして操作する。上スワイプで前進(正面にモンスターが
+      いれば自動で攻撃)、下スワイプで後退、左右スワイプでその場旋回(斜め方向にも
+      旋回・前進できる8方向移動)。「たたく」ボタンでも攻撃できる。<br /><br />
+      モンスターは横や後ろからもリアルタイムで襲ってくる――向き直って迎え撃とう。
+      <br /><br />
       目標は地下5階への到達。倒れたらそこで終わり、ダンジョンは
       毎回新しく生成される。
     </p>

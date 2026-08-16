@@ -1,8 +1,8 @@
 import * as THREE from "three";
 import {
-  TILE, FLOOR_GOAL, tileAt, turnLeft, turnRight,
+  TILE, FLOOR_GOAL, turnLeft, turnRight, oppositeHeading,
   makeRng, initRun, attemptMove, descend,
-  canAttack, startAttack, finishAttack, stepMonsters,
+  startAttack, finishAttack, stepMonsters,
 } from "./dungeon.js";
 
 // ---------- Three.js scene ----------
@@ -15,12 +15,12 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0x120c14, 6, 20);
+scene.fog = new THREE.Fog(0x241c28, 9, 26);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 40);
 
-scene.add(new THREE.HemisphereLight(0x7a6a8c, 0x1a1420, 0.5));
-scene.add(new THREE.AmbientLight(0x4a3f55, 0.75));
-const torch = new THREE.PointLight(0xffb066, 2.4, 11, 1.7);
+scene.add(new THREE.HemisphereLight(0x9a89b8, 0x2a2436, 0.85));
+scene.add(new THREE.AmbientLight(0x6c5d80, 1.05));
+const torch = new THREE.PointLight(0xffc082, 2.8, 14, 1.6);
 camera.add(torch);
 scene.add(camera);
 
@@ -34,9 +34,9 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
-const wallMat = new THREE.MeshStandardMaterial({ color: 0x453a4d, roughness: 0.88 });
-const floorMat = new THREE.MeshStandardMaterial({ color: 0x2a222f, roughness: 0.92 });
-const ceilMat = new THREE.MeshStandardMaterial({ color: 0x241d29, roughness: 0.95, side: THREE.DoubleSide });
+const wallMat = new THREE.MeshStandardMaterial({ color: 0x6a5b74, roughness: 0.85 });
+const floorMat = new THREE.MeshStandardMaterial({ color: 0x433a4a, roughness: 0.9 });
+const ceilMat = new THREE.MeshStandardMaterial({ color: 0x3a3143, roughness: 0.94, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
 const weaponMat = new THREE.MeshStandardMaterial({ color: 0x5cc8ff, emissive: 0x0d5a99, emissiveIntensity: 1.1, roughness: 0.35 });
@@ -95,7 +95,7 @@ let started = false;
 let gameOver = false;
 let win = false;
 
-function headingToYaw(heading) { return -heading * (Math.PI / 2); }
+function headingToYaw(heading) { return -heading * (Math.PI / 4); }
 function shortestAngleLerp(current, target, t) {
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
@@ -193,12 +193,13 @@ function handleMoveEvent(result) {
 
 function doForward() {
   if (!started || gameOver || win) return;
-  handleMoveEvent(attemptMove(player, floor, player.heading, performance.now()));
+  const result = attemptMove(player, floor, player.heading, performance.now());
+  if (result.event.type === "blockedByMonster") { doAttack(); return; }
+  handleMoveEvent(result);
 }
 function doBackward() {
   if (!started || gameOver || win) return;
-  const backHeading = (player.heading + 2) % 4;
-  handleMoveEvent(attemptMove(player, floor, backHeading, performance.now()));
+  handleMoveEvent(attemptMove(player, floor, oppositeHeading(player.heading), performance.now()));
 }
 function doTurnLeft() {
   if (!started || gameOver || win) return;
@@ -221,11 +222,31 @@ function bindTapButton(id, handler) {
   const el = document.getElementById(id);
   el.addEventListener("pointerdown", (e) => { e.preventDefault(); handler(); });
 }
-bindTapButton("btnForward", doForward);
-bindTapButton("btnBackward", doBackward);
-bindTapButton("btnTurnLeft", doTurnLeft);
-bindTapButton("btnTurnRight", doTurnRight);
 bindTapButton("attackBtn", doAttack);
+
+// ---------- Swipe controls (replaces the old d-pad) ----------
+// Up = advance (bumping into a monster attacks it instead), down = step
+// back, left/right = turn 45°. A short tap (below the distance threshold)
+// is ignored so it doesn't fire an accidental move.
+const SWIPE_THRESHOLD = 28;
+let swipeStart = null;
+canvas.addEventListener("pointerdown", (e) => {
+  swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointerup", (e) => {
+  if (!swipeStart || e.pointerId !== swipeStart.id) return;
+  const dx = e.clientX - swipeStart.x;
+  const dy = e.clientY - swipeStart.y;
+  swipeStart = null;
+  if (Math.hypot(dx, dy) < SWIPE_THRESHOLD) return;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > 0) doTurnRight(); else doTurnLeft();
+  } else {
+    if (dy < 0) doForward(); else doBackward();
+  }
+});
+canvas.addEventListener("pointercancel", () => { swipeStart = null; });
 
 document.getElementById("startBtn").addEventListener("pointerdown", (e) => {
   e.preventDefault();
