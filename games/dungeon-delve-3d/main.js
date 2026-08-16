@@ -579,7 +579,10 @@ function syncMonsterMeshes(dt, now) {
     if (m.awake) {
       const dx = player.x - m.x, dz = player.y - m.y;
       if (dx !== 0 || dz !== 0) {
-        const targetYaw = Math.atan2(-dx, -dz);
+        // The zombie voxel's face/arms point toward local +Z, the opposite
+        // of Three.js's usual "-Z is forward" convention, so this is
+        // flipped from the camera's own heading-to-yaw formula.
+        const targetYaw = Math.atan2(dx, dz);
         rec.yaw = shortestAngleLerp(rec.yaw, targetYaw, 1 - Math.exp(-dt * 10));
         rec.mesh.rotation.y = rec.yaw;
       }
