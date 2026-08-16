@@ -192,7 +192,7 @@ const woodDoorTexture = createWoodDoorTexture();
 // than the walls, as concrete rather than block-jointed masonry.
 const wallMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
 const floorMat = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 0.95 });
-const gridLineMat = new THREE.LineBasicMaterial({ color: 0x4a4a4a });
+const gridLineMat = new THREE.LineBasicMaterial({ color: 0x141414 });
 const ceilMat = new THREE.MeshStandardMaterial({ map: concreteCeilingTexture, color: 0xf4f2ee, roughness: 0.96, side: THREE.DoubleSide });
 const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0.6, emissive: 0x0e3d3a, emissiveIntensity: 0.7 });
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
