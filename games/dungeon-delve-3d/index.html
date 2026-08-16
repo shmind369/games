@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Dungeon Delve 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0a070c;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    canvas { display: block; touch-action: none; }
+
+    #hud {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      left: 12px;
+      right: 12px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      pointer-events: none;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+    }
+    #hudTop {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    #hud .pill {
+      background: rgba(0,0,0,0.5);
+      padding: 7px 14px;
+      border-radius: 999px;
+    }
+    #hpWrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0,0,0,0.5);
+      padding: 7px 12px;
+      border-radius: 999px;
+    }
+    #hpBar {
+      width: 120px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.15);
+      overflow: hidden;
+    }
+    #hpFill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #ff5c6c, #ff9a3c);
+      transition: width 0.15s;
+    }
+
+    #message {
+      position: fixed;
+      top: 30%;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 15;
+      background: rgba(0,0,0,0.65);
+      padding: 10px 18px;
+      border-radius: 10px;
+      font-size: 14px;
+      text-align: center;
+      max-width: 80%;
+      opacity: 0;
+      transition: opacity 0.25s;
+      pointer-events: none;
+    }
+    #message.show { opacity: 1; }
+
+    #hitFlash {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: rgba(200,20,30,0.35);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s;
+    }
+    #hitFlash.show { opacity: 1; }
+
+    #controls {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: max(18px, env(safe-area-inset-bottom));
+      z-index: 20;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      padding: 0 16px;
+    }
+    #dpad {
+      display: grid;
+      grid-template-columns: 56px 56px 56px;
+      grid-template-rows: 56px 56px 56px;
+      gap: 6px;
+    }
+    .dbtn {
+      border: none;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+      font-size: 22px;
+      touch-action: manipulation;
+    }
+    .dbtn:active { background: rgba(255,255,255,0.28); }
+    #btnTurnLeft { grid-column: 1; grid-row: 2; }
+    #btnForward { grid-column: 2; grid-row: 1; }
+    #btnTurnRight { grid-column: 3; grid-row: 2; }
+    #btnBackward { grid-column: 2; grid-row: 3; }
+
+    #attackBtn {
+      align-self: flex-end;
+      margin-bottom: 22px;
+      width: 84px;
+      height: 84px;
+      border-radius: 999px;
+      border: none;
+      background: #c23b3b;
+      color: #fff;
+      font-size: 15px;
+      font-weight: bold;
+      touch-action: manipulation;
+      box-shadow: 0 0 16px rgba(194,59,59,0.7);
+    }
+    #attackBtn:active { background: #9c2c2c; }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      text-align: center;
+      padding: 32px;
+      background: rgba(10,7,12,0.95);
+    }
+    .overlay.show { display: flex; }
+    .overlay h1 { margin: 0; font-size: 22px; }
+    .overlay p { margin: 0; font-size: 13px; line-height: 1.7; opacity: 0.85; max-width: 340px; }
+    .bigBtn {
+      padding: 14px 32px;
+      border-radius: 999px;
+      border: none;
+      background: #4c8dff;
+      color: #fff;
+      font-size: 16px;
+      touch-action: manipulation;
+    }
+    .bigBtn:active { background: #3a72db; }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #0a070c;
+      color: #eee;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="hudTop">
+      <div class="pill" id="floorLabel">B1F</div>
+      <div class="pill" id="weaponLabel">ダガー</div>
+    </div>
+    <div id="hpWrap">
+      <div id="hpBar"><div id="hpFill"></div></div>
+      <span id="hpText">24/24</span>
+    </div>
+  </div>
+  <div id="message"></div>
+  <div id="hitFlash"></div>
+
+  <div id="controls">
+    <div id="dpad">
+      <button id="btnTurnLeft" class="dbtn">◀</button>
+      <button id="btnForward" class="dbtn">▲</button>
+      <button id="btnTurnRight" class="dbtn">▶</button>
+      <button id="btnBackward" class="dbtn">▼</button>
+    </div>
+    <button id="attackBtn">たたく</button>
+  </div>
+
+  <div id="titleOverlay" class="overlay show">
+    <h1>DUNGEON DELVE 3D</h1>
+    <p>
+      たった1人でダンジョンに潜る、ライトな「ダンジョンマスター」風ローグライク。<br /><br />
+      ▲▼で前進・後退、◀▶でその場旋回。正面にいるモンスターは「たたく」で攻撃できるが、
+      モンスターは横や後ろからもリアルタイムで襲ってくる――向き直って迎え撃とう。<br /><br />
+      目標は地下5階への到達。倒れたらそこで終わり、ダンジョンは
+      毎回新しく生成される。
+    </p>
+    <button id="startBtn" class="bigBtn">はじめる</button>
+  </div>
+
+  <div id="winOverlay" class="overlay">
+    <h1>踏破達成</h1>
+    <p>目標の階層に到達した。見事な潜行だった。</p>
+    <button id="retryWinBtn" class="bigBtn">もう一度潜る</button>
+  </div>
+
+  <div id="deathOverlay" class="overlay">
+    <h1>力尽きた…</h1>
+    <p><span id="deathFloor">B1F</span>で倒れた。ダンジョンは生成し直される。</p>
+    <button id="retryDeathBtn" class="bigBtn">再挑戦</button>
+  </div>
+
+  <div id="rotateOverlay">縦向きにしてプレイしてください</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
