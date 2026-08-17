@@ -1,8 +1,9 @@
 import * as THREE from "three";
 import {
-  TILE, FLOOR_GOAL, HEADING_DELTA, turnLeft, turnRight, oppositeHeading,
+  TILE, FLOOR_GOAL, tileAt, turnLeft, turnRight, oppositeHeading,
   makeRng, initRun, attemptMove, descend,
   startAttack, finishAttack, stepMonsters,
+  toggleDoor, updateDoors, DOOR_ANIM_MS,
 } from "./dungeon.js";
 
 // ---------- Three.js scene ----------
@@ -223,7 +224,13 @@ const stairsMat = new THREE.MeshStandardMaterial({ color: 0x1e6b66, roughness: 0
 const potionMat = new THREE.MeshStandardMaterial({ color: 0xff5c6c, emissive: 0x991018, emissiveIntensity: 1.1, roughness: 0.4 });
 const weaponMat = new THREE.MeshStandardMaterial({ color: 0x5cc8ff, emissive: 0x0d5a99, emissiveIntensity: 1.1, roughness: 0.35 });
 const doorMat = new THREE.MeshStandardMaterial({ map: woodDoorTexture, color: 0xffffff, roughness: 0.8 });
-const buttonFrameMat = new THREE.MeshStandardMaterial({ map: stoneWallTexture, color: 0xeeece8, roughness: 0.92 });
+// Locked doors read as reinforced/metal rather than plain wood — same plank
+// texture, cooled and tinted toward steel so the difference reads at a
+// glance, and swapped back to doorMat the moment the matching key unlocks it.
+const lockedDoorMat = new THREE.MeshStandardMaterial({ map: woodDoorTexture, color: 0x93a4b8, roughness: 0.5, metalness: 0.35, emissive: 0x142028, emissiveIntensity: 0.35 });
+const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x46443f, roughness: 0.85, metalness: 0.2 });
+const doorThresholdMat = new THREE.MeshStandardMaterial({ color: 0x57534c, roughness: 0.9 });
+const keyMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xa9760a, emissiveIntensity: 1.1, roughness: 0.35, metalness: 0.4 });
 
 const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", ogre: "オーガ" };
 
@@ -296,20 +303,85 @@ function floorTileMaterial(tile) {
   return tile === TILE.STAIRS ? stairsMat : floorMat;
 }
 
-let doorMesh = null;
-let buttonMesh = null;
-const doorRestY = WALL_H / 2;
-const doorOpenY = doorRestY + WALL_H + 0.1;
+// Shutter door: a heavy panel that slides straight up into the wall above
+// the opening, framed by dark stone jambs/lintel with a raised threshold
+// underfoot — not a wall with a hole in it, but a distinct fixture built
+// into the doorway. doorId -> { shutter, restY, openY, animFromY,
+// animStart, lastOpening, lastLocked } — only the shutter moves; the frame
+// and threshold are static geometry added straight to mazeGroup.
+const doorMeshMap = new Map();
+const DOOR_THIN = CELL * 0.16; // panel thickness along the direction of travel
+const DOOR_WIDE = CELL * 0.94; // panel span across the doorway
+const FRAME_DEPTH = CELL * 0.32;
+const FRAME_THICK = CELL * 0.1;
+const LINTEL_H = WALL_H * 0.14;
+const THRESHOLD_H = 0.07;
+
+// Which axis the passage runs through this door cell: "x" when the cells
+// on either side along X are open (so the panel must be thin along X and
+// span the full width along Z to actually block the opening), otherwise
+// "z". Falls back to "z" if neither/both axes look open (shouldn't happen
+// given how generateFloor only ever places doors at a single-cell
+// corridor<->room threshold).
+function doorAxis(floor, x, y) {
+  const openX = tileAt(floor, x - 1, y) !== TILE.WALL && tileAt(floor, x + 1, y) !== TILE.WALL;
+  return openX ? "x" : "z";
+}
+
+function buildDoorVisual(floor, door, wx, wz) {
+  const axis = doorAxis(floor, door.x, door.y);
+  const throughX = axis === "x";
+
+  const shutterGeo = throughX
+    ? new THREE.BoxGeometry(DOOR_THIN, WALL_H * 0.94, DOOR_WIDE)
+    : new THREE.BoxGeometry(DOOR_WIDE, WALL_H * 0.94, DOOR_THIN);
+  const restY = WALL_H * 0.47;
+  const openY = restY + WALL_H * 0.94;
+  const shutter = new THREE.Mesh(shutterGeo, door.locked ? lockedDoorMat : doorMat);
+  shutter.position.set(wx, restY, wz);
+  shutter.userData.doorId = door.id;
+  mazeGroup.add(shutter);
+
+  // Frame/lintel/threshold are tagged with the same doorId as the shutter
+  // so a tap anywhere on the door fixture — not just the (sometimes very
+  // thin, edge-on) moving panel itself — registers as operating that door.
+  const jambGeo = throughX
+    ? new THREE.BoxGeometry(FRAME_DEPTH, WALL_H, FRAME_THICK)
+    : new THREE.BoxGeometry(FRAME_THICK, WALL_H, FRAME_DEPTH);
+  const jambOffset = CELL / 2 - FRAME_THICK / 2;
+  for (const side of [-1, 1]) {
+    const jamb = new THREE.Mesh(jambGeo, doorFrameMat);
+    if (throughX) jamb.position.set(wx, WALL_H / 2, wz + side * jambOffset);
+    else jamb.position.set(wx + side * jambOffset, WALL_H / 2, wz);
+    jamb.userData.doorId = door.id;
+    mazeGroup.add(jamb);
+  }
+  const lintelGeo = throughX
+    ? new THREE.BoxGeometry(FRAME_DEPTH, LINTEL_H, CELL * 0.98)
+    : new THREE.BoxGeometry(CELL * 0.98, LINTEL_H, FRAME_DEPTH);
+  const lintel = new THREE.Mesh(lintelGeo, doorFrameMat);
+  lintel.position.set(wx, WALL_H - LINTEL_H / 2, wz);
+  lintel.userData.doorId = door.id;
+  mazeGroup.add(lintel);
+
+  const threshold = new THREE.Mesh(new THREE.BoxGeometry(CELL * 0.98, THRESHOLD_H, CELL * 0.98), doorThresholdMat);
+  threshold.position.set(wx, THRESHOLD_H / 2, wz);
+  threshold.userData.doorId = door.id;
+  mazeGroup.add(threshold);
+
+  doorMeshMap.set(door.id, {
+    shutter, restY, openY,
+    animFromY: restY, animStart: 0, lastOpening: false, lastLocked: door.locked,
+  });
+}
 
 function buildFloorMesh(floor) {
   mazeGroup.clear();
-  doorMesh = null;
-  buttonMesh = null;
+  doorMeshMap.clear();
   const floorGeo = new THREE.PlaneGeometry(CELL, CELL);
   const floorGridGeo = new THREE.EdgesGeometry(floorGeo);
   const ceilGeo = new THREE.PlaneGeometry(CELL, CELL);
   const wallGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
-  const doorGeo = new THREE.BoxGeometry(CELL * 0.96, WALL_H * 0.96, CELL * 0.4);
 
   for (let y = 0; y < floor.height; y++) {
     for (let x = 0; x < floor.width; x++) {
@@ -319,21 +391,6 @@ function buildFloorMesh(floor) {
         const wallMesh = new THREE.Mesh(wallGeo, wallMat);
         wallMesh.position.set(wx, WALL_H / 2, wz);
         mazeGroup.add(wallMesh);
-        continue;
-      }
-      if (tile === TILE.BUTTON) {
-        const wallMesh = new THREE.Mesh(wallGeo, buttonFrameMat);
-        wallMesh.position.set(wx, WALL_H / 2, wz);
-        mazeGroup.add(wallMesh);
-        const dir = HEADING_DELTA[floor.button.facing];
-        const panelGeo = dir.dx !== 0
-          ? new THREE.BoxGeometry(0.06, 0.42, 0.42)
-          : new THREE.BoxGeometry(0.42, 0.42, 0.06);
-        const panelMat = new THREE.MeshStandardMaterial({ color: 0x7a2a24, emissive: 0x4a1008, emissiveIntensity: 1.0, roughness: 0.5 });
-        const panel = new THREE.Mesh(panelGeo, panelMat);
-        panel.position.set(wx + dir.dx * (CELL / 2 - 0.03), 1.2, wz + dir.dy * (CELL / 2 - 0.03));
-        mazeGroup.add(panel);
-        buttonMesh = panel;
         continue;
       }
 
@@ -351,13 +408,41 @@ function buildFloorMesh(floor) {
       mazeGroup.add(c);
 
       if (tile === TILE.DOOR) {
-        const door = new THREE.Mesh(doorGeo, doorMat);
-        door.position.set(wx, floor.door && floor.door.open ? doorOpenY : doorRestY, wz);
-        door.userData.animState = floor.door && floor.door.open ? "done" : null;
-        mazeGroup.add(door);
-        doorMesh = door;
+        const door = floor.doors.find((d) => d.x === x && d.y === y);
+        if (door) buildDoorVisual(floor, door, wx, wz);
       }
     }
+  }
+}
+
+// Ease-out rise (fast start, settles at the top) for opening; ease-in with
+// a brief overshoot-settle "thud" at the very end for closing, so the
+// weight of the shutter reads in the motion itself.
+function doorOpenEase(p) { return 1 - Math.pow(1 - p, 3); }
+function doorCloseEase(p) {
+  if (p < 0.88) { const q = p / 0.88; return q * q * q; }
+  const q = (p - 0.88) / 0.12;
+  return 1 - Math.sin(q * Math.PI) * 0.05;
+}
+
+function syncDoorMeshes(now) {
+  for (const door of floor.doors) {
+    const rec = doorMeshMap.get(door.id);
+    if (!rec) continue;
+    if (door.locked !== rec.lastLocked) {
+      rec.shutter.material = door.locked ? lockedDoorMat : doorMat;
+      rec.lastLocked = door.locked;
+    }
+    const opening = door.state === "open" || door.state === "opening";
+    if (opening !== rec.lastOpening) {
+      rec.animFromY = rec.shutter.position.y;
+      rec.animStart = now;
+      rec.lastOpening = opening;
+    }
+    const p = Math.min(1, (now - rec.animStart) / DOOR_ANIM_MS);
+    const target = opening ? rec.openY : rec.restY;
+    const eased = opening ? doorOpenEase(p) : doorCloseEase(p);
+    rec.shutter.position.y = rec.animFromY + (target - rec.animFromY) * eased;
   }
 }
 
@@ -406,7 +491,8 @@ const minimapCtx = minimapCanvas.getContext("2d");
 const MINIMAP_RES = 240;
 const MM_COLOR = {
   floor: "#c9c9c2",
-  door: "#8a5a2c",
+  doorClosed: "#8a5a2c",
+  doorLocked: "#c9910f",
   stairs: "#5cd8ff",
   item: "#5cd8ff",
   monster: "#ff4d4d",
@@ -430,7 +516,7 @@ function drawMinimap() {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const tile = floor.grid[y][x];
-      if (tile === TILE.WALL || tile === TILE.BUTTON) continue;
+      if (tile === TILE.WALL) continue;
       const roomId = floor.roomIdGrid[y][x];
       const visible = roomId >= 0 ? floor.roomsEntered.has(roomId) : floor.explored.has(`${x},${y}`);
       if (!visible) continue;
@@ -441,7 +527,23 @@ function drawMinimap() {
         ctx.strokeRect(px + ctx.lineWidth / 2, py + ctx.lineWidth / 2, cellPx - ctx.lineWidth, cellPx - ctx.lineWidth);
         continue;
       }
-      ctx.fillStyle = tile === TILE.DOOR ? MM_COLOR.door : MM_COLOR.floor;
+      if (tile === TILE.DOOR) {
+        const door = floor.doors.find((d) => d.x === x && d.y === y);
+        if (door && door.state === "open") {
+          // Open doors are shown hollow (outline only) against the
+          // corridor/room fill so "passable right now" reads at a glance.
+          ctx.fillStyle = MM_COLOR.floor;
+          ctx.fillRect(px, py, cellPx, cellPx);
+          ctx.strokeStyle = door.locked ? MM_COLOR.doorLocked : MM_COLOR.doorClosed;
+          ctx.lineWidth = Math.max(1, cellPx * 0.16);
+          ctx.strokeRect(px + ctx.lineWidth / 2, py + ctx.lineWidth / 2, cellPx - ctx.lineWidth, cellPx - ctx.lineWidth);
+        } else {
+          ctx.fillStyle = door && door.locked ? MM_COLOR.doorLocked : MM_COLOR.doorClosed;
+          ctx.fillRect(px, py, cellPx, cellPx);
+        }
+        continue;
+      }
+      ctx.fillStyle = MM_COLOR.floor;
       ctx.fillRect(px, py, cellPx, cellPx);
     }
   }
@@ -556,13 +658,9 @@ function handleMoveEvent(result) {
   const event = result.event;
   if (event.type === "blocked" || event.type === "busy") return;
   if (event.type === "blockedByMonster") { showMessage("何かがいる!"); return; }
-  if (event.type === "buttonPressed") {
-    showMessage("ガコン…どこかで扉が開いた音がした");
-    if (buttonMesh) { buttonMesh.material.color.set(0x3fd15a); buttonMesh.material.emissive.set(0x0a5c1c); }
-    return;
-  }
   if (event.type === "itemPickup") {
     if (event.kind === "potion") showMessage(`ポーションを見つけた (HP+${event.heal})`);
+    else if (event.kind === "key") showMessage("鍵を手に入れた!");
     else showMessage(`${event.weapon.name}を手に入れた!`);
     updateHud();
     return;
@@ -636,6 +734,57 @@ function bindTapButton(id, handler) {
 }
 bindTapButton("attackBtn", doAttack);
 
+// ---------- Door interaction ----------
+// The door itself is the only control surface — tapping its cell (a real
+// screen-space tap, not a swipe) opens/closes it. No separate button.
+const doorRaycaster = new THREE.Raycaster();
+function handleDoorEvents(events) {
+  for (const ev of events) {
+    if (ev.type === "doorLocked") showMessage("鍵が必要だ…");
+    else if (ev.type === "doorUnlocked") showMessage("鍵を使った!");
+    else if (ev.type === "doorOpening") showMessage("ガラガラガラッ……!");
+    else if (ev.type === "doorClosing") showMessage("ガラガラガラッ……ガシャン!");
+    else if (ev.type === "doorPinch") {
+      const name = MONSTER_NAMES[ev.monsterType] || ev.monsterType;
+      showMessage(`${name}を扉に挟んだ! ${ev.dmg}ダメージ`, 1300);
+      triggerScreenShake(8, 180);
+      if (ev.killed) {
+        triggerDeathFx(ev.monsterId, ev.monsterType);
+      } else {
+        const rec = monsterMeshMap.get(ev.monsterId);
+        if (rec) { rec.flashUntil = performance.now() + 150; rec.hitShakeUntil = performance.now() + 220; }
+      }
+    }
+    // doorBusy / noDoor: no feedback needed, silently ignored.
+  }
+}
+
+// Only a door within 1 cell of the player can be operated — you have to be
+// standing right at the threshold to work the mechanism (and, tactically,
+// to lure a monster into it and close it on them).
+function tryToggleDoorAt(x, y) {
+  if (Math.max(Math.abs(x - player.x), Math.abs(y - player.y)) > 1) return;
+  const result = toggleDoor(floor, player, x, y, performance.now());
+  player = result.player;
+  handleDoorEvents(result.events);
+}
+
+function handleTap(clientX, clientY) {
+  if (!started || gameOver || win) return;
+  const rect = canvas.getBoundingClientRect();
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  doorRaycaster.setFromCamera(ndc, camera);
+  const hits = doorRaycaster.intersectObjects(mazeGroup.children, false);
+  if (hits.length === 0) return;
+  const doorId = hits[0].object.userData.doorId;
+  if (doorId == null) return; // closest thing tapped wasn't a door (e.g. a plain wall)
+  const door = floor.doors.find((d) => d.id === doorId);
+  if (door) tryToggleDoorAt(door.x, door.y);
+}
+
 // ---------- Swipe controls (replaces the old d-pad) ----------
 // Up = advance, down = step back. Left/right is split by hold time: a
 // quick flick-and-release turns 45°, but holding past STRAFE_HOLD_MS
@@ -693,7 +842,7 @@ canvas.addEventListener("pointerup", (e) => {
   const dy = e.clientY - swipeStart.y;
   swipeStart = null;
   if (wasStrafing) return; // holding already consumed this gesture
-  if (Math.hypot(dx, dy) < SWIPE_THRESHOLD) return;
+  if (Math.hypot(dx, dy) < SWIPE_THRESHOLD) { handleTap(e.clientX, e.clientY); return; }
   if (Math.abs(dx) > Math.abs(dy)) {
     if (dx > 0) doTurnRight(); else doTurnLeft();
   } else {
@@ -851,8 +1000,11 @@ function syncItemMeshes(t) {
   for (const it of floor.items) {
     let rec = itemMeshMap.get(it.id);
     if (!rec) {
-      const geo = it.kind === "potion" ? new THREE.SphereGeometry(0.15, 10, 8) : new THREE.OctahedronGeometry(0.18, 0);
-      const mesh = new THREE.Mesh(geo, it.kind === "potion" ? potionMat : weaponMat);
+      const geo = it.kind === "potion" ? new THREE.SphereGeometry(0.15, 10, 8)
+        : it.kind === "key" ? new THREE.TorusGeometry(0.12, 0.045, 8, 16)
+        : new THREE.OctahedronGeometry(0.18, 0);
+      const mat = it.kind === "potion" ? potionMat : it.kind === "key" ? keyMat : weaponMat;
+      const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(it.x * CELL, 1.0, it.y * CELL);
       itemGroup.add(mesh);
       rec = { mesh };
@@ -920,21 +1072,6 @@ function updateDeathFx(now) {
   }
 }
 
-const DOOR_ANIM_MS = 700;
-function updateDoorAnim(now) {
-  if (!doorMesh || !floor.door || !floor.door.open) return;
-  if (doorMesh.userData.animState === "done") return;
-  if (!doorMesh.userData.animState) {
-    doorMesh.userData.animState = "animating";
-    doorMesh.userData.animStartT = now;
-    doorMesh.userData.animFromY = doorMesh.position.y;
-  }
-  const p = Math.min(1, (now - doorMesh.userData.animStartT) / DOOR_ANIM_MS);
-  const eased = 1 - Math.pow(1 - p, 3);
-  doorMesh.position.y = doorMesh.userData.animFromY + (doorOpenY - doorMesh.userData.animFromY) * eased;
-  if (p >= 1) doorMesh.userData.animState = "done";
-}
-
 // ---------- Render loop ----------
 let lastT = performance.now();
 function loop(t) {
@@ -999,7 +1136,8 @@ function loop(t) {
   syncMonsterMeshes(dt, t);
   syncItemMeshes(t);
   updateDeathFx(t);
-  updateDoorAnim(t);
+  if (started && !gameOver && !win) updateDoors(floor, t);
+  syncDoorMeshes(t);
   updateScreenShake(t);
   updateAttackGauge(t);
   drawMinimap();
