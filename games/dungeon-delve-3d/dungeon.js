@@ -122,119 +122,192 @@ function bfsDistances(floor, startX, startY) {
   return dist;
 }
 
-function carve(size, rng) {
+// ---------- Room + corridor generation (Torneko-style: a handful of
+// rectangular rooms joined by single corridors, rather than a cave carve)
+const MIN_ROOM_SIZE = 3, MAX_ROOM_SIZE = 5;
+
+function roomCenter(room) {
+  return { x: room.x + (room.w >> 1), y: room.y + (room.h >> 1) };
+}
+
+// Rooms are placed one-per-sector on a grid that's sized to the target room
+// count, with a 1-cell gutter reserved between sectors. This guarantees the
+// requested 3-5 rooms always fit with no overlap, instead of the previous
+// random-rejection placement which frequently gave up after only 1-2 rooms
+// on these floor sizes.
+function sectorLayoutFor(count) {
+  if (count <= 3) return { cols: 3, rows: 1 };
+  if (count === 4) return { cols: 2, rows: 2 };
+  return { cols: 3, rows: 2 }; // count === 5 (6 sectors, one left unused)
+}
+
+function carveCorridorPath(grid, from, to, rng) {
+  let x = from.x, y = from.y;
+  const carveStep = () => { if (grid[y][x] === TILE.WALL) grid[y][x] = TILE.FLOOR; };
+  if (rng() < 0.5) {
+    while (x !== to.x) { x += x < to.x ? 1 : -1; carveStep(); }
+    while (y !== to.y) { y += y < to.y ? 1 : -1; carveStep(); }
+  } else {
+    while (y !== to.y) { y += y < to.y ? 1 : -1; carveStep(); }
+    while (x !== to.x) { x += x < to.x ? 1 : -1; carveStep(); }
+  }
+}
+
+function carveRooms(size, rng) {
   const grid = Array.from({ length: size }, () => new Array(size).fill(TILE.WALL));
-  const cx = size >> 1, cy = size >> 1;
-  grid[cy][cx] = TILE.FLOOR;
-  const floorCells = [{ x: cx, y: cy }];
-  let x = cx, y = cy;
-  const target = Math.floor(size * size * 0.4);
-  let guard = 0;
-  while (floorCells.length < target && guard < size * size * 40) {
-    guard++;
-    const d = HEADING_DELTA[Math.floor(rng() * 4)];
-    const nx = x + d.dx, ny = y + d.dy;
-    if (nx < 1 || ny < 1 || nx >= size - 1 || ny >= size - 1) {
-      const p = pick(floorCells, rng);
-      x = p.x; y = p.y;
-      continue;
-    }
-    x = nx; y = ny;
-    if (grid[y][x] === TILE.WALL) {
-      grid[y][x] = TILE.FLOOR;
-      floorCells.push({ x, y });
-    }
-    if (rng() < 0.08) {
-      const p = pick(floorCells, rng);
-      x = p.x; y = p.y;
+  const roomIdGrid = Array.from({ length: size }, () => new Array(size).fill(-1));
+  const rooms = [];
+  const targetRoomCount = 3 + Math.floor(rng() * 3); // 3..5
+  const { cols, rows } = sectorLayoutFor(targetRoomCount);
+
+  // Sector pitch reserves a 1-cell gutter between sectors (and a 1-cell
+  // border around the whole grid) so sibling rooms can never end up
+  // touching without a wall between them.
+  const sectorW = Math.max(MIN_ROOM_SIZE, Math.floor((size - 2 - (cols - 1)) / cols));
+  const sectorH = Math.max(MIN_ROOM_SIZE, Math.floor((size - 2 - (rows - 1)) / rows));
+
+  const sectors = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) sectors.push({ r, c });
+  shuffle(sectors, rng);
+  const chosen = sectors.slice(0, Math.min(targetRoomCount, sectors.length));
+
+  for (const sec of chosen) {
+    const baseX = 1 + sec.c * (sectorW + 1);
+    const baseY = 1 + sec.r * (sectorH + 1);
+    const maxW = Math.min(MAX_ROOM_SIZE, sectorW);
+    const maxH = Math.min(MAX_ROOM_SIZE, sectorH);
+    const minW = Math.min(MIN_ROOM_SIZE, maxW);
+    const minH = Math.min(MIN_ROOM_SIZE, maxH);
+    const w = minW + Math.floor(rng() * (maxW - minW + 1));
+    const h = minH + Math.floor(rng() * (maxH - minH + 1));
+    const x = baseX + Math.floor(rng() * Math.max(1, sectorW - w + 1));
+    const y = baseY + Math.floor(rng() * Math.max(1, sectorH - h + 1));
+    const room = { id: rooms.length, x, y, w, h };
+    rooms.push(room);
+    for (let ry = y; ry < y + h; ry++) {
+      for (let rx = x; rx < x + w; rx++) { grid[ry][rx] = TILE.FLOOR; roomIdGrid[ry][rx] = room.id; }
     }
   }
-  return { grid, floorCells, start: { x: cx, y: cy } };
+  if (rooms.length === 0) {
+    const w = MIN_ROOM_SIZE, h = MIN_ROOM_SIZE;
+    const x = (size - w) >> 1, y = (size - h) >> 1;
+    const room = { id: 0, x, y, w, h };
+    rooms.push(room);
+    for (let ry = y; ry < y + h; ry++) for (let rx = x; rx < x + w; rx++) { grid[ry][rx] = TILE.FLOOR; roomIdGrid[ry][rx] = 0; }
+  }
+
+  const order = rooms.map((_, i) => i);
+  shuffle(order, rng);
+  for (let i = 1; i < order.length; i++) {
+    carveCorridorPath(grid, roomCenter(rooms[order[i - 1]]), roomCenter(rooms[order[i]]), rng);
+  }
+
+  const floorCells = [];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (grid[y][x] !== TILE.WALL) floorCells.push({ x, y });
+    }
+  }
+  return { grid, roomIdGrid, rooms, floorCells, start: roomCenter(rooms[order[0]]) };
 }
 
 let entityIdSeq = 1;
 
-// Seals off a dead-end corridor tip behind a closed door, with a switch
-// mounted on a wall elsewhere on the floor that opens it — a small optional
-// side-vault, never on the only path to the stairs. Mutates floor.grid,
-// floor.door, floor.button, floor.items and `occupied` in place; does
-// nothing if the generated layout doesn't offer a safe spot for one.
-function placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng) {
+// Carves a small sealed vault room a single door-cell away from some
+// existing floor cell, with a switch mounted on a wall elsewhere that opens
+// it — an optional side-treasure, never on the only path to the stairs.
+// Because the vault and its door are carved purely out of untouched wall
+// space, this can never disturb the existing start<->stairs connectivity
+// (unlike sealing a cell that was already part of a path), so no
+// after-the-fact solvability check is needed here.
+function placeVaultDoorAndButton(floor, floorCells, rooms, roomIdGrid, occupied, rng) {
+  const size = floor.width;
   const grid = floor.grid;
-  function cardinalDegree(x, y) {
-    let n = 0;
-    for (const d of HEADING_DELTA) {
-      if (tileAt(floor, x + d.dx, y + d.dy) !== TILE.WALL) n++;
-    }
-    return n;
+  const VAULT_W = 2, VAULT_H = 2;
+
+  function vaultRect(doorX, doorY, dir) {
+    if (dir === 0) return { x: doorX - (VAULT_W >> 1), y: doorY - VAULT_H, w: VAULT_W, h: VAULT_H };
+    if (dir === 2) return { x: doorX - (VAULT_W >> 1), y: doorY + 1, w: VAULT_W, h: VAULT_H };
+    if (dir === 1) return { x: doorX + 1, y: doorY - (VAULT_H >> 1), w: VAULT_W, h: VAULT_H };
+    return { x: doorX - VAULT_W, y: doorY - (VAULT_H >> 1), w: VAULT_W, h: VAULT_H };
   }
-
-  const deadEnds = floorCells.filter((c) => {
-    if ((c.x === start.x && c.y === start.y) || (c.x === stairs.x && c.y === stairs.y)) return false;
-    return cardinalDegree(c.x, c.y) === 1;
-  });
-  shuffle(deadEnds, rng);
-
-  for (const pocket of deadEnds) {
-    let doorPos = null;
-    for (const d of HEADING_DELTA) {
-      const nx = pocket.x + d.dx, ny = pocket.y + d.dy;
-      if (tileAt(floor, nx, ny) !== TILE.WALL) { doorPos = { x: nx, y: ny }; break; }
-    }
-    if (!doorPos) continue;
-    if ((doorPos.x === start.x && doorPos.y === start.y) || (doorPos.x === stairs.x && doorPos.y === stairs.y)) continue;
-    // Must be a plain corridor cell (only connects onward + to the pocket),
-    // never a junction — otherwise sealing it could cut off other areas too.
-    if (cardinalDegree(doorPos.x, doorPos.y) !== 2) continue;
-
-    const prevTile = grid[doorPos.y][doorPos.x];
-    grid[doorPos.y][doorPos.x] = TILE.DOOR;
-    const testDist = bfsDistances(floor, start.x, start.y);
-    const stairsReachable = testDist[stairs.y][stairs.x] !== Infinity;
-    const pocketSealed = testDist[pocket.y][pocket.x] === Infinity;
-    if (!(stairsReachable && pocketSealed)) {
-      grid[doorPos.y][doorPos.x] = prevTile;
-      continue;
-    }
-
-    // Mount the button on a wall segment next to some other reachable cell.
-    // doorPos/pocket must already be excluded here — doorPos is itself a
-    // blocking tile while closed, so a "reachable neighbor" chosen before
-    // this point could be the door cell itself, leaving the button stranded.
-    occupied.add(`${doorPos.x},${doorPos.y}`);
-    occupied.add(`${pocket.x},${pocket.y}`);
-    const wallSpots = [];
-    for (const c of floorCells) {
-      if (occupied.has(`${c.x},${c.y}`)) continue;
-      for (let ci = 0; ci < HEADING_DELTA.length; ci++) {
-        const d = HEADING_DELTA[ci];
-        const wx = c.x + d.dx, wy = c.y + d.dy;
-        if (tileAt(floor, wx, wy) === TILE.WALL) {
-          wallSpots.push({ x: wx, y: wy, facing: (ci + 2) % 4 });
-        }
+  function rectAllWall(r) {
+    if (r.x < 1 || r.y < 1 || r.x + r.w >= size - 1 || r.y + r.h >= size - 1) return false;
+    for (let y = r.y - 1; y <= r.y + r.h; y++) {
+      for (let x = r.x - 1; x <= r.x + r.w; x++) {
+        if (grid[y][x] !== TILE.WALL) return false;
       }
     }
-    if (wallSpots.length === 0) {
-      grid[doorPos.y][doorPos.x] = prevTile;
-      occupied.delete(`${doorPos.x},${doorPos.y}`);
-      occupied.delete(`${pocket.x},${pocket.y}`);
-      continue;
-    }
-    const spot = pick(wallSpots, rng);
-    grid[spot.y][spot.x] = TILE.BUTTON;
+    return true;
+  }
 
-    floor.door = { x: doorPos.x, y: doorPos.y, open: false };
-    floor.button = { x: spot.x, y: spot.y, facing: spot.facing };
-    occupied.add(`${spot.x},${spot.y}`);
-    floor.items.push({ id: entityIdSeq++, kind: "potion", x: pocket.x, y: pocket.y, heal: 10 });
-    return;
+  const anchors = shuffle(floorCells.slice(), rng);
+  for (const c of anchors) {
+    if (occupied.has(`${c.x},${c.y}`)) continue;
+    const dirs = shuffle([0, 1, 2, 3], rng);
+    for (const dir of dirs) {
+      const d = HEADING_DELTA[dir];
+      const doorX = c.x + d.dx, doorY = c.y + d.dy;
+      if (doorX < 1 || doorY < 1 || doorX >= size - 1 || doorY >= size - 1) continue;
+      if (grid[doorY][doorX] !== TILE.WALL) continue;
+      const rect = vaultRect(doorX, doorY, dir);
+      if (!rectAllWall(rect)) continue;
+
+      const roomId = rooms.length;
+      rooms.push({ id: roomId, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+      const vaultCells = [];
+      for (let ry = rect.y; ry < rect.y + rect.h; ry++) {
+        for (let rx = rect.x; rx < rect.x + rect.w; rx++) {
+          grid[ry][rx] = TILE.FLOOR;
+          roomIdGrid[ry][rx] = roomId;
+          vaultCells.push({ x: rx, y: ry });
+          occupied.add(`${rx},${ry}`);
+        }
+      }
+      grid[doorY][doorX] = TILE.DOOR;
+      occupied.add(`${doorX},${doorY}`);
+
+      const wallSpots = [];
+      for (const wc of floorCells) {
+        if (occupied.has(`${wc.x},${wc.y}`)) continue;
+        for (let ci = 0; ci < HEADING_DELTA.length; ci++) {
+          const wd = HEADING_DELTA[ci];
+          const wx = wc.x + wd.dx, wy = wc.y + wd.dy;
+          if (tileAt(floor, wx, wy) === TILE.WALL) {
+            wallSpots.push({ x: wx, y: wy, facing: (ci + 2) % 4 });
+          }
+        }
+      }
+      if (wallSpots.length === 0) continue; // extremely rare; try another anchor/direction
+
+      const spot = pick(wallSpots, rng);
+      grid[spot.y][spot.x] = TILE.BUTTON;
+      occupied.add(`${spot.x},${spot.y}`);
+
+      floor.door = { x: doorX, y: doorY, open: false };
+      floor.button = { x: spot.x, y: spot.y, facing: spot.facing };
+      const treasureCell = pick(vaultCells, rng);
+      floor.items.push({ id: entityIdSeq++, kind: "potion", x: treasureCell.x, y: treasureCell.y, heal: 10 });
+      return;
+    }
   }
 }
 
+// Marks a cell as seen on the minimap: a whole room reveals at once the
+// instant it's entered, a corridor cell only reveals the exact steps taken.
+function revealAt(floor, x, y) {
+  const roomId = floor.roomIdGrid[y][x];
+  if (roomId >= 0) floor.roomsEntered.add(roomId);
+  else floor.explored.add(`${x},${y}`);
+}
+
 export function generateFloor(floorNumber, rng) {
-  const size = 11 + Math.min(floorNumber - 1, 2) * 2; // 11 -> 13 -> 15 (caps at floor 3+)
-  const { grid, floorCells, start } = carve(size, rng);
-  const floor = { width: size, height: size, grid, monsters: [], items: [], door: null, button: null };
+  const size = 17 + Math.min(floorNumber - 1, 2) * 2; // 17 -> 19 -> 21 (caps at floor 3+)
+  const { grid, roomIdGrid, rooms, floorCells, start } = carveRooms(size, rng);
+  const floor = {
+    width: size, height: size, grid, monsters: [], items: [], door: null, button: null,
+    rooms, roomIdGrid, explored: new Set(), roomsEntered: new Set(),
+  };
 
   const dist = bfsDistances(floor, start.x, start.y);
   let stairs = start;
@@ -246,7 +319,7 @@ export function generateFloor(floorNumber, rng) {
   grid[stairs.y][stairs.x] = TILE.STAIRS;
 
   const occupied = new Set([`${start.x},${start.y}`, `${stairs.x},${stairs.y}`]);
-  placeDoorAndButton(floor, floorCells, start, stairs, occupied, rng);
+  placeVaultDoorAndButton(floor, floorCells, rooms, roomIdGrid, occupied, rng);
   // Keep monster spawns out past AGGRO_RADIUS so a floor never opens with
   // several monsters already awake and converging on the player. Diagonal
   // shortcuts make BFS distances shorter than a cardinal-only map would
@@ -296,7 +369,9 @@ export function generateFloor(floorNumber, rng) {
     });
   }
 
-  const restCells = floorCells.filter((c) => !occupied.has(`${c.x},${c.y}`));
+  // Items are confined to room cells (never corridors) so their minimap
+  // reveal-on-room-entry rule always has a room to attach to.
+  const restCells = floorCells.filter((c) => !occupied.has(`${c.x},${c.y}`) && roomIdGrid[c.y][c.x] >= 0);
   const potionCount = 2 + (rng() < 0.5 ? 1 : 0);
   for (let i = 0; i < potionCount; i++) {
     const cell = takeCell(restCells);
@@ -331,6 +406,7 @@ export function initRun(now, rng) {
   const player = createPlayer(now);
   player.x = floor.start.x;
   player.y = floor.start.y;
+  revealAt(floor, player.x, player.y);
   return { floor, player };
 }
 
@@ -358,6 +434,7 @@ export function attemptMove(player, floor, stepHeading, now) {
   }
 
   const newPlayer = { ...player, x: target.x, y: target.y };
+  revealAt(floor, target.x, target.y);
 
   const item = floor.items.find((it) => it.x === target.x && it.y === target.y);
   if (item) {
@@ -390,6 +467,7 @@ export function descend(player, rng, now) {
     floorNumber: nextFloorNumber,
     x: floor.start.x, y: floor.start.y, heading: 1,
   };
+  revealAt(floor, floor.start.x, floor.start.y);
   return { event: { type: "descend" }, player: newPlayer, floor };
 }
 
