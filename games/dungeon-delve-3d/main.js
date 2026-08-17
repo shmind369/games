@@ -394,6 +394,98 @@ const deathFloorEl = document.getElementById("deathFloor");
 const attackBtnEl = document.getElementById("attackBtn");
 const attackGaugeFill = document.getElementById("attackGaugeFill");
 
+// ---------- Minimap (Torneko-style filled reveal) ----------
+// Rooms reveal their whole footprint the instant they're entered
+// (floor.roomsEntered); corridor cells reveal one at a time, exactly the
+// tiles walked on (floor.explored) — both maintained by dungeon.js's
+// revealAt() as the player moves. Monster visibility is gated on where the
+// player currently stands: every monster sharing the player's room, or
+// (in a corridor) only monsters within 1 tile.
+const minimapCanvas = document.getElementById("minimap");
+const minimapCtx = minimapCanvas.getContext("2d");
+const MINIMAP_RES = 240;
+const MM_COLOR = {
+  floor: "#c9c9c2",
+  door: "#8a5a2c",
+  stairs: "#5cd8ff",
+  item: "#5cd8ff",
+  monster: "#ff4d4d",
+  player: "#ffd23f",
+};
+
+function drawMinimap() {
+  const size = floor.width; // floor is always square (width === height)
+  if (minimapCanvas.width !== MINIMAP_RES || minimapCanvas.height !== MINIMAP_RES) {
+    minimapCanvas.width = MINIMAP_RES;
+    minimapCanvas.height = MINIMAP_RES;
+  }
+  const cellPx = MINIMAP_RES / size;
+  const ctx = minimapCtx;
+  ctx.clearRect(0, 0, MINIMAP_RES, MINIMAP_RES);
+
+  const currentRoomId = floor.roomIdGrid[player.y][player.x];
+
+  // Floor + door fill, and stairs outline — only for cells the reveal
+  // rules say should be visible right now.
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const tile = floor.grid[y][x];
+      if (tile === TILE.WALL || tile === TILE.BUTTON) continue;
+      const roomId = floor.roomIdGrid[y][x];
+      const visible = roomId >= 0 ? floor.roomsEntered.has(roomId) : floor.explored.has(`${x},${y}`);
+      if (!visible) continue;
+      const px = x * cellPx, py = y * cellPx;
+      if (tile === TILE.STAIRS) {
+        ctx.strokeStyle = MM_COLOR.stairs;
+        ctx.lineWidth = Math.max(1, cellPx * 0.16);
+        ctx.strokeRect(px + ctx.lineWidth / 2, py + ctx.lineWidth / 2, cellPx - ctx.lineWidth, cellPx - ctx.lineWidth);
+        continue;
+      }
+      ctx.fillStyle = tile === TILE.DOOR ? MM_COLOR.door : MM_COLOR.floor;
+      ctx.fillRect(px, py, cellPx, cellPx);
+    }
+  }
+
+  // Items: cyan squares, revealed once their room has been entered.
+  for (const it of floor.items) {
+    const roomId = floor.roomIdGrid[it.y][it.x];
+    if (roomId < 0 || !floor.roomsEntered.has(roomId)) continue;
+    const pad = cellPx * 0.28;
+    ctx.fillStyle = MM_COLOR.item;
+    ctx.fillRect(it.x * cellPx + pad, it.y * cellPx + pad, cellPx - pad * 2, cellPx - pad * 2);
+  }
+
+  // Monsters: red squares. In a room, show every monster sharing that
+  // room; in a corridor, show only monsters within 1 tile so nothing
+  // around a corner or further down the passage is spoiled.
+  for (const m of floor.monsters) {
+    const mRoomId = floor.roomIdGrid[m.y][m.x];
+    const show = currentRoomId >= 0
+      ? mRoomId === currentRoomId
+      : Math.max(Math.abs(m.x - player.x), Math.abs(m.y - player.y)) <= 1;
+    if (!show) continue;
+    const pad = cellPx * 0.24;
+    ctx.fillStyle = MM_COLOR.monster;
+    ctx.fillRect(m.x * cellPx + pad, m.y * cellPx + pad, cellPx - pad * 2, cellPx - pad * 2);
+  }
+
+  // Player: yellow triangle, apex rotated to match facing (heading 0=N is
+  // drawn pointing straight up, then rotated clockwise per heading).
+  const cx = (player.x + 0.5) * cellPx, cy = (player.y + 0.5) * cellPx;
+  const s = cellPx * 0.5;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(player.heading * (Math.PI / 2));
+  ctx.fillStyle = MM_COLOR.player;
+  ctx.beginPath();
+  ctx.moveTo(0, -s);
+  ctx.lineTo(s * 0.72, s * 0.62);
+  ctx.lineTo(-s * 0.72, s * 0.62);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 let messageTimer = null;
 function showMessage(text, ms = 1400) {
   messageEl.textContent = text;
@@ -644,6 +736,15 @@ function setMonsterFlash(mesh, on) {
 
 const MONSTER_SCALE = 2;
 
+// Idle bounce/squash — a small common animation for every monster type: a
+// vertical bob paired with an inverse squash/stretch on the vertical vs.
+// horizontal scale (flatten at the bottom of the bounce, stretch tall at
+// the top), each monster offset by its own random phase so a pack doesn't
+// bounce in lockstep.
+const BOUNCE_PERIOD_MS = 1100;
+const BOUNCE_HEIGHT = 0.11 * MONSTER_SCALE;
+const SQUASH_AMOUNT = 0.14;
+
 function createMonsterMesh(type) {
   const v = MONSTER_VISUALS[type];
   const mesh = v.create();
@@ -665,11 +766,13 @@ function syncMonsterMeshes(dt, now) {
     const v = MONSTER_VISUALS[m.type];
     if (!rec) {
       const mesh = createMonsterMesh(m.type);
-      mesh.position.set(m.x * CELL, v.y * MONSTER_SCALE, m.y * CELL);
+      const baseY = v.y * MONSTER_SCALE;
+      mesh.position.set(m.x * CELL, baseY, m.y * CELL);
       monsterGroup.add(mesh);
       rec = {
         mesh, vx: m.x * CELL, vz: m.y * CELL, flashUntil: 0, flashing: false,
         hitShakeUntil: 0, lungeStart: 0, lungeDx: 0, lungeDz: 0, yaw: mesh.rotation.y,
+        baseY, bouncePhase: Math.random() * Math.PI * 2,
       };
       monsterMeshMap.set(m.id, rec);
     }
@@ -725,10 +828,16 @@ function syncMonsterMeshes(dt, now) {
       shakeZ = (Math.random() * 2 - 1) * amt;
     }
 
+    const bouncePhase = (now / BOUNCE_PERIOD_MS) * Math.PI * 2 + rec.bouncePhase;
+    const bounce = (Math.sin(bouncePhase) + 1) / 2; // 0 = bottom of bounce, 1 = top
+    const squashY = 1 - SQUASH_AMOUNT + bounce * SQUASH_AMOUNT * 2;
+    const squashXZ = 1 + SQUASH_AMOUNT - bounce * SQUASH_AMOUNT * 2;
+
     rec.mesh.position.x = rec.vx + lungeX + shakeX;
+    rec.mesh.position.y = rec.baseY + bounce * BOUNCE_HEIGHT;
     rec.mesh.position.z = rec.vz + lungeZ + shakeZ;
     rec.mesh.rotation.x = lungeTilt;
-    rec.mesh.scale.setScalar(lungeScale);
+    rec.mesh.scale.set(lungeScale * squashXZ, lungeScale * squashY, lungeScale * squashXZ);
     const shouldFlash = now < rec.flashUntil;
     if (shouldFlash !== rec.flashing) { setMonsterFlash(rec.mesh, shouldFlash); rec.flashing = shouldFlash; }
   }
@@ -893,6 +1002,7 @@ function loop(t) {
   updateDoorAnim(t);
   updateScreenShake(t);
   updateAttackGauge(t);
+  drawMinimap();
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
