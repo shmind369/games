@@ -734,20 +734,133 @@ function bindTapButton(id, handler) {
 }
 bindTapButton("attackBtn", doAttack);
 
+// ---------- Audio (procedural, no external assets — mirrors the project's
+// existing textures/models, which are all generated in code) ----------
+let audioCtx = null;
+function ensureAudio() {
+  if (audioCtx) return audioCtx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  audioCtx = new AC();
+  return audioCtx;
+}
+// Browsers only allow audio to start from a real user gesture; call this
+// from every pointerdown-ish handler so playback is unlocked as early as
+// possible (idempotent — a no-op once already running).
+function unlockAudio() {
+  const ctx = ensureAudio();
+  if (ctx && ctx.state === "suspended") ctx.resume();
+}
+
+let sharedNoiseBuffer = null;
+function noiseBuffer(ctx) {
+  if (sharedNoiseBuffer) return sharedNoiseBuffer;
+  const len = ctx.sampleRate; // 1s, sliced as needed per burst
+  sharedNoiseBuffer = ctx.createBuffer(1, len, ctx.sampleRate);
+  const data = sharedNoiseBuffer.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  return sharedNoiseBuffer;
+}
+// A short filtered burst of noise — the basic "clack"/"crack" texture used
+// for shutter clatter and impact grit.
+function noiseBurst(ctx, { start, duration, freq = 1200, q = 1, gain = 0.3, type = "bandpass" }) {
+  const src = ctx.createBufferSource();
+  src.buffer = noiseBuffer(ctx);
+  const filter = ctx.createBiquadFilter();
+  filter.type = type;
+  filter.frequency.value = freq;
+  filter.Q.value = q;
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, start);
+  g.gain.linearRampToValueAtTime(gain, start + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  src.connect(filter).connect(g).connect(ctx.destination);
+  src.start(start);
+  src.stop(start + duration + 0.02);
+}
+// A low sine thump with a falling pitch — the weighty "gashan" impact.
+function thump(ctx, { start, freq = 90, gain = 0.6, duration = 0.25 }) {
+  const osc = ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, start);
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.55, start + duration);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(gain, start);
+  g.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(start);
+  osc.stop(start + duration + 0.02);
+}
+function beep(ctx, { start, freq, duration = 0.12, gain = 0.22, type = "square" }) {
+  const osc = ctx.createOscillator();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, start);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(gain, start);
+  g.gain.exponentialRampToValueAtTime(0.001, start + duration);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(start);
+  osc.stop(start + duration + 0.02);
+}
+
+// Rolling-shutter clatter, rising in pitch as the panel retracts —
+// "ガラガラガラッ……!".
+function playDoorOpenSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const clacks = 7;
+  for (let i = 0; i < clacks; i++) {
+    noiseBurst(ctx, { start: now + i * 0.075, duration: 0.07, freq: 750 + i * 90, q: 4, gain: 0.2 });
+  }
+}
+// Same clatter but descending, landing on a heavy low-end thud —
+// "ガラガラガラッ……ガシャン!".
+function playDoorCloseSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const clacks = 6;
+  for (let i = 0; i < clacks; i++) {
+    noiseBurst(ctx, { start: now + i * 0.075, duration: 0.07, freq: 1050 - i * 100, q: 4, gain: 0.2 });
+  }
+  const impactT = now + clacks * 0.075 + 0.04;
+  thump(ctx, { start: impactT, freq: 85, gain: 0.7, duration: 0.3 });
+  noiseBurst(ctx, { start: impactT, duration: 0.14, freq: 260, q: 0.7, gain: 0.32, type: "lowpass" });
+}
+function playDoorLockedSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  beep(ctx, { start: ctx.currentTime, freq: 140, duration: 0.16, gain: 0.2, type: "square" });
+}
+function playDoorUnlockedSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  beep(ctx, { start: now, freq: 660, duration: 0.09, gain: 0.16, type: "triangle" });
+  beep(ctx, { start: now + 0.1, freq: 880, duration: 0.14, gain: 0.18, type: "triangle" });
+}
+function playDoorPinchSound() {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  noiseBurst(ctx, { start: ctx.currentTime, duration: 0.12, freq: 480, q: 0.6, gain: 0.38, type: "lowpass" });
+}
+
 // ---------- Door interaction ----------
 // The door itself is the only control surface — tapping its cell (a real
 // screen-space tap, not a swipe) opens/closes it. No separate button.
 const doorRaycaster = new THREE.Raycaster();
 function handleDoorEvents(events) {
   for (const ev of events) {
-    if (ev.type === "doorLocked") showMessage("鍵が必要だ…");
-    else if (ev.type === "doorUnlocked") showMessage("鍵を使った!");
-    else if (ev.type === "doorOpening") showMessage("ガラガラガラッ……!");
-    else if (ev.type === "doorClosing") showMessage("ガラガラガラッ……ガシャン!");
+    if (ev.type === "doorLocked") { showMessage("鍵が必要だ…"); playDoorLockedSound(); }
+    else if (ev.type === "doorUnlocked") { showMessage("鍵を使った!"); playDoorUnlockedSound(); }
+    else if (ev.type === "doorOpening") { showMessage("ガラガラガラッ……!"); playDoorOpenSound(); }
+    else if (ev.type === "doorClosing") { showMessage("ガラガラガラッ……ガシャン!"); playDoorCloseSound(); }
     else if (ev.type === "doorPinch") {
       const name = MONSTER_NAMES[ev.monsterType] || ev.monsterType;
       showMessage(`${name}を扉に挟んだ! ${ev.dmg}ダメージ`, 1300);
       triggerScreenShake(8, 180);
+      playDoorPinchSound();
       if (ev.killed) {
         triggerDeathFx(ev.monsterId, ev.monsterType);
       } else {
@@ -821,6 +934,7 @@ function checkStrafeEngage() {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  unlockAudio();
   swipeStart = { x: e.clientX, y: e.clientY, id: e.pointerId, t: performance.now() };
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
@@ -857,6 +971,7 @@ canvas.addEventListener("pointercancel", () => {
 
 document.getElementById("startBtn").addEventListener("pointerdown", (e) => {
   e.preventDefault();
+  unlockAudio();
   titleOverlay.classList.remove("show");
   started = true;
   updateHud();
