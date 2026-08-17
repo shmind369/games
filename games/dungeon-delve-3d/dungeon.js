@@ -8,7 +8,7 @@
 // place instead — recreating the whole floor/monster tree on every
 // animation frame would be wasteful and buys nothing here.
 
-export const TILE = { WALL: 0, FLOOR: 1, STAIRS: 2, DOOR: 3, BUTTON: 4 };
+export const TILE = { WALL: 0, FLOOR: 1, STAIRS: 2, DOOR: 3 };
 
 // How many floors deep the player must reach to clear the run.
 export const FLOOR_GOAL = 5;
@@ -41,18 +41,36 @@ export function tileAt(floor, x, y) {
   return floor.grid[y][x];
 }
 
-// WALL and BUTTON tiles always block movement (a button is a wall-mounted
-// switch, never a walkable cell). A DOOR blocks only while closed.
+export function doorAt(floor, x, y) {
+  return floor.doors.find((d) => d.x === x && d.y === y) || null;
+}
+
+// WALL always blocks. A DOOR blocks movement unless it's fully open — mid
+// animation (opening/closing) and locked doors still block, matching the
+// spec's "fully retracted before it's passable" rule. This is the
+// real-time-aware check used for actual player/monster movement.
 export function isBlockingTile(floor, x, y) {
   const t = tileAt(floor, x, y);
-  if (t === TILE.WALL || t === TILE.BUTTON) return true;
-  if (t === TILE.DOOR) return !(floor.door && floor.door.open);
+  if (t === TILE.WALL) return true;
+  if (t === TILE.DOOR) {
+    const door = doorAt(floor, x, y);
+    return !door || door.state !== "open";
+  }
   return false;
 }
 
-function canStepTo(floor, x, y, heading) {
+// Structural blocking: only real walls count. Used by generation-time
+// layout logic (stairs BFS, spawn-distance sorting) so that doors — which
+// all default to closed — don't fragment the floor's true topology; the
+// player can always eventually open one, so generation should reason about
+// the maze as if every door were passable.
+function isStructurallyBlocking(floor, x, y) {
+  return tileAt(floor, x, y) === TILE.WALL;
+}
+
+function canStepTo(floor, x, y, heading, blockingFn = isBlockingTile) {
   const target = forwardCell(x, y, heading);
-  if (isBlockingTile(floor, target.x, target.y)) return null;
+  if (blockingFn(floor, target.x, target.y)) return null;
   return target;
 }
 
@@ -103,16 +121,16 @@ function monsterPoolForFloor(floorNumber) {
 }
 
 // ---------- Procedural generation ----------
-function bfsDistances(floor, startX, startY) {
+function bfsDistances(floor, startX, startY, blockingFn = isBlockingTile) {
   const dist = Array.from({ length: floor.height }, () => new Array(floor.width).fill(Infinity));
-  if (tileAt(floor, startX, startY) === TILE.WALL) return dist;
+  if (blockingFn(floor, startX, startY)) return dist;
   dist[startY][startX] = 0;
   const queue = [{ x: startX, y: startY }];
   let head = 0;
   while (head < queue.length) {
     const { x, y } = queue[head++];
     for (let h = 0; h < HEADING_DELTA.length; h++) {
-      const next = canStepTo(floor, x, y, h);
+      const next = canStepTo(floor, x, y, h, blockingFn);
       if (!next) continue;
       if (dist[next.y][next.x] !== Infinity) continue;
       dist[next.y][next.x] = dist[y][x] + 1;
@@ -141,16 +159,49 @@ function sectorLayoutFor(count) {
   return { cols: 3, rows: 2 }; // count === 5 (6 sectors, one left unused)
 }
 
+// Returns the full list of cells the path touched (including its start),
+// so the caller can later find exactly where it crosses from one room's
+// footprint into open corridor space — that crossing point is where a door
+// belongs.
 function carveCorridorPath(grid, from, to, rng) {
+  const path = [];
   let x = from.x, y = from.y;
-  const carveStep = () => { if (grid[y][x] === TILE.WALL) grid[y][x] = TILE.FLOOR; };
+  const step = () => {
+    if (grid[y][x] === TILE.WALL) grid[y][x] = TILE.FLOOR;
+    path.push({ x, y });
+  };
+  step();
   if (rng() < 0.5) {
-    while (x !== to.x) { x += x < to.x ? 1 : -1; carveStep(); }
-    while (y !== to.y) { y += y < to.y ? 1 : -1; carveStep(); }
+    while (x !== to.x) { x += x < to.x ? 1 : -1; step(); }
+    while (y !== to.y) { y += y < to.y ? 1 : -1; step(); }
   } else {
-    while (y !== to.y) { y += y < to.y ? 1 : -1; carveStep(); }
-    while (x !== to.x) { x += x < to.x ? 1 : -1; carveStep(); }
+    while (y !== to.y) { y += y < to.y ? 1 : -1; step(); }
+    while (x !== to.x) { x += x < to.x ? 1 : -1; step(); }
   }
+  return path;
+}
+
+// Walks a corridor path and picks out the corridor-side cell(s) adjacent to
+// each room it connects — the first cell after leaving fromRoomId, and the
+// last corridor cell before entering toRoomId. Those are the natural
+// doorway thresholds.
+function boundaryDoorCells(path, roomIdGrid, fromRoomId, toRoomId) {
+  const cells = [];
+  let leftFrom = false, enteredTo = false;
+  for (let i = 0; i < path.length; i++) {
+    const { x, y } = path[i];
+    const id = roomIdGrid[y][x];
+    if (!leftFrom && id !== fromRoomId) {
+      cells.push(path[i]);
+      leftFrom = true;
+    }
+    if (leftFrom && !enteredTo && id === toRoomId) {
+      const prev = path[i - 1];
+      if (prev && roomIdGrid[prev.y][prev.x] === -1) cells.push(prev);
+      enteredTo = true;
+    }
+  }
+  return cells;
 }
 
 function carveRooms(size, rng) {
@@ -198,8 +249,11 @@ function carveRooms(size, rng) {
 
   const order = rooms.map((_, i) => i);
   shuffle(order, rng);
+  const corridorPaths = [];
   for (let i = 1; i < order.length; i++) {
-    carveCorridorPath(grid, roomCenter(rooms[order[i - 1]]), roomCenter(rooms[order[i]]), rng);
+    const roomA = rooms[order[i - 1]], roomB = rooms[order[i]];
+    const path = carveCorridorPath(grid, roomCenter(roomA), roomCenter(roomB), rng);
+    corridorPaths.push({ path, fromRoomId: roomA.id, toRoomId: roomB.id });
   }
 
   const floorCells = [];
@@ -208,19 +262,21 @@ function carveRooms(size, rng) {
       if (grid[y][x] !== TILE.WALL) floorCells.push({ x, y });
     }
   }
-  return { grid, roomIdGrid, rooms, floorCells, start: roomCenter(rooms[order[0]]) };
+  return { grid, roomIdGrid, rooms, floorCells, corridorPaths, start: roomCenter(rooms[order[0]]) };
 }
 
 let entityIdSeq = 1;
 
 // Carves a small sealed vault room a single door-cell away from some
-// existing floor cell, with a switch mounted on a wall elsewhere that opens
-// it — an optional side-treasure, never on the only path to the stairs.
-// Because the vault and its door are carved purely out of untouched wall
-// space, this can never disturb the existing start<->stairs connectivity
-// (unlike sealing a cell that was already part of a path), so no
-// after-the-fact solvability check is needed here.
-function placeVaultDoorAndButton(floor, floorCells, rooms, roomIdGrid, occupied, rng) {
+// existing floor cell — an optional side-treasure, never on the only path
+// to the stairs. The door is locked; the matching key is placed elsewhere
+// among the floor's regular room cells by the caller (guaranteed reachable
+// without ever needing to pass this door). Because the vault and its door
+// are carved purely out of untouched wall space, this can never disturb
+// the existing start<->stairs connectivity (unlike sealing a cell that was
+// already part of a path), so no after-the-fact solvability check is
+// needed here. Returns { keyId } on success, or null.
+function placeVaultDoor(floor, floorCells, rooms, roomIdGrid, occupied, rng) {
   const size = floor.width;
   const grid = floor.grid;
   const VAULT_W = 2, VAULT_H = 2;
@@ -267,30 +323,15 @@ function placeVaultDoorAndButton(floor, floorCells, rooms, roomIdGrid, occupied,
       grid[doorY][doorX] = TILE.DOOR;
       occupied.add(`${doorX},${doorY}`);
 
-      const wallSpots = [];
-      for (const wc of floorCells) {
-        if (occupied.has(`${wc.x},${wc.y}`)) continue;
-        for (let ci = 0; ci < HEADING_DELTA.length; ci++) {
-          const wd = HEADING_DELTA[ci];
-          const wx = wc.x + wd.dx, wy = wc.y + wd.dy;
-          if (tileAt(floor, wx, wy) === TILE.WALL) {
-            wallSpots.push({ x: wx, y: wy, facing: (ci + 2) % 4 });
-          }
-        }
-      }
-      if (wallSpots.length === 0) continue; // extremely rare; try another anchor/direction
+      const keyId = `key-${entityIdSeq}`;
+      floor.doors.push({ id: entityIdSeq++, x: doorX, y: doorY, state: "closed", locked: true, keyId });
 
-      const spot = pick(wallSpots, rng);
-      grid[spot.y][spot.x] = TILE.BUTTON;
-      occupied.add(`${spot.x},${spot.y}`);
-
-      floor.door = { x: doorX, y: doorY, open: false };
-      floor.button = { x: spot.x, y: spot.y, facing: spot.facing };
       const treasureCell = pick(vaultCells, rng);
       floor.items.push({ id: entityIdSeq++, kind: "potion", x: treasureCell.x, y: treasureCell.y, heal: 10 });
-      return;
+      return { keyId };
     }
   }
+  return null;
 }
 
 // Marks a cell as seen on the minimap: a whole room reveals at once the
@@ -303,13 +344,26 @@ function revealAt(floor, x, y) {
 
 export function generateFloor(floorNumber, rng) {
   const size = 17 + Math.min(floorNumber - 1, 2) * 2; // 17 -> 19 -> 21 (caps at floor 3+)
-  const { grid, roomIdGrid, rooms, floorCells, start } = carveRooms(size, rng);
+  const { grid, roomIdGrid, rooms, floorCells, corridorPaths, start } = carveRooms(size, rng);
   const floor = {
-    width: size, height: size, grid, monsters: [], items: [], door: null, button: null,
+    width: size, height: size, grid, monsters: [], items: [], doors: [],
     rooms, roomIdGrid, explored: new Set(), roomsEntered: new Set(),
   };
 
-  const dist = bfsDistances(floor, start.x, start.y);
+  // A door at every room<->corridor threshold — every room entrance starts
+  // closed and has to be opened by hand (see toggleDoor / DOOR_ANIM_MS).
+  const doorSeen = new Set();
+  for (const { path, fromRoomId, toRoomId } of corridorPaths) {
+    for (const cell of boundaryDoorCells(path, roomIdGrid, fromRoomId, toRoomId)) {
+      const key = `${cell.x},${cell.y}`;
+      if (doorSeen.has(key)) continue;
+      doorSeen.add(key);
+      grid[cell.y][cell.x] = TILE.DOOR;
+      floor.doors.push({ id: entityIdSeq++, x: cell.x, y: cell.y, state: "closed", locked: false, keyId: null });
+    }
+  }
+
+  const dist = bfsDistances(floor, start.x, start.y, isStructurallyBlocking);
   let stairs = start;
   let best = -1;
   for (const c of floorCells) {
@@ -318,8 +372,8 @@ export function generateFloor(floorNumber, rng) {
   }
   grid[stairs.y][stairs.x] = TILE.STAIRS;
 
-  const occupied = new Set([`${start.x},${start.y}`, `${stairs.x},${stairs.y}`]);
-  placeVaultDoorAndButton(floor, floorCells, rooms, roomIdGrid, occupied, rng);
+  const occupied = new Set([`${start.x},${start.y}`, `${stairs.x},${stairs.y}`, ...doorSeen]);
+  const vaultResult = placeVaultDoor(floor, floorCells, rooms, roomIdGrid, occupied, rng);
   // Keep monster spawns out past AGGRO_RADIUS so a floor never opens with
   // several monsters already awake and converging on the player. Diagonal
   // shortcuts make BFS distances shorter than a cardinal-only map would
@@ -372,6 +426,10 @@ export function generateFloor(floorNumber, rng) {
   // Items are confined to room cells (never corridors) so their minimap
   // reveal-on-room-entry rule always has a room to attach to.
   const restCells = floorCells.filter((c) => !occupied.has(`${c.x},${c.y}`) && roomIdGrid[c.y][c.x] >= 0);
+  if (vaultResult) {
+    const cell = takeCell(restCells);
+    if (cell) floor.items.push({ id: entityIdSeq++, kind: "key", x: cell.x, y: cell.y, keyId: vaultResult.keyId });
+  }
   const potionCount = 2 + (rng() < 0.5 ? 1 : 0);
   for (let i = 0; i < potionCount; i++) {
     const cell = takeCell(restCells);
@@ -398,6 +456,7 @@ export function createPlayer(now) {
     floorNumber: 1,
     swingUntil: 0,
     attackReadyAt: now,
+    keys: new Set(),
   };
 }
 
@@ -421,11 +480,6 @@ export function attemptMove(player, floor, stepHeading, now) {
   }
   const target = canStepTo(floor, player.x, player.y, stepHeading);
   if (!target) {
-    const raw = forwardCell(player.x, player.y, stepHeading);
-    if (tileAt(floor, raw.x, raw.y) === TILE.BUTTON && floor.door && !floor.door.open) {
-      floor.door.open = true;
-      return { player, event: { type: "buttonPressed" } };
-    }
     return { player, event: { type: "blocked" } };
   }
   const tile = tileAt(floor, target.x, target.y);
@@ -446,6 +500,11 @@ export function attemptMove(player, floor, stepHeading, now) {
     if (item.kind === "weapon") {
       newPlayer.weapon = WEAPONS[item.weaponId];
       return { player: newPlayer, event: { type: "itemPickup", kind: "weapon", weapon: newPlayer.weapon } };
+    }
+    if (item.kind === "key") {
+      newPlayer.keys = new Set(player.keys);
+      newPlayer.keys.add(item.keyId);
+      return { player: newPlayer, event: { type: "itemPickup", kind: "key", keyId: item.keyId } };
     }
   }
 
@@ -469,6 +528,64 @@ export function descend(player, rng, now) {
   };
   revealAt(floor, floor.start.x, floor.start.y);
   return { event: { type: "descend" }, player: newPlayer, floor };
+}
+
+// ---------- Doors ----------
+// Shutter-style: tapping a door's own cell is the only way to operate it
+// (see main.js for the tap-to-raycast interaction). Both opening and
+// closing take DOOR_ANIM_MS to resolve; isBlockingTile only treats a door
+// as passable once its state is fully "open", so movement and the
+// animation timing can never disagree about whether the cell is crossable.
+export const DOOR_ANIM_MS = 900;
+const DOOR_PINCH_DAMAGE = 4;
+
+// Discrete action triggered by tapping a door cell. Mutates floor.doors /
+// floor.monsters in place (see module-level convention note); returns a
+// possibly-new player (a locked door consumes a key from player.keys).
+export function toggleDoor(floor, player, x, y, now) {
+  const door = doorAt(floor, x, y);
+  if (!door) return { player, events: [{ type: "noDoor" }] };
+  if (door.state === "opening" || door.state === "closing") {
+    return { player, events: [{ type: "doorBusy" }] };
+  }
+  if (door.locked) {
+    if (!player.keys.has(door.keyId)) {
+      return { player, events: [{ type: "doorLocked" }] };
+    }
+    const newPlayer = { ...player, keys: new Set(player.keys) };
+    newPlayer.keys.delete(door.keyId);
+    door.locked = false;
+    return { player: newPlayer, events: [{ type: "doorUnlocked" }] };
+  }
+  if (door.state === "closed") {
+    door.state = "opening";
+    door.actionReadyAt = now + DOOR_ANIM_MS;
+    return { player, events: [{ type: "doorOpening" }] };
+  }
+  // door.state === "open" — closing it back up. Anything currently
+  // standing in the doorway gets crushed for environmental damage,
+  // separate from weapon attacks.
+  const pinched = floor.monsters.filter((m) => m.x === x && m.y === y);
+  door.state = "closing";
+  door.actionReadyAt = now + DOOR_ANIM_MS;
+  const events = [{ type: "doorClosing" }];
+  for (const m of pinched) {
+    m.hp -= DOOR_PINCH_DAMAGE;
+    events.push({ type: "doorPinch", monsterId: m.id, monsterType: m.type, dmg: DOOR_PINCH_DAMAGE, killed: m.hp <= 0 });
+  }
+  if (pinched.some((m) => m.hp <= 0)) {
+    floor.monsters = floor.monsters.filter((m) => !(m.x === x && m.y === y && m.hp <= 0));
+  }
+  return { player, events };
+}
+
+// Resolves door open/close animations once their timer elapses. Mutates
+// floor.doors in place (see module-level convention note).
+export function updateDoors(floor, now) {
+  for (const door of floor.doors) {
+    if (door.state === "opening" && now >= door.actionReadyAt) door.state = "open";
+    else if (door.state === "closing" && now >= door.actionReadyAt) door.state = "closed";
+  }
 }
 
 // ---------- Real-time combat ----------
