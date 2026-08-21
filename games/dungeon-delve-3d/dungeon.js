@@ -111,12 +111,13 @@ export const WEAPONS = {
 export const MONSTERS = {
   zombie: { type: "zombie", hp: 7, atk: 2, moveInterval: 2400, attackInterval: 2000 },
   skeleton: { type: "skeleton", hp: 12, atk: 4, moveInterval: 2200, attackInterval: 1900 },
+  doppel: { type: "doppel", hp: 16, atk: 6, moveInterval: 2300, attackInterval: 2000 },
   ogre: { type: "ogre", hp: 22, atk: 7, moveInterval: 2800, attackInterval: 2300 },
 };
 
 function monsterPoolForFloor(floorNumber) {
-  if (floorNumber >= 4) return ["zombie", "zombie", "skeleton", "skeleton", "ogre"];
-  if (floorNumber >= 3) return ["zombie", "zombie", "skeleton"];
+  if (floorNumber >= 4) return ["zombie", "zombie", "skeleton", "skeleton", "doppel", "ogre"];
+  if (floorNumber >= 3) return ["zombie", "zombie", "skeleton", "doppel"];
   return ["zombie"];
 }
 
@@ -396,7 +397,7 @@ export function generateFloor(floorNumber, rng) {
 
   const monsterCount = Math.min(1 + floorNumber, 6);
   const pool = monsterPoolForFloor(floorNumber);
-  let ogrePlaced = false;
+  let ogrePlaced = false, doppelPlaced = false;
   // Keep spawn points spread apart so the player can't wake two monsters
   // at once just by approaching one (no instant 2-on-1 pack fights).
   const MIN_MONSTER_SPACING = 3;
@@ -411,6 +412,9 @@ export function generateFloor(floorNumber, rng) {
     if (type === "ogre") {
       if (ogrePlaced) type = "zombie";
       else ogrePlaced = true;
+    } else if (type === "doppel") {
+      if (doppelPlaced) type = "zombie";
+      else doppelPlaced = true;
     }
     const tpl = MONSTERS[type];
     floor.monsters.push({
