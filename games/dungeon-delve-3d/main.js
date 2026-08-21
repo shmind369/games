@@ -5,6 +5,7 @@ import {
   startAttack, finishAttack, stepMonsters,
   toggleDoor, updateDoors, DOOR_ANIM_MS,
 } from "./dungeon.js";
+import { loadRiggedVoxel, cloneRiggedVoxel } from "./collada-voxel.js";
 
 // ---------- Three.js scene ----------
 const CELL = 2.2;
@@ -232,7 +233,7 @@ const doorFrameMat = new THREE.MeshStandardMaterial({ color: 0x46443f, roughness
 const doorThresholdMat = new THREE.MeshStandardMaterial({ color: 0x57534c, roughness: 0.9 });
 const keyMat = new THREE.MeshStandardMaterial({ color: 0xffd23f, emissive: 0xa9760a, emissiveIntensity: 1.1, roughness: 0.35, metalness: 0.4 });
 
-const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", ogre: "オーガ" };
+const MONSTER_NAMES = { zombie: "ゾンビ", skeleton: "スケルトン", doppel: "ドッペルゲンガー", ogre: "オーガ" };
 
 // Builds a blocky voxel zombie out of boxes (Minecraft-style), each monster
 // instance getting its own material clones so hit-flash doesn't bleed
@@ -274,6 +275,46 @@ function createZombieVoxel() {
   return group;
 }
 
+// ドッペルゲンガー — an ordinary-looking delver's voxel model (uploaded
+// asset, doppel.dae), rigged with a real skeleton. Its skin data is
+// "rigid" (one bone per vertex, no blend weights — classic Minecraft-style
+// voxel rigging), so loadRiggedVoxel reparents each vertex once into its
+// owning joint's local space instead of doing real GPU skinning; ordinary
+// Three.js bone transforms pose it correctly from there. Loaded once at
+// startup (see doppelReadyPromise below) and cloned per spawn.
+let doppelTemplate = null;
+const DOPPEL_NATIVE_HEIGHT = 1.7389; // measured bind-pose height, in the model's own units
+const DOPPEL_TARGET_HEIGHT = 1.05; // desired height before MONSTER_SCALE, so final ~= 2.1
+const DOPPEL_SCALE = DOPPEL_TARGET_HEIGHT / DOPPEL_NATIVE_HEIGHT;
+
+const doppelReadyPromise = loadRiggedVoxel("./doppel.dae").then(({ root, boneById }) => {
+  // Relax the T-pose bind arms down to the sides with a slight elbow bend
+  // — a natural standing stance, tuned by hand against renders.
+  boneById.get("Bone_007").rotation.z = (-70 * Math.PI) / 180; // LeftUpperArm
+  boneById.get("Bone_011").rotation.z = (70 * Math.PI) / 180; // RightUpperArm
+  boneById.get("Bone_008").rotation.z = (20 * Math.PI) / 180; // LeftLowerArm
+  boneById.get("Bone_012").rotation.z = (-20 * Math.PI) / 180; // RightLowerArm
+  root.updateMatrixWorld(true);
+  doppelTemplate = root;
+}).catch((err) => {
+  console.error("doppel model failed to load", err);
+});
+
+function createDoppelMesh() {
+  const wrapper = new THREE.Group();
+  if (doppelTemplate) {
+    const clone = cloneRiggedVoxel(doppelTemplate);
+    clone.scale.setScalar(DOPPEL_SCALE);
+    wrapper.add(clone);
+  } else {
+    // Extremely unlikely fallback (start is gated on doppelReadyPromise) —
+    // never leave a monster with no mesh at all.
+    const mat = new THREE.MeshStandardMaterial({ color: 0x2244aa, emissive: 0x0a1a44, emissiveIntensity: 0.6, roughness: 0.8 });
+    wrapper.add(new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.5), mat));
+  }
+  return wrapper;
+}
+
 const MONSTER_VISUALS = {
   zombie: { create: createZombieVoxel, y: 0 },
   skeleton: {
@@ -283,6 +324,7 @@ const MONSTER_VISUALS = {
     ),
     y: 0.32,
   },
+  doppel: { create: createDoppelMesh, y: 0 },
   ogre: {
     create: () => new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.9, 0.5),
@@ -292,7 +334,7 @@ const MONSTER_VISUALS = {
   },
 };
 
-const MONSTER_BURST_COLOR = { zombie: 0x5c7a44, skeleton: 0xdbe0c8, ogre: 0x7a2b2b };
+const MONSTER_BURST_COLOR = { zombie: 0x5c7a44, skeleton: 0xdbe0c8, doppel: 0x1c3f9c, ogre: 0x7a2b2b };
 
 const mazeGroup = new THREE.Group();
 const monsterGroup = new THREE.Group();
@@ -969,8 +1011,17 @@ canvas.addEventListener("pointercancel", () => {
   swipeStart = null;
 });
 
-document.getElementById("startBtn").addEventListener("pointerdown", (e) => {
+const startBtnEl = document.getElementById("startBtn");
+const startBtnLabel = startBtnEl.textContent;
+startBtnEl.disabled = true;
+startBtnEl.textContent = "読み込み中…";
+doppelReadyPromise.finally(() => {
+  startBtnEl.disabled = false;
+  startBtnEl.textContent = startBtnLabel;
+});
+startBtnEl.addEventListener("pointerdown", (e) => {
   e.preventDefault();
+  if (startBtnEl.disabled) return;
   unlockAudio();
   titleOverlay.classList.remove("show");
   started = true;
