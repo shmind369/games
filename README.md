@@ -24,6 +24,7 @@
 - [midnight-rooftop-3d](games/midnight-rooftop-3d) — 深夜のビルに侵入し、合鍵を集めて屋上へ脱出する一人称視点の3D迷路探索ゲーム(Three.js製)
 - [manor-walk-3d](games/manor-walk-3d) — 部屋ごとに切り替わる固定カメラとタンク操作で洋館を歩き回るサバイバルホラー風探索デモ(Three.js製)
 - [dungeon-delve-3d](games/dungeon-delve-3d) — Three.js製、1人称グリッドダンジョンをリアルタイム近接戦闘で攻略するライト級「ダンジョンマスター」風ローグライク
+- [weight-of-keys-3d](games/weight-of-keys-3d) — Three.js製、鍵を持つほど重くなり追跡者から逃げにくくなるリスク・リターンが軸の一人称視点迷宮脱出ゲーム
 
 ## 公開ページ
 
