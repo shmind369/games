@@ -25,6 +25,7 @@
 - [manor-walk-3d](games/manor-walk-3d) — 部屋ごとに切り替わる固定カメラとタンク操作で洋館を歩き回るサバイバルホラー風探索デモ(Three.js製)
 - [dungeon-delve-3d](games/dungeon-delve-3d) — Three.js製、1人称グリッドダンジョンをリアルタイム近接戦闘で攻略するライト級「ダンジョンマスター」風ローグライク
 - [weight-of-keys-3d](games/weight-of-keys-3d) — Three.js製、鍵を持つほど重くなり追跡者から逃げにくくなるリスク・リターンが軸の一人称視点迷宮脱出ゲーム
+- [world-history-viewer](games/world-history-viewer) — 西暦を入力するとその年の世界各地の時代状況・主要人物・出来事が一覧できる歴史ビューア(ゲームではないHTML/CSS/JS製アプリ)
 
 ## 公開ページ
 
