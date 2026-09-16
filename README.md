@@ -26,6 +26,7 @@
 - [dungeon-delve-3d](games/dungeon-delve-3d) — Three.js製、1人称グリッドダンジョンをリアルタイム近接戦闘で攻略するライト級「ダンジョンマスター」風ローグライク
 - [weight-of-keys-3d](games/weight-of-keys-3d) — Three.js製、鍵を持つほど重くなり追跡者から逃げにくくなるリスク・リターンが軸の一人称視点迷宮脱出ゲーム
 - [world-history-viewer](games/world-history-viewer) — 西暦を入力するとその年の世界各地の時代状況・主要人物・出来事が一覧できる歴史ビューア(ゲームではないHTML/CSS/JS製アプリ)
+- [slingshot-boxing-prototype](games/slingshot-boxing-prototype) — 仮想パッド無し、スリング操作のパンチ・スワイプ回避・下スワイプガードだけで戦う正面向きボクシングプロトタイプ(2D)
 
 ## 公開ページ
 
