@@ -1,7 +1,14 @@
 // Pure, DOM/Canvas-independent fight logic: gesture classification (charge
-// punch vs quick dodge vs down-swipe guard), the enemy's
-// idle -> telegraph -> recovery state machine, and damage/outcome resolution.
-// Kept separate from main.js so it can be unit tested directly in Node.
+// punch vs quick dodge), the enemy's idle -> telegraph -> recovery state
+// machine, and damage/outcome resolution. Kept separate from main.js so it
+// can be unit tested directly in Node.
+//
+// There used to also be a down-swipe-and-hold guard, blocking any attack
+// regardless of side. It was removed: guarding and charging a punch are both
+// started by a drag from a touch-down, so the two gestures competed for the
+// same input in a way that felt like they were fighting each other rather
+// than being cleanly distinguishable. Dodging (a quick, direction-correct
+// swipe) is now the only defense.
 
 export const MAX_HP = 100;
 
@@ -13,13 +20,9 @@ export function oppositeSide(side) { return side === "left" ? "right" : "left"; 
 // Punch: touch one half of the screen, drag further OUTWARD (away from
 // center, i.e. further left from the left half / further right from the
 // right half) like drawing back a slingshot, then release. Dodge: a quick
-// short swipe left/right from anywhere. Guard: a downward swipe, held.
-// These are deliberately disambiguated at release time (like a tap vs. swipe
-// classifier), except guard, which must be recognized live while the finger
-// is still down since it's a hold, not a release-triggered action.
+// short swipe left/right from anywhere. Both are classified at release time
+// (like a tap vs. swipe classifier).
 export const GESTURE = {
-  GUARD_DY_PX: 40,
-  GUARD_DOMINANCE: 1.3,
   DODGE_MAX_MS: 220,
   DODGE_MIN_PX: 36,
   DODGE_DOMINANCE: 1.2,
@@ -29,15 +32,9 @@ export const GESTURE = {
   CHARGE_TIME_BONUS_MAX: 0.2,
 };
 
-// Called continuously on pointermove (before release) so a held-down swipe
-// can engage guard without waiting for pointerup.
-export function checkGuardTrigger(dx, dy) {
-  return dy > GESTURE.GUARD_DY_PX && dy > Math.abs(dx) * GESTURE.GUARD_DOMINANCE;
-}
-
-// Called once at pointerup (when guard was not already triggered in-flight).
-// dx/dy are release-point minus start-point; dt is hold duration in ms;
-// side is which half of the screen the touch started on ("left"/"right").
+// Called once at pointerup. dx/dy are release-point minus start-point; dt is
+// hold duration in ms; side is which half of the screen the touch started
+// on ("left"/"right").
 export function classifyRelease(dx, dy, dt, side) {
   const adx = Math.abs(dx), ady = Math.abs(dy);
 
@@ -81,7 +78,7 @@ export function computePunch(side, power) {
 }
 
 // ---------- Enemy state machine ----------
-// idle (cooldown) -> telegraph (side shown, player must dodge/guard) ->
+// idle (cooldown) -> telegraph (side shown, player must dodge) ->
 // recovery (vulnerable window, punches landed here are clean counters) -> idle
 export const ENEMY = {
   punchDamage: 14,
@@ -108,8 +105,8 @@ export function createEnemyState() {
 
 // Advances the enemy's timers by dt (ms) and returns the next state plus an
 // event fired the instant a telegraph resolves ("hit" or "defended"), based
-// on `defended` — whether the player guarded or correctly dodged at any
-// point during that telegraph (the caller accumulates this; see README).
+// on `defended` — whether the player correctly dodged at any point during
+// that telegraph (the caller accumulates this; see README).
 export function tickEnemy(enemy, dt, defended, enemyHpRatio, rng) {
   let { phase, timer, side, lastSide, repeatCount } = enemy;
   timer -= dt;
