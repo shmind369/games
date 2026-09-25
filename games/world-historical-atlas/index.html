@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>World Historical Atlas</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #1c2a33;
+      font-family: system-ui, sans-serif;
+      color: #f3ede0;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    canvas { display: block; touch-action: none; }
+    #map { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+    #topBar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+      background: linear-gradient(180deg, rgba(20,28,34,0.85), rgba(20,28,34,0));
+    }
+    #langButtons { display: flex; gap: 6px; }
+    .langBtn {
+      border: 1px solid rgba(243,237,224,0.4);
+      border-radius: 999px;
+      background: rgba(0,0,0,0.25);
+      color: #f3ede0;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5px 10px;
+      touch-action: manipulation;
+    }
+    .langBtn.active { background: #f3ede0; color: #1c2a33; border-color: transparent; }
+
+    #yearBox { text-align: right; }
+    #yearDisplay {
+      font-size: 17px;
+      font-weight: 700;
+      cursor: pointer;
+      touch-action: manipulation;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+    }
+    #yearInput {
+      display: none;
+      width: 5.5em;
+      font-size: 16px;
+      font-weight: 700;
+      border: none;
+      border-radius: 6px;
+      padding: 3px 6px;
+      background: #0e1418;
+      color: #f3ede0;
+      text-align: right;
+      touch-action: manipulation;
+      -webkit-user-select: text;
+      user-select: text;
+    }
+    #yearBox.editing #yearDisplay { display: none; }
+    #yearBox.editing #yearInput { display: inline-block; }
+    #eraLabel {
+      font-size: 11px;
+      opacity: 0.75;
+      margin-top: 2px;
+    }
+
+    #zoomSlider {
+      position: fixed;
+      right: 12px;
+      top: 96px;
+      width: 30px;
+      height: 130px;
+      border-radius: 15px;
+      background: rgba(0,0,0,0.28);
+      z-index: 90;
+      touch-action: none;
+    }
+    #zoomThumb {
+      position: absolute;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: #f3ede0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    }
+
+    #yearBarWrap {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 100;
+      padding-bottom: max(6px, env(safe-area-inset-bottom));
+      background: linear-gradient(0deg, rgba(20,28,34,0.9), rgba(20,28,34,0));
+    }
+    #yearBarRow {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px;
+    }
+    .yearArrow {
+      flex: 0 0 auto;
+      width: 34px;
+      height: 34px;
+      border: none;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.14);
+      color: #f3ede0;
+      font-size: 14px;
+      touch-action: manipulation;
+    }
+    #yearBarTrack { position: relative; flex: 1; height: 34px; }
+    #yearBarCanvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #yearCursor {
+      position: absolute;
+      top: 2px;
+      width: 3px;
+      height: 30px;
+      background: #ffd166;
+      border-radius: 2px;
+      transform: translateX(-1.5px);
+      pointer-events: none;
+    }
+
+    #sheetBackdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 14, 18, 0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease-out;
+      z-index: 9500;
+    }
+    #sheetBackdrop.show { opacity: 1; pointer-events: auto; }
+    #regionSheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      max-height: 62vh;
+      overflow-y: auto;
+      background: #fbf7ee;
+      color: #2c261c;
+      border-radius: 18px 18px 0 0;
+      padding: 18px 20px max(18px, env(safe-area-inset-bottom));
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.3);
+      transform: translateY(105%);
+      transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 9600;
+      touch-action: pan-y;
+    }
+    #regionSheet.show { transform: translateY(0); }
+    #regionTitle { font-size: 18px; font-weight: 700; margin: 0 0 2px; }
+    #regionEra { font-size: 13px; opacity: 0.7; margin: 0 0 14px; }
+    .personRow { padding: 8px 0; border-top: 1px solid rgba(0,0,0,0.08); }
+    .personRow:first-of-type { border-top: none; }
+    .personName { font-size: 14px; font-weight: 600; }
+    .personMeta { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+    #personEmpty { font-size: 13px; opacity: 0.55; padding: 10px 0; }
+    #sheetCloseBtn {
+      display: block;
+      margin: 14px auto 0;
+      padding: 10px 30px;
+      border: none;
+      border-radius: 999px;
+      background: #2c261c;
+      color: #fbf7ee;
+      font-size: 13px;
+      font-weight: 600;
+      touch-action: manipulation;
+    }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #1c2a33;
+      color: #f3ede0;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="map"></canvas>
+
+  <div id="topBar">
+    <div id="langButtons">
+      <button class="langBtn" data-lang="ja">日本語</button>
+      <button class="langBtn" data-lang="en">EN</button>
+      <button class="langBtn" data-lang="zh">中文</button>
+    </div>
+    <div id="yearBox">
+      <div id="yearDisplay"></div>
+      <input id="yearInput" type="number" inputmode="numeric" />
+      <div id="eraLabel"></div>
+    </div>
+  </div>
+
+  <div id="zoomSlider"><div id="zoomThumb"></div></div>
+
+  <div id="yearBarWrap">
+    <div id="yearBarRow">
+      <button id="yearPrevBtn" class="yearArrow">◀</button>
+      <div id="yearBarTrack">
+        <canvas id="yearBarCanvas"></canvas>
+        <div id="yearCursor"></div>
+      </div>
+      <button id="yearNextBtn" class="yearArrow">▶</button>
+    </div>
+  </div>
+
+  <div id="sheetBackdrop"></div>
+  <div id="regionSheet">
+    <h2 id="regionTitle"></h2>
+    <p id="regionEra"></p>
+    <div id="personList"></div>
+    <div id="personEmpty" style="display:none;"></div>
+    <button id="sheetCloseBtn"></button>
+  </div>
+
+  <div id="rotateOverlay">縦向きにしてお使いください</div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

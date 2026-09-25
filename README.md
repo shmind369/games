@@ -28,6 +28,7 @@
 - [world-history-viewer](games/world-history-viewer) — 西暦を入力するとその年の世界各地の時代状況・主要人物・出来事が一覧できる歴史ビューア(ゲームではないHTML/CSS/JS製アプリ)
 - [slingshot-boxing-prototype](games/slingshot-boxing-prototype) — 仮想パッド無し、ゴムを引くようなスリング操作のパンチとスワイプ回避だけで戦う正面向きボクシングプロトタイプ(2D)
 - [card-canvas](games/card-canvas) — 用途を限定しない、カードを置く・眺める・動かすことそのものが心地よい2Dカードアプリのプロトタイプ(2D、ゲームではない)
+- [world-historical-atlas](games/world-historical-atlas) — 簡略化した世界地図をパン・ズームし、年表バーで時代を辿りながら地域ごとの時代区分と人物を探索する歴史地図アプリ(2D、ゲームではない。world-history-viewerとデータを共有する姉妹アプリ)
 
 ## 公開ページ
 
