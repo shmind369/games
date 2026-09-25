@@ -29,6 +29,7 @@
 - [slingshot-boxing-prototype](games/slingshot-boxing-prototype) — 仮想パッド無し、ゴムを引くようなスリング操作のパンチとスワイプ回避だけで戦う正面向きボクシングプロトタイプ(2D)
 - [card-canvas](games/card-canvas) — 用途を限定しない、カードを置く・眺める・動かすことそのものが心地よい2Dカードアプリのプロトタイプ(2D、ゲームではない)
 - [world-historical-atlas](games/world-historical-atlas) — 簡略化した世界地図をパン・ズームし、年表バーで時代を辿りながら地域ごとの時代区分と人物を探索する歴史地図アプリ(2D、ゲームではない。world-history-viewerとデータを共有する姉妹アプリ)
+- [twha5](games/twha5) — 「The World Historical Atlas」本体。実際の地図タイルと世界各国の元首データを使った、パン・ズーム可能な世界歴史地図アプリ(2D、ゲームではない。ユーザー提供の既存プロジェクトをそのまま収録)
 
 ## 公開ページ
 
