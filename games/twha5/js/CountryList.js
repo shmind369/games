@@ -7,6 +7,8 @@ function CountryList()
 	const closeButton = document.getElementById('country-list-close');
 	const titleEl = document.getElementById('country-list-title');
 	const bodyEl = document.getElementById('country-list-body');
+	const yearEl = document.getElementById('country-list-year');
+	const yearInputEl = document.getElementById('country-list-year-input');
 
 	const TITLE_TEXT = { ja: 'その年の国と元首', en: 'Countries & rulers', zh: '当年的国家与元首' };
 	const COUNT_UNIT_TEXT = { ja: '件', en: '', zh: '个' };
@@ -25,6 +27,19 @@ function CountryList()
 		default:
 			return '(' + n + '年目)';
 		}
+	}
+
+	// 画面上部の#year-textと同じ書式(YearText.jsのupdate_textと同じ規則)
+	function format_year(year, lang)
+	{
+		if (lang === 'en') {
+			return year < 0 ? (-year) + ' BC' : 'AD ' + year;
+		}
+		return year < 0 ? '前' + (-year) + '年' : year + '年';
+	}
+	function update_year_display()
+	{
+		yearEl.innerText = format_year(data.year, data.lang);
 	}
 
 	function lang_name_to_id(lang)
@@ -162,6 +177,7 @@ function CountryList()
 
 		titleEl.innerText = TITLE_TEXT[data.lang] + '(' + count + COUNT_UNIT_TEXT[data.lang] + ')';
 		bodyEl.innerHTML = html;
+		update_year_display();
 	}
 
 	function open()
@@ -189,6 +205,51 @@ function CountryList()
 	{
 		on_jump_handler = f;
 	};
+
+	// 年表示をタップして数値入力で直接ジャンプする(画面上部の#year-textと
+	// 同じ入力規則: -?で始まる最大4桁の数値。西暦0年は存在しない)
+	let on_year_change_handler = null;
+	this.onyearchange = function(f)
+	{
+		on_year_change_handler = f;
+	};
+
+	function enter_year_input()
+	{
+		yearEl.style.display = 'none';
+		yearInputEl.style.display = 'inline-block';
+		yearInputEl.value = data.year;
+		setTimeout(function() {
+			yearInputEl.focus();
+			yearInputEl.select();
+		}, 50);
+	}
+	function commit_year_input()
+	{
+		yearEl.style.display = '';
+		yearInputEl.style.display = 'none';
+
+		let text = yearInputEl.value;
+		if (text.match(/^-?\d{1,4}$/)) {
+			data.year = Number(text);
+			data.year_clamp();
+			render();
+			if (on_year_change_handler) {
+				on_year_change_handler();
+			}
+		} else {
+			update_year_display();
+		}
+	}
+	yearEl.addEventListener('click', enter_year_input);
+	yearInputEl.addEventListener('blur', commit_year_input);
+	yearInputEl.addEventListener('keydown', function(e)
+	{
+		if (e.key === 'Enter') {
+			e.preventDefault();
+			yearInputEl.blur();
+		}
+	});
 
 	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
 	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う

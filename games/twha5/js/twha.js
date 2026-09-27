@@ -71,6 +71,12 @@
 	{
 		map.jump_to(x, y);
 	});
+	country_list.onyearchange(function()
+	{
+		year_text.update();
+		year_bar.update();
+		map.update();
+	});
 	map.on_zoom_changed(function()
 	{
 		zoom_bar.update();
