@@ -35,12 +35,11 @@
 
 		screen_width = body.offsetWidth;
 		screen_height = body.offsetHeight;
-		let canbas_h = screen_height - year_bar.SIZE;
+		let canvas_w = screen_width - year_bar.SIZE;
 
-		map.set_size(screen_width, canbas_h);
+		map.set_size(canvas_w, screen_height);
 
-		year_bar.set_top(canbas_h);
-		year_bar.set_width(screen_width - year_bar.SIZE * 2);
+		year_bar.resize();
 
 		map.update();
 	}
