@@ -225,8 +225,14 @@ img {
 	-webkit-overflow-scrolling: touch;
 }
 .country-list-item {
-	padding: 8px 0;
+	padding: 8px 4px;
+	margin: 0 -4px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	cursor: pointer;
+}
+.country-list-item:active {
+	background: rgba(255, 255, 255, 0.1);
+	border-radius: 6px;
 }
 .country-list-name {
 	font-weight: bold;

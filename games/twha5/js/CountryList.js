@@ -41,9 +41,10 @@ function CountryList()
 		}
 	}
 
-	// Region.js の update_year と同じ手順で、指定した年の地域名・元首を求める
-	// (Map/Region側は画面に表示中の地域しか保持しないため、地図の表示範囲に
-	// 依存しない一覧を作るために region_list から直接再計算している)
+	// Region.js の update_year と同じ手順で、指定した年の地域名・元首・
+	// 地図上の位置(pos_x, pos_y)を求める(Map/Region側は画面に表示中の
+	// 地域しか保持しないため、地図の表示範囲に依存しない一覧を作るために
+	// region_list から直接再計算している)
 	function evaluate_region(a, year)
 	{
 		if (!(year >= a[1] && year < a[2])) {
@@ -51,6 +52,8 @@ function CountryList()
 		}
 
 		let region_name = [null, null, null];
+		let pos_x = 0;
+		let pos_y = 0;
 		let i;
 		for (i = 3; i < a.length && a[i].length > 3; i++) {
 			let b = a[i];
@@ -59,6 +62,10 @@ function CountryList()
 				region_name[0] = b[3];
 				region_name[1] = b[4];
 				region_name[2] = b[5];
+			}
+			if (b.length >= 12) {
+				pos_x = b[9];
+				pos_y = b[10];
 			}
 			if (year < b[1]) {
 				break;
@@ -83,7 +90,7 @@ function CountryList()
 		if (!region_name[0]) {
 			return null;
 		}
-		return { name: region_name, people: person_list };
+		return { name: region_name, people: person_list, pos_x: pos_x, pos_y: pos_y };
 	}
 
 	function escape_html(s)
@@ -128,7 +135,8 @@ function CountryList()
 				peopleHtml = '<div class="country-list-person country-list-noperson">' + NO_PERSON_TEXT[data.lang] + '</div>';
 			}
 
-			html += '<div class="country-list-item"><div class="country-list-name">' + escape_html(name) + '</div>' + peopleHtml + '</div>';
+			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y + '">' +
+				'<div class="country-list-name">' + escape_html(name) + '</div>' + peopleHtml + '</div>';
 		}
 
 		titleEl.innerText = TITLE_TEXT[data.lang] + '(' + count + COUNT_UNIT_TEXT[data.lang] + ')';
@@ -154,6 +162,27 @@ function CountryList()
 			render();
 		}
 	};
+
+	let on_jump_handler = null;
+	this.onjump = function(f)
+	{
+		on_jump_handler = f;
+	};
+
+	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
+	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う
+	// (mousedown/touchstartだとスクロール開始の指下ろしにも反応してしまう)
+	bodyEl.addEventListener('click', function(e)
+	{
+		let item = e.target.closest('.country-list-item');
+		if (!item) {
+			return;
+		}
+		if (on_jump_handler) {
+			on_jump_handler(Number(item.dataset.x), Number(item.dataset.y));
+		}
+		close();
+	});
 
 	toggleButton.addEventListener('mousedown', function(e)
 	{
