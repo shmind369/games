@@ -292,6 +292,16 @@ function Map()
 		update_map();
 		update_info();
 	};
+	// 指定した地域の座標(pos_x, pos_y。region_listのera行に入っている
+	// 生の位置データと同じ単位)を画面中央に来るようパンする
+	this.jump_to = function(x, y)
+	{
+		let scale = SCALES[data.zoom];
+		data.map_x = Math.round(x * scale);
+		data.map_y = Math.round(y * scale);
+		limit_map_center();
+		this.update();
+	};
 	this.update_style = function()
 	{
 		for (let i = 0; i < visible_regions.length; i++) {

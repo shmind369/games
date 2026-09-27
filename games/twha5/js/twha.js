@@ -67,6 +67,10 @@
 	{
 		map.update();
 	});
+	country_list.onjump(function(x, y)
+	{
+		map.jump_to(x, y);
+	});
 	map.on_zoom_changed(function()
 	{
 		zoom_bar.update();
