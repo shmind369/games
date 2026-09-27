@@ -238,6 +238,9 @@ img {
 	color: white;
 	text-align: center;
 }
+#country-list-year-input::placeholder {
+	color: rgba(255, 255, 255, 0.5);
+}
 #country-list-close {
 	cursor: pointer;
 	font-size: 22px;

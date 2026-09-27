@@ -218,10 +218,13 @@ function CountryList()
 	{
 		yearEl.style.display = 'none';
 		yearInputEl.style.display = 'inline-block';
-		yearInputEl.value = data.year;
+		// あらかじめ入力欄を空にしておく(現在の年はplaceholderで示す)。
+		// 値を全選択した状態でフォーカスすると、iOS等で範囲選択ハンドルが
+		// 表示されてしまうため、それを避けつつ入力し直しやすくしている
+		yearInputEl.value = '';
+		yearInputEl.placeholder = String(data.year);
 		setTimeout(function() {
 			yearInputEl.focus();
-			yearInputEl.select();
 		}, 50);
 	}
 	function commit_year_input()
