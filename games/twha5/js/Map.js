@@ -329,19 +329,53 @@ function Map()
 	// --- iPhone/iPad等のタッチ操作対応 ---
 	let touch_pinch_dist = 0;
 
+	// ダブルタップ後、指を離さず上下にドラッグして片手でズーム(Googleマップ風)
+	const DOUBLE_TAP_INTERVAL_MS = 300;
+	const DOUBLE_TAP_MOVE_PX = 30;
+	const ZOOM_DRAG_STEP_PX = 28;
+	let last_tap_time = 0;
+	let last_tap_x = 0;
+	let last_tap_y = 0;
+	let zoom_drag_active = false;
+	let zoom_drag_base_y = 0;
+
 	function touch_dist(t0, t1)
 	{
 		let dx = t0.clientX - t1.clientX;
 		let dy = t0.clientY - t1.clientY;
 		return Math.sqrt(dx * dx + dy * dy);
 	}
+	function touch_dist_xy(x0, y0, x1, y1)
+	{
+		let dx = x0 - x1;
+		let dy = y0 - y1;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
 
 	infoLayer.addEventListener('touchstart', function(e)
 	{
 		if (e.touches.length == 1) {
-			mousedown_x = e.touches[0].clientX;
-			mousedown_y = e.touches[0].clientY;
+			let x = e.touches[0].clientX;
+			let y = e.touches[0].clientY;
+			let now = Date.now();
+
+			if (now - last_tap_time < DOUBLE_TAP_INTERVAL_MS &&
+				touch_dist_xy(x, y, last_tap_x, last_tap_y) < DOUBLE_TAP_MOVE_PX)
+			{
+				// ダブルタップの2回目: このまま指を動かすとズームドラッグになる
+				zoom_drag_active = true;
+				zoom_drag_base_y = y;
+			} else {
+				zoom_drag_active = false;
+			}
+			last_tap_time = now;
+			last_tap_x = x;
+			last_tap_y = y;
+
+			mousedown_x = x;
+			mousedown_y = y;
 		} else if (e.touches.length == 2) {
+			zoom_drag_active = false;
 			touch_pinch_dist = touch_dist(e.touches[0], e.touches[1]);
 		}
 		e.preventDefault();
@@ -349,17 +383,37 @@ function Map()
 	infoLayer.addEventListener('touchmove', function(e)
 	{
 		if (e.touches.length == 1) {
-			// 1本指ドラッグでスクロール
 			let x = e.touches[0].clientX;
 			let y = e.touches[0].clientY;
-			data.map_x += mousedown_x - x;
-			data.map_y += mousedown_y - y;
-			limit_map_center();
+
+			if (zoom_drag_active) {
+				// ダブルタップ長押しドラッグでズーム(上方向=拡大、下方向=縮小)
+				let diff = zoom_drag_base_y - y;
+				if (Math.abs(diff) > ZOOM_DRAG_STEP_PX) {
+					if (diff > 0 && data.zoom < 4) {
+						data.zoom++;
+					} else if (diff < 0 && data.zoom > 0) {
+						data.zoom--;
+					}
+					zoom_drag_base_y = y;
+					if (on_zoom_changed_handler) {
+						on_zoom_changed_handler();
+					}
+					update_map();
+					update_info();
+				}
+			} else {
+				// 1本指ドラッグでスクロール
+				data.map_x += mousedown_x - x;
+				data.map_y += mousedown_y - y;
+				limit_map_center();
+				update_map();
+				update_info();
+			}
 			mousedown_x = x;
 			mousedown_y = y;
-			update_map();
-			update_info();
 		} else if (e.touches.length == 2) {
+			zoom_drag_active = false;
 			// 2本指ピンチでズーム
 			let dist = touch_dist(e.touches[0], e.touches[1]);
 			if (touch_pinch_dist > 0) {
@@ -390,6 +444,9 @@ function Map()
 			mousedown_y = e.touches[0].clientY;
 		} else {
 			touch_pinch_dist = 0;
+		}
+		if (e.touches.length == 0) {
+			zoom_drag_active = false;
 		}
 		e.preventDefault();
 	}, { passive: false });
