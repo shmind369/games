@@ -317,6 +317,14 @@ img {
 	font-size: 13px;
 	margin-bottom: 2px;
 }
+.country-list-flag {
+	height: 16px;
+	width: auto;
+	vertical-align: middle;
+	margin-right: 5px;
+	image-rendering: crisp-edges;
+	image-rendering: pixelated;
+}
 .country-list-person {
 	font-size: 12px;
 	opacity: 0.85;

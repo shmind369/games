@@ -85,9 +85,12 @@ function CountryList()
 		let pos_x = 0;
 		let pos_y = 0;
 		let name_start_year = null;
+		let flag = null;
 		let i;
 		for (i = 3; i < a.length && a[i].length > 3; i++) {
 			let b = a[i];
+			// 国旗・紋章アイコン(sym/*.png)は名前の有無に関わらず毎行更新される
+			flag = b[2];
 			if (b[3]) {
 				set_default_name(b, 3);
 				region_name[0] = b[3];
@@ -124,7 +127,7 @@ function CountryList()
 		if (!region_name[0]) {
 			return null;
 		}
-		return { name: region_name, people: person_list, pos_x: pos_x, pos_y: pos_y, name_start_year: name_start_year };
+		return { name: region_name, people: person_list, pos_x: pos_x, pos_y: pos_y, name_start_year: name_start_year, flag: flag };
 	}
 
 	function escape_html(s)
@@ -172,8 +175,9 @@ function CountryList()
 			}
 
 			let nameYears = r.name_start_year !== null ? nth_year_text(year - r.name_start_year + 1) : '';
+			let flagImg = r.flag ? '<img class="country-list-flag" src="sym/' + escape_html(r.flag) + '.png" alt="">' : '';
 			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y + '">' +
-				'<div class="country-list-name">' + escape_html(name) +
+				'<div class="country-list-name">' + flagImg + escape_html(name) +
 				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
 
