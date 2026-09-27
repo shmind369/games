@@ -12,6 +12,7 @@
 	const year_text = new YearText();
 	const year_bar = new YearBar();
 	const map = new Map();
+	const country_list = new CountryList();
 
 	let screen_width = 0;
 	let screen_height = 0;
@@ -48,16 +49,19 @@
 	{
 		year_text.update();
 		map.update();
+		country_list.update();
 	});
 	lang_button.onchanged(function()
 	{
 		year_text.update();
 		map.update_style();
+		country_list.update();
 	});
 	year_text.onchanged(function()
 	{
 		year_bar.update();
 		map.update();
+		country_list.update();
 	});
 	zoom_bar.onchanged(function()
 	{
