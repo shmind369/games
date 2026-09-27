@@ -248,3 +248,9 @@ img {
 	opacity: 0.5;
 	font-style: italic;
 }
+.country-list-years {
+	font-weight: normal;
+	opacity: 0.6;
+	font-size: 11px;
+	margin-left: 4px;
+}

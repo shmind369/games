@@ -14,6 +14,19 @@ function CountryList()
 
 	let is_open = false;
 
+	// 「(年数)年目」のような経過年数の表示(1年目=最初の年)
+	function nth_year_text(n)
+	{
+		switch (data.lang) {
+		case 'en':
+			return ' (year ' + n + ')';
+		case 'zh':
+			return '(第' + n + '年)';
+		default:
+			return '(' + n + '年目)';
+		}
+	}
+
 	function lang_name_to_id(lang)
 	{
 		switch (lang) {
@@ -54,6 +67,7 @@ function CountryList()
 		let region_name = [null, null, null];
 		let pos_x = 0;
 		let pos_y = 0;
+		let name_start_year = null;
 		let i;
 		for (i = 3; i < a.length && a[i].length > 3; i++) {
 			let b = a[i];
@@ -62,6 +76,8 @@ function CountryList()
 				region_name[0] = b[3];
 				region_name[1] = b[4];
 				region_name[2] = b[5];
+				// この国名(表記)になったのはこの行が開始した年
+				name_start_year = b[0];
 			}
 			if (b.length >= 12) {
 				pos_x = b[9];
@@ -83,14 +99,15 @@ function CountryList()
 				title = b;
 			} else if (year >= b[0] && year < b[1]) {
 				set_default_name(b, 3);
-				person_list.push([title, b]);
+				// b[0] = この元首の就任年
+				person_list.push([title, b, b[0]]);
 			}
 		}
 
 		if (!region_name[0]) {
 			return null;
 		}
-		return { name: region_name, people: person_list, pos_x: pos_x, pos_y: pos_y };
+		return { name: region_name, people: person_list, pos_x: pos_x, pos_y: pos_y, name_start_year: name_start_year };
 	}
 
 	function escape_html(s)
@@ -129,14 +146,18 @@ function CountryList()
 					let title = p[0] ? p[0][lang] : '';
 					let person = p[1][3 + lang];
 					let label = title ? escape_html(title) + ': ' : '';
-					return '<div class="country-list-person">' + label + escape_html(person) + '</div>';
+					let personYears = nth_year_text(year - p[2] + 1);
+					return '<div class="country-list-person">' + label + escape_html(person) +
+						'<span class="country-list-years">' + personYears + '</span></div>';
 				}).join('');
 			} else {
 				peopleHtml = '<div class="country-list-person country-list-noperson">' + NO_PERSON_TEXT[data.lang] + '</div>';
 			}
 
+			let nameYears = r.name_start_year !== null ? nth_year_text(year - r.name_start_year + 1) : '';
 			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y + '">' +
-				'<div class="country-list-name">' + escape_html(name) + '</div>' + peopleHtml + '</div>';
+				'<div class="country-list-name">' + escape_html(name) +
+				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
 
 		titleEl.innerText = TITLE_TEXT[data.lang] + '(' + count + COUNT_UNIT_TEXT[data.lang] + ')';
