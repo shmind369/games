@@ -4,62 +4,45 @@ function YearBar()
 {
 	const _SIZE = 32;
 
-	const year_bar = document.getElementById('year-bar');
-	const arrow_l = document.getElementById('year-arrow-left');
-	const arrow_r = document.getElementById('year-arrow-right');
+	const bar = document.getElementById('year-bar');
+	const arrow_up = document.getElementById('year-arrow-up');
+	const arrow_down = document.getElementById('year-arrow-down');
 	const scale = document.getElementById('year-bar-scale');
 	const cursor = document.getElementById('year-bar-cursor');
-	let scale_width = 1;
+	let scale_height = 1;
 	let on_changed_handler = null;
 	this.SIZE = _SIZE;
 
+	// 目盛りの縞模様(元の横長バーと同じパターンを流用)
+	const PATTERN = [
+		0, 0,
+		1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+		1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0,
+		1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0,
+		1, 1,
+	];
 
-	this.set_top = function(top)
+	function draw_scale()
 	{
-		year_bar.style.top = top + 'px';
-	};
-	this.set_width = function(width)
-	{
-		if (width < 1) {
-			width = 1;
-		}
-		scale_width = width;
-		scale.setAttribute('width', width);
+		let h = scale_height;
+		scale.setAttribute('width', _SIZE);
+		scale.setAttribute('height', h);
 
 		let ctx = scale.getContext('2d');
-		ctx.clearRect(0, 0, width, _SIZE);
+		ctx.clearRect(0, 0, _SIZE, h);
 		ctx.fillStyle = '#e0e0e0';
-		ctx.fillRect(0, 0, width, _SIZE);
+		ctx.fillRect(0, 0, _SIZE, h);
 
-		let pattern = [
-			0, 0,
-			1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
-			1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 
-			1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0,
-			1, 1,
-		];
-		let length = pattern.length;
+		let length = PATTERN.length;
 		ctx.fillStyle = '#c0c0c0';
 		for (let i = 0; i < length; i++) {
-			if (pattern[i]) {
-				let x1 = width * i / length;
-				let x2 = width * (i + 1) / length;
-				ctx.fillRect(x1, 0, x2 - x1, _SIZE);
+			if (PATTERN[i]) {
+				let y1 = h * i / length;
+				let y2 = h * (i + 1) / length;
+				ctx.fillRect(0, y1, _SIZE, y2 - y1);
 			}
 		}
-		ctx.fillStyle = 'black';
-		ctx.font = '9px sans-serif';
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		for (let i = 0; i < 4; i++) {
-			ctx.fillText(String(-4000 + i * 1000), (2 + i * 10) * width / length, _SIZE / 2);
-		}
-		for (let i = 0; i < 6; i++) {
-			ctx.fillText(String(-500 + i * 500), (42 + i * 10) * width / length, _SIZE / 2);
-		}
-
-		update_cursor();
-	};
+	}
 	function update_cursor()
 	{
 		data.year_clamp();
@@ -68,7 +51,8 @@ function YearBar()
 		if (yr > 3000) {
 			yr = yr * 2 - 3000;
 		}
-		cursor.style.left = ((yr + 200) * scale_width / 9400 + 26) + 'px';
+		let y = (yr + 200) * scale_height / 9400 + _SIZE;
+		cursor.style.top = (y - 6) + 'px';
 	}
 
 	this.onchanged = function(f)
@@ -77,14 +61,22 @@ function YearBar()
 	};
 	this.update = update_cursor;
 
-	function set_year_from_x(xpos)
+	// 表示領域のサイズが変わった時(初回・画面回転・リサイズ)に呼ぶ
+	this.resize = function()
 	{
-		if (xpos < _SIZE) {
+		scale_height = Math.max(1, bar.clientHeight - _SIZE * 2);
+		draw_scale();
+		update_cursor();
+	};
+
+	function set_year_from_y(ypos)
+	{
+		if (ypos < _SIZE) {
 			data.year--;
-		} else if (xpos > scale_width + _SIZE) {
+		} else if (ypos > scale_height + _SIZE) {
 			data.year++;
 		} else {
-			let yr = (xpos - 32) * 9400 / scale_width - 200;
+			let yr = (ypos - _SIZE) * 9400 / scale_height - 200;
 			if (yr > 3000) {
 				yr = (yr + 3000) / 2;
 			}
@@ -96,30 +88,23 @@ function YearBar()
 			on_changed_handler();
 		}
 	}
+	function bar_relative_y(clientY)
+	{
+		return clientY - bar.getBoundingClientRect().top;
+	}
 
-	year_bar.addEventListener('mousedown', e =>
+	bar.addEventListener('mousedown', e =>
 	{
-		set_year_from_x(e.clientX);
+		set_year_from_y(bar_relative_y(e.clientY));
 	});
-	year_bar.addEventListener('touchstart', e =>
+	bar.addEventListener('touchstart', e =>
 	{
-		set_year_from_x(e.touches[0].clientX);
+		set_year_from_y(bar_relative_y(e.touches[0].clientY));
 		e.preventDefault();
 	}, { passive: false });
-	arrow_l.addEventListener('mouseenter', function(e)
+	bar.addEventListener('touchmove', e =>
 	{
-		arrow_l.src = 'img/arrow-left2.png';
-	});
-	arrow_l.addEventListener('mouseleave', function(e)
-	{
-		arrow_l.src = 'img/arrow-left.png';
-	});
-	arrow_r.addEventListener('mouseenter', function(e)
-	{
-		arrow_r.src = 'img/arrow-right2.png';
-	});
-	arrow_r.addEventListener('mouseleave', function(e)
-	{
-		arrow_r.src = 'img/arrow-right.png';
-	});
+		set_year_from_y(bar_relative_y(e.touches[0].clientY));
+		e.preventDefault();
+	}, { passive: false });
 }

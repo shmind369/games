@@ -116,21 +116,47 @@ img {
 	font-size: 14px;
 	color: white;
 }
+#year-bar {
+	position: fixed;
+	top: 48px; /* #headの高さ分だけ空けて配置する */
+	right: 0;
+	bottom: 0;
+	width: 32px;
+	display: flex;
+	flex-direction: column;
+	align-items: stretch;
+	touch-action: none;
+	z-index: 5000;
+}
+#year-arrow-up, #year-arrow-down {
+	flex: 0 0 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	color: white;
+	font-size: 12px;
+	cursor: pointer;
+	-webkit-user-select: none;
+	user-select: none;
+}
 #year-bar-scale {
+	flex: 1 1 auto;
+	display: block;
+	width: 32px;
 	margin: 0;
 	padding: 0;
 }
 #year-bar-cursor {
 	position: absolute;
-	top: 0;
-	left: 0;
-}
-#year-bar {
-	position: absolute;
-	left: 0px;
-}
-#year-arrow-left,#year-arrow-right {
-	cursor: pointer;
+	left: -8px;
+	top: 32px;
+	width: 0;
+	height: 0;
+	border-top: 6px solid transparent;
+	border-bottom: 6px solid transparent;
+	border-right: 8px solid rgba(255, 200, 0, 0.95);
+	pointer-events: none;
 }
 
 .region {
@@ -164,8 +190,8 @@ img {
 
 #country-list-toggle {
 	position: fixed;
-	right: 12px;
-	bottom: 44px;
+	right: 44px; /* 右端の縦年表バー(幅32px)を避ける */
+	bottom: 16px;
 	width: 44px;
 	height: 44px;
 	border-radius: 50%;
@@ -185,7 +211,7 @@ img {
 	position: fixed;
 	left: 0;
 	right: 0;
-	bottom: 32px; /* 年表バー(高さ32px)の上に重ねて年の操作を塞がないようにする */
+	bottom: 0;
 	max-height: 60vh;
 	background: rgba(20, 20, 24, 0.96);
 	color: white;
