@@ -258,9 +258,12 @@ function CountryList()
 	});
 
 	// ◀/▶ボタン: タップで1年、押し続けると一定間隔で自動的に進み続け、
-	// 指を離すと止まる(その年に達すると自動的に停止する)
+	// 指を離すと止まる(その年に達すると自動的に停止する)。
+	// 1〜2秒ほど押し続けるとさらに速い間隔に切り替わる(2段階加速)
 	const YEAR_HOLD_INITIAL_DELAY_MS = 400;
 	const YEAR_HOLD_REPEAT_INTERVAL_MS = 120;
+	const YEAR_HOLD_ACCEL_DELAY_MS = 1200;
+	const YEAR_HOLD_FAST_INTERVAL_MS = 35;
 	const year_hold_stoppers = [];
 
 	function stop_year_hold_all()
@@ -272,6 +275,7 @@ function CountryList()
 	function bind_year_hold_button(el, delta)
 	{
 		let initial_timer = null;
+		let accel_timer = null;
 		let repeat_timer = null;
 
 		function step()
@@ -293,6 +297,10 @@ function CountryList()
 			step();
 			initial_timer = setTimeout(function() {
 				repeat_timer = setInterval(step, YEAR_HOLD_REPEAT_INTERVAL_MS);
+				accel_timer = setTimeout(function() {
+					clearInterval(repeat_timer);
+					repeat_timer = setInterval(step, YEAR_HOLD_FAST_INTERVAL_MS);
+				}, YEAR_HOLD_ACCEL_DELAY_MS);
 			}, YEAR_HOLD_INITIAL_DELAY_MS);
 		}
 		function stop()
@@ -300,6 +308,10 @@ function CountryList()
 			if (initial_timer) {
 				clearTimeout(initial_timer);
 				initial_timer = null;
+			}
+			if (accel_timer) {
+				clearTimeout(accel_timer);
+				accel_timer = null;
 			}
 			if (repeat_timer) {
 				clearInterval(repeat_timer);
