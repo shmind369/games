@@ -522,9 +522,9 @@ function Map()
 			let y = e.touches[0].clientY;
 
 			if (zoom_drag_active) {
-				// ダブルタップ長押しドラッグでズーム(上方向=拡大、下方向=縮小)。
+				// ダブルタップ長押しドラッグでズーム(上方向=縮小、下方向=拡大)。
 				// 指を動かした量に比例して連続的に拡大率を変える
-				let diff = zoom_drag_base_y - y;
+				let diff = y - zoom_drag_base_y;
 				apply_zoom_delta(diff / ZOOM_DRAG_STEP_PX);
 				zoom_drag_base_y = y;
 			} else {
