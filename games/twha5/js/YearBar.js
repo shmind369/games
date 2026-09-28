@@ -5,8 +5,6 @@ function YearBar()
 	const _SIZE = 32;
 
 	const bar = document.getElementById('year-bar');
-	const arrow_up = document.getElementById('year-arrow-up');
-	const arrow_down = document.getElementById('year-arrow-down');
 	const scale = document.getElementById('year-bar-scale');
 	const cursor = document.getElementById('year-bar-cursor');
 	let scale_height = 1;
@@ -95,7 +93,7 @@ function YearBar()
 	{
 		data.year_clamp();
 
-		let y = year_to_frac(data.year) * scale_height + _SIZE;
+		let y = year_to_frac(data.year) * scale_height;
 		cursor.style.top = (y - 6) + 'px';
 	}
 
@@ -108,21 +106,15 @@ function YearBar()
 	// 表示領域のサイズが変わった時(初回・画面回転・リサイズ)に呼ぶ
 	this.resize = function()
 	{
-		scale_height = Math.max(1, bar.clientHeight - _SIZE * 2);
+		scale_height = Math.max(1, bar.clientHeight);
 		draw_scale();
 		update_cursor();
 	};
 
 	function set_year_from_y(ypos)
 	{
-		if (ypos < _SIZE) {
-			data.year--;
-		} else if (ypos > scale_height + _SIZE) {
-			data.year++;
-		} else {
-			let frac = (ypos - _SIZE) / scale_height;
-			data.year = Math.round(frac_to_year(frac));
-		}
+		let frac = ypos / scale_height;
+		data.year = Math.round(frac_to_year(frac));
 		update_cursor();
 		if (on_changed_handler) {
 			on_changed_handler();

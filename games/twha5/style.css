@@ -128,18 +128,6 @@ img {
 	touch-action: none;
 	z-index: 5000;
 }
-#year-arrow-up, #year-arrow-down {
-	flex: 0 0 32px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	background: rgba(0, 0, 0, 0.55);
-	color: white;
-	font-size: 12px;
-	cursor: pointer;
-	-webkit-user-select: none;
-	user-select: none;
-}
 #year-bar-scale {
 	flex: 1 1 auto;
 	display: block;
