@@ -159,7 +159,7 @@ img {
 	padding-bottom: 3px;
 	font-size: 12px;
 	font-weight: bold;
-    cursor: default;
+    cursor: pointer;
 }
 /* 一覧からジャンプした先の地域名を目立たせる表示(地図を動かすと解除)。
    黒文字+白い細いアウトライン+外側への柔らかい白いグローで、
@@ -185,7 +185,7 @@ img {
 }
 .person div {
 	padding: 3px 4px 0 52px;
-    cursor: default;
+    cursor: pointer;
 }
 .person img {
 	float: left;

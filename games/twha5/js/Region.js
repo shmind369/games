@@ -3,6 +3,61 @@
 const BOX_WIDTH = 160;
 const REGION_WIDTH = BOX_WIDTH + 48 + 10;
 
+// 国名・人物名タップでGoogle検索を新規タブで開く機能のしきい値
+const TAP_MOVE_THRESHOLD_PX = 10;
+const TAP_MAX_DURATION_MS = 500;
+
+function ask_google(query)
+{
+	if (!query) {
+		return;
+	}
+	window.open('https://www.google.com/search?q=' + encodeURIComponent(query), '_blank', 'noopener');
+}
+
+// タップ(指を動かさず離す)とドラッグ(地図のパン操作)を区別するため、
+// touchstart/touchendの座標差・経過時間で判定する。クリック(マウス)は
+// そのまま利用できるが、タップ側で既に処理済みの場合は二重に開かない
+// ようにフラグで抑制する
+function attach_tap_search(el, get_query)
+{
+	let start_x = 0, start_y = 0, start_t = 0;
+	let touch_handled = false;
+
+	el.addEventListener('touchstart', function(e)
+	{
+		if (e.touches.length !== 1) {
+			return;
+		}
+		start_x = e.touches[0].clientX;
+		start_y = e.touches[0].clientY;
+		start_t = Date.now();
+	});
+	el.addEventListener('touchend', function(e)
+	{
+		if (e.changedTouches.length !== 1) {
+			return;
+		}
+		let dx = e.changedTouches[0].clientX - start_x;
+		let dy = e.changedTouches[0].clientY - start_y;
+		if (Math.sqrt(dx * dx + dy * dy) < TAP_MOVE_THRESHOLD_PX &&
+			Date.now() - start_t < TAP_MAX_DURATION_MS)
+		{
+			touch_handled = true;
+			ask_google(get_query());
+			e.preventDefault();
+		}
+	}, { passive: false });
+	el.addEventListener('click', function(e)
+	{
+		if (touch_handled) {
+			touch_handled = false;
+			return;
+		}
+		ask_google(get_query());
+	});
+}
+
 function Region(a)
 {
 	let region_name = [null, null, null];
@@ -22,6 +77,12 @@ function Region(a)
 		let title = document.createElement('div');
 		title.classList.add('region-title');
 		node.appendChild(title);
+
+		attach_tap_search(title, function()
+		{
+			let lang = lang_name_to_id(data.lang);
+			return region_name[lang] || region_abbr[lang];
+		});
 
 		return node;
 	}
@@ -147,6 +208,11 @@ function Region(a)
 				}
 				html += '<div>' + a_title[lang] + '</div><div>' + a_person[3 + lang] + '</div>';
 				item.innerHTML = html;
+				attach_tap_search(item, function()
+				{
+					let lang = lang_name_to_id(data.lang);
+					return a_person[3 + lang] + ' ' + a_title[lang];
+				});
 				body.appendChild(item);
 			}
 		} else {
