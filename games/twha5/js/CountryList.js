@@ -8,13 +8,12 @@ function CountryList()
 	const titleEl = document.getElementById('country-list-title');
 	const bodyEl = document.getElementById('country-list-body');
 
-	const TITLE_TEXT = { ja: 'その年の国と元首', en: 'Countries & rulers', zh: '当年的国家与元首' };
 	const COUNT_UNIT_TEXT = { ja: '件', en: '', zh: '个' };
 	const NO_PERSON_TEXT = { ja: '(元首データなし)', en: '(no ruler data)', zh: '(无元首数据)' };
 
 	let is_open = false;
 
-	// 見出しに添える現在の西暦表示(#year-textやYearControls.jsの
+	// 見出しに使う現在の西暦表示(#year-textやYearControls.jsの
 	// format_yearと同じ書式)
 	function format_year(year, lang)
 	{
@@ -22,6 +21,19 @@ function CountryList()
 			return year < 0 ? (-year) + ' BC' : 'AD ' + year;
 		}
 		return year < 0 ? '前' + (-year) + '年' : year + '年';
+	}
+	// 見出し全体(「1600年の国と元首(129件)」のように、「その年」の
+	// 部分を実際の西暦に置き換えた表現にする)
+	function build_title(yearText, countText)
+	{
+		switch (data.lang) {
+		case 'en':
+			return 'Countries & rulers in ' + yearText + ' (' + countText + ')';
+		case 'zh':
+			return yearText + '的国家与元首(' + countText + ')';
+		default:
+			return yearText + 'の国と元首(' + countText + ')';
+		}
 	}
 
 	// 「(年数)年目」のような経過年数の表示(1年目=最初の年)
@@ -189,11 +201,7 @@ function CountryList()
 
 		let yearText = format_year(data.year, data.lang);
 		let countText = count + COUNT_UNIT_TEXT[data.lang];
-		if (data.lang === 'en') {
-			titleEl.innerText = TITLE_TEXT[data.lang] + ' (' + yearText + ', ' + countText + ')';
-		} else {
-			titleEl.innerText = TITLE_TEXT[data.lang] + '(' + yearText + '・' + countText + ')';
-		}
+		titleEl.innerText = build_title(yearText, countText);
 		bodyEl.innerHTML = html;
 	}
 
