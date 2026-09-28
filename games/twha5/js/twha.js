@@ -13,6 +13,7 @@
 	const year_bar = new YearBar();
 	const map = new Map();
 	const country_list = new CountryList();
+	const wiki_panel = new WikiPanel();
 	const year_controls = new YearControls();
 
 	let screen_width = 0;
@@ -74,6 +75,10 @@
 	{
 		map.jump_to(x, y);
 		map.highlight_region(regionIndex);
+	});
+	Region.onInfoTap(function(query)
+	{
+		wiki_panel.show(query);
 	});
 	year_controls.onchanged(function()
 	{

@@ -3,16 +3,23 @@
 const BOX_WIDTH = 160;
 const REGION_WIDTH = BOX_WIDTH + 48 + 10;
 
-// 国名・人物名タップでGoogle検索を新規タブで開く機能のしきい値
+// 国名・人物名タップで情報パネル(WikiPanel)を開く機能のしきい値
 const TAP_MOVE_THRESHOLD_PX = 10;
 const TAP_MAX_DURATION_MS = 500;
 
-function ask_google(query)
+// タップされた名前をどう処理するかは、js/twha.js側でRegion.onInfoTap()を
+// 使って登録する(実体はWikiPanel.show())。Region.js自身はWikiPanelの
+// 存在を知らない疎結合な作りにしている
+let info_tap_handler = null;
+Region.onInfoTap = function(f)
 {
-	if (!query) {
-		return;
+	info_tap_handler = f;
+};
+function trigger_info_tap(query)
+{
+	if (query && info_tap_handler) {
+		info_tap_handler(query);
 	}
-	window.open('https://www.google.com/search?q=' + encodeURIComponent(query), '_blank', 'noopener');
 }
 
 // タップ(指を動かさず離す)とドラッグ(地図のパン操作)を区別するため、
@@ -44,7 +51,7 @@ function attach_tap_search(el, get_query)
 			Date.now() - start_t < TAP_MAX_DURATION_MS)
 		{
 			touch_handled = true;
-			ask_google(get_query());
+			trigger_info_tap(get_query());
 			e.preventDefault();
 		}
 	}, { passive: false });
@@ -54,7 +61,7 @@ function attach_tap_search(el, get_query)
 			touch_handled = false;
 			return;
 		}
-		ask_google(get_query());
+		trigger_info_tap(get_query());
 	});
 }
 
