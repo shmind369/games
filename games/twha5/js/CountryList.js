@@ -148,8 +148,40 @@ function CountryList()
 		return escape_html(s).replace(/"/g, '&quot;');
 	}
 
+	// 再描画前に、現在の表示範囲の一番上に見えている項目(のregion_list
+	// 上のインデックス)と、その項目がスクロール位置に対してどれだけ
+	// ずれた位置にあるかを記録しておく。年を進めて新しい国が追加/削除
+	// されても、この項目を再び同じ相対位置に来るようスクロール位置を
+	// 復元することで、ユーザーが見ていた表示範囲が勝手にズレないようにする
+	function capture_scroll_anchor()
+	{
+		let items = bodyEl.querySelectorAll('.country-list-item');
+		for (let i = 0; i < items.length; i++) {
+			let item = items[i];
+			if (item.offsetTop + item.offsetHeight > bodyEl.scrollTop) {
+				return {
+					regionIndex: item.dataset.regionIndex,
+					offset: item.offsetTop - bodyEl.scrollTop,
+				};
+			}
+		}
+		return null;
+	}
+	function restore_scroll_anchor(anchor)
+	{
+		if (!anchor) {
+			return;
+		}
+		let item = bodyEl.querySelector('.country-list-item[data-region-index="' + anchor.regionIndex + '"]');
+		if (item) {
+			bodyEl.scrollTop = item.offsetTop - anchor.offset;
+		}
+	}
+
 	function render()
 	{
+		let anchor = capture_scroll_anchor();
+
 		let lang = lang_name_to_id(data.lang);
 		let year = data.year;
 		let seen = new Set();
@@ -203,6 +235,8 @@ function CountryList()
 		let countText = count + COUNT_UNIT_TEXT[data.lang];
 		titleEl.innerText = build_title(yearText, countText);
 		bodyEl.innerHTML = html;
+
+		restore_scroll_anchor(anchor);
 	}
 
 	function open()
