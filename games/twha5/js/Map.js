@@ -21,7 +21,11 @@ function Map()
 	const mpTertCache = new Array(MAP_X * MAP_Y);
 	// 指定した年のRegionパネル全て
 	let regions_this_year = [];
-	// 画面上に見えているRegionパネル全て
+	// 指定した年の戦争等イベントマーカー全て(js/wars.jsのwar_list由来)
+	let wars_this_year = [];
+	// war_list各要素に対応するWarMarkerインスタンス(初回参照時に一度だけ作る)
+	let all_war_markers = null;
+	// 画面上に見えているRegion/WarMarkerパネル全て
 	let visible_regions = [];
 
 	let curWidth, curHeight;
@@ -207,6 +211,34 @@ function Map()
 		return ret;
 	}
 
+	// war_listから、指定した年に含まれるものだけを抽出。WarMarker
+	// インスタンス自体は(Regionと違って年ごとに内容が変わらないため)
+	// 最初に一度だけ作って使い回す
+	function update_wars_of_year(yr)
+	{
+		if (!all_war_markers) {
+			all_war_markers = war_list.map(function(w) { return new WarMarker(w); });
+		}
+		// 年が変わった時点でいったん全てDOMから外す(Regionの
+		// update_region_of_yearと同じパターン)。引き続き対象のものは、
+		// 後続の表示判定ループで画面内に入り次第また追加される。これを
+		// しないと、年代の対象から外れたマーカーがDOMに残り続けてしまう
+		for (let i = 0; i < all_war_markers.length; i++) {
+			let m = all_war_markers[i];
+			if (m.node.parentNode) {
+				infoLayer.removeChild(m.node);
+			}
+		}
+		let ret = [];
+		for (let i = 0; i < war_list.length; i++) {
+			let w = war_list[i];
+			if (yr >= w.start && yr < w.end) {
+				ret.push(all_war_markers[i]);
+			}
+		}
+		return ret;
+	}
+
 	// infoLayerに追加
 	function insert_visible_regions(nt)
 	{
@@ -227,6 +259,7 @@ function Map()
 	{
 		if (prev_year !== data.year) {
 			regions_this_year = update_region_of_year(data.year);
+			wars_this_year = update_wars_of_year(data.year);
 			visible_regions = [];
 			prev_year = data.year;
 		}
@@ -235,8 +268,11 @@ function Map()
 		let curX = data.map_x;
 		let curY = data.map_y;
 
-		for (let i = 0; i < regions_this_year.length; i++) {
-			let nt = regions_this_year[i];
+		// Region・WarMarkerとも.pos_x/.pos_y/.disp_level/.node/.update()を
+		// 持つ同じ形のオブジェクトなので、同じループでまとめて扱える
+		let candidates = regions_this_year.concat(wars_this_year);
+		for (let i = 0; i < candidates.length; i++) {
+			let nt = candidates[i];
 			let px = nt.pos_x * scale - curX;
 			let py = nt.pos_y * scale - curY;
 
