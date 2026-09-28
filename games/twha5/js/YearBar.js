@@ -94,7 +94,7 @@ function YearBar()
 		data.year_clamp();
 
 		let y = year_to_frac(data.year) * scale_height;
-		cursor.style.top = (y - 6) + 'px';
+		cursor.style.top = (y - 1.5) + 'px'; // 高さ3pxの線を中央に合わせる
 	}
 
 	this.onchanged = function(f)
