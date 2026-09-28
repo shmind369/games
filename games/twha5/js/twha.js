@@ -76,6 +76,10 @@
 		map.jump_to(x, y);
 		map.highlight_region(regionIndex);
 	});
+	country_list.oninfotap(function(query)
+	{
+		wiki_panel.show(query);
+	});
 	Region.onInfoTap(function(query)
 	{
 		wiki_panel.show(query);
