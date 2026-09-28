@@ -25,6 +25,16 @@ function Map()
 	let prev_zoom = data.zoom;
 	let prev_year = -9999;
 
+	// 一覧からジャンプした先の地域名の赤いハイライト(地図を動かすと解除)
+	let highlighted_node = null;
+	function clear_highlight()
+	{
+		if (highlighted_node) {
+			highlighted_node.classList.remove('region-highlight');
+			highlighted_node = null;
+		}
+	}
+
 
 	function getMapLandPart(i, j)
 	{
@@ -302,6 +312,18 @@ function Map()
 		limit_map_center();
 		this.update();
 	};
+	// region_list内のインデックスを指定して、その地域名を赤くハイライトする
+	// (既存のハイライトがあれば解除してから付け直す)。地図を動かすと解除される
+	this.highlight_region = function(index)
+	{
+		clear_highlight();
+		let entry = region_list[index];
+		let rg = entry ? entry[0] : null;
+		if (rg && rg.node) {
+			rg.node.classList.add('region-highlight');
+			highlighted_node = rg.node;
+		}
+	};
 	this.update_style = function()
 	{
 		for (let i = 0; i < visible_regions.length; i++) {
@@ -325,6 +347,7 @@ function Map()
 	{
 		if (e.buttons != 0 && (mousedown_x !== e.clientX || mousedown_y !== e.clientY)) {
 			// マウスドラッグによるスクロール
+			clear_highlight();
 			data.map_x += mousedown_x - e.clientX;
 			data.map_y += mousedown_y - e.clientY;
 			limit_map_center();
@@ -392,6 +415,9 @@ function Map()
 	}, { passive: false });
 	infoLayer.addEventListener('touchmove', function(e)
 	{
+		// 1本指パン・ピンチズーム・ダブルタップ長押しズームのいずれでも、
+		// 地図を動かしたらジャンプ先のハイライトを解除する
+		clear_highlight();
 		if (e.touches.length == 1) {
 			let x = e.touches[0].clientX;
 			let y = e.touches[0].clientY;
