@@ -302,15 +302,78 @@ function Map()
 		update_map();
 		update_info();
 	};
+
+	// 一覧タップでのジャンプ時、どこからどこへ移動したかが分かるよう
+	// Googleマップ風に滑らかにパンするためのアニメーション
+	let jump_animation_frame = null;
+	function cancel_jump_animation()
+	{
+		if (jump_animation_frame !== null) {
+			cancelAnimationFrame(jump_animation_frame);
+			jump_animation_frame = null;
+		}
+	}
+	function ease_out_cubic(t)
+	{
+		return 1 - Math.pow(1 - t, 3);
+	}
+	const JUMP_ANIMATION_MS = 500;
+
 	// 指定した地域の座標(pos_x, pos_y。region_listのera行に入っている
 	// 生の位置データと同じ単位)を画面中央に来るようパンする
 	this.jump_to = function(x, y)
 	{
+		cancel_jump_animation();
+
 		let scale = SCALES[data.zoom];
-		data.map_x = Math.round(x * scale);
-		data.map_y = Math.round(y * scale);
-		limit_map_center();
-		this.update();
+		let mapSize = MAP_SIZE * scale;
+		let maxX = MAP_X * mapSize;
+		let maxY = MAP_Y * mapSize;
+
+		let start_x = data.map_x;
+		let start_y = data.map_y;
+
+		let target_x = Math.round(x * scale);
+		let target_y = Math.round(y * scale);
+		if (target_y < 0) {
+			target_y = 0;
+		} else if (target_y > maxY) {
+			target_y = maxY;
+		}
+
+		// 横方向はループする地図なので、逆回りの方が近い場合はそちらへ
+		// 移動するよう、最短経路の移動量を求める
+		let dx = target_x - start_x;
+		dx = ((dx % maxX) + maxX) % maxX;
+		if (dx > maxX / 2) {
+			dx -= maxX;
+		}
+		let dy = target_y - start_y;
+
+		let start_time = null;
+
+		function step(timestamp)
+		{
+			if (start_time === null) {
+				start_time = timestamp;
+			}
+			let t = Math.min(1, (timestamp - start_time) / JUMP_ANIMATION_MS);
+			let eased = ease_out_cubic(t);
+
+			data.map_x = Math.round(start_x + dx * eased);
+			data.map_y = Math.round(start_y + dy * eased);
+			limit_map_center();
+			update_map();
+			update_info();
+
+			if (t < 1) {
+				jump_animation_frame = requestAnimationFrame(step);
+			} else {
+				jump_animation_frame = null;
+			}
+		}
+
+		jump_animation_frame = requestAnimationFrame(step);
 	};
 	// region_list内のインデックスを指定して、その地域名を赤くハイライトする
 	// (既存のハイライトがあれば解除してから付け直す)。地図を動かすと解除される
@@ -339,6 +402,7 @@ function Map()
 
 	infoLayer.addEventListener('mousedown', function(e)
 	{
+		cancel_jump_animation();
 		mousedown_x = e.clientX;
 		mousedown_y = e.clientY;
         e.preventDefault();
@@ -387,6 +451,7 @@ function Map()
 
 	infoLayer.addEventListener('touchstart', function(e)
 	{
+		cancel_jump_animation();
 		if (e.touches.length == 1) {
 			let x = e.touches[0].clientX;
 			let y = e.touches[0].clientY;
