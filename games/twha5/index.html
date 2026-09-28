@@ -24,6 +24,7 @@ const data = {
 <script type="application/javascript" src="js/regions.js" defer></script>
 <script type="application/javascript" src="js/LangButton.js" defer></script>
 <script type="application/javascript" src="js/CountryList.js" defer></script>
+<script type="application/javascript" src="js/YearControls.js" defer></script>
 <script type="application/javascript" src="js/ZoomBar.js" defer></script>
 <script type="application/javascript" src="js/YearText.js" defer></script>
 <script type="application/javascript" src="js/YearBar.js" defer></script>
@@ -48,16 +49,15 @@ const data = {
 <div id="country-list-toggle">国</div>
 <div id="country-list-panel">
 <div id="country-list-headbar">
-<div id="country-list-headbar-left">
-<span id="country-list-title"></span><span id="country-list-year"></span><input type="text" id="country-list-year-input" autocomplete="off">
-</div>
+<span id="country-list-title"></span>
 <div id="country-list-close">&times;</div>
 </div>
 <div id="country-list-body"></div>
-<div id="country-list-footer">
-<button id="country-list-year-prev" type="button">&#9664;</button>
-<button id="country-list-year-next" type="button">&#9654;</button>
 </div>
+<div id="year-controls">
+<button id="year-controls-prev" type="button">&#9664;</button>
+<span id="year-controls-year"></span><input type="text" id="year-controls-year-input" autocomplete="off">
+<button id="year-controls-next" type="button">&#9654;</button>
 </div>
 </body>
 </html>

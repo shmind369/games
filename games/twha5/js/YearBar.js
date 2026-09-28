@@ -22,6 +22,25 @@ function YearBar()
 		1, 1,
 	];
 
+	const MIN_YEAR = -4000;
+
+	// 年→バー上の位置(0〜1)。ちょうど中心(0.5)が西暦元年(1年)に
+	// なるよう、紀元前パートと西暦パートをそれぞれ均等に割り当てる
+	function year_to_frac(year)
+	{
+		if (year <= 1) {
+			return (year - MIN_YEAR) / (1 - MIN_YEAR) * 0.5;
+		}
+		return 0.5 + (year - 1) / (MAX_YEAR - 1) * 0.5;
+	}
+	function frac_to_year(frac)
+	{
+		if (frac <= 0.5) {
+			return MIN_YEAR + (frac / 0.5) * (1 - MIN_YEAR);
+		}
+		return 1 + ((frac - 0.5) / 0.5) * (MAX_YEAR - 1);
+	}
+
 	function draw_scale()
 	{
 		let h = scale_height;
@@ -42,16 +61,44 @@ function YearBar()
 				ctx.fillRect(0, y1, _SIZE, y2 - y1);
 			}
 		}
+
+		// 100年単位の目盛り線と年号。紀元前パートは年数が密集して
+		// ラベル同士が重なるため、直近のラベルから一定間隔空いている
+		// 時だけ文字を描く(目盛り線自体は100年ごとに必ず引く)
+		const LABEL_MIN_GAP_PX = 11;
+		ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
+		ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+		ctx.font = '7px sans-serif';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		let last_label_y = -Infinity;
+		for (let year = MIN_YEAR; year <= 2000; year += 100) {
+			// 西暦0年は存在しない
+			if (year === 0) {
+				continue;
+			}
+			let y = year_to_frac(year) * h;
+
+			ctx.beginPath();
+			ctx.moveTo(0, y);
+			ctx.lineTo(6, y);
+			ctx.stroke();
+
+			if (y - last_label_y >= LABEL_MIN_GAP_PX) {
+				ctx.save();
+				ctx.translate(19, y);
+				ctx.rotate(-Math.PI / 2);
+				ctx.fillText(String(year), 0, 0);
+				ctx.restore();
+				last_label_y = y;
+			}
+		}
 	}
 	function update_cursor()
 	{
 		data.year_clamp();
 
-		let yr = data.year + 4000;
-		if (yr > 3000) {
-			yr = yr * 2 - 3000;
-		}
-		let y = (yr + 200) * scale_height / 9400 + _SIZE;
+		let y = year_to_frac(data.year) * scale_height + _SIZE;
 		cursor.style.top = (y - 6) + 'px';
 	}
 
@@ -76,12 +123,8 @@ function YearBar()
 		} else if (ypos > scale_height + _SIZE) {
 			data.year++;
 		} else {
-			let yr = (ypos - _SIZE) * 9400 / scale_height - 200;
-			if (yr > 3000) {
-				yr = (yr + 3000) / 2;
-			}
-			yr -= 4000;
-			data.year = Math.round(yr);
+			let frac = (ypos - _SIZE) / scale_height;
+			data.year = Math.round(frac_to_year(frac));
 		}
 		update_cursor();
 		if (on_changed_handler) {
