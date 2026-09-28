@@ -191,7 +191,7 @@ img {
 #country-list-toggle {
 	position: fixed;
 	right: 44px; /* 右端の縦年表バー(幅32px)を避ける */
-	bottom: 16px;
+	bottom: 64px; /* 画面下端の年号コントロールバー(高さ48px)の上に配置 */
 	width: 44px;
 	height: 44px;
 	border-radius: 50%;
@@ -211,13 +211,15 @@ img {
 	position: fixed;
 	left: 0;
 	right: 0;
-	bottom: 0;
+	bottom: 48px; /* 画面下端の年号コントロールバーの上に重ねて表示する */
 	max-height: 60vh;
 	background: rgba(20, 20, 24, 0.96);
 	color: white;
 	z-index: 20000;
 	border-radius: 12px 12px 0 0;
-	transform: translateY(100%);
+	/* bottomの分もまとめて下げないと、閉じた時に上端がわずかに
+	   画面内に残ってしまう */
+	transform: translateY(calc(100% + 48px));
 	transition: transform 0.25s ease;
 	display: flex;
 	flex-direction: column;
@@ -238,35 +240,6 @@ img {
 	-webkit-user-select: none;
 	user-select: none;
 }
-#country-list-headbar-left {
-	display: flex;
-	align-items: baseline;
-	flex-wrap: wrap;
-	gap: 6px;
-	min-width: 0;
-}
-#country-list-year {
-	font-weight: normal;
-	opacity: 0.85;
-	font-size: 13px;
-	cursor: pointer;
-	text-decoration: underline dotted;
-	text-underline-offset: 2px;
-}
-#country-list-year-input {
-	display: none;
-	width: 4.5em;
-	font-size: 13px;
-	border: none;
-	border-radius: 4px;
-	padding: 1px 4px;
-	background: rgba(255, 255, 255, 0.15);
-	color: white;
-	text-align: center;
-}
-#country-list-year-input::placeholder {
-	color: rgba(255, 255, 255, 0.5);
-}
 #country-list-close {
 	cursor: pointer;
 	font-size: 22px;
@@ -280,15 +253,23 @@ img {
 	flex: 1 1 auto;
 	-webkit-overflow-scrolling: touch;
 }
-#country-list-footer {
+/* 画面下端に常時表示する年号コントロールバー(◀/▶ + 年号ジャンプ入力) */
+#year-controls {
+	position: fixed;
+	left: 0;
+	right: 32px; /* 右端の縦年表バー(幅32px)を避ける */
+	bottom: 0;
+	height: 48px;
 	display: flex;
-	justify-content: flex-end;
-	gap: 8px;
-	padding: 8px 14px;
-	border-top: 1px solid rgba(255, 255, 255, 0.15);
-	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	background: rgba(0, 0, 0, 0.75);
+	z-index: 12000;
+	-webkit-user-select: none;
+	user-select: none;
 }
-#country-list-year-prev, #country-list-year-next {
+#year-controls-prev, #year-controls-next {
 	width: 48px;
 	height: 36px;
 	border: none;
@@ -299,8 +280,32 @@ img {
 	-webkit-user-select: none;
 	user-select: none;
 }
-#country-list-year-prev:active, #country-list-year-next:active {
+#year-controls-prev:active, #year-controls-next:active {
 	background: rgba(255, 255, 255, 0.3);
+}
+#year-controls-year {
+	color: white;
+	font-size: 15px;
+	font-weight: bold;
+	cursor: pointer;
+	text-decoration: underline dotted;
+	text-underline-offset: 2px;
+	min-width: 72px;
+	text-align: center;
+}
+#year-controls-year-input {
+	display: none;
+	width: 4.5em;
+	font-size: 15px;
+	border: none;
+	border-radius: 4px;
+	padding: 4px;
+	background: rgba(255, 255, 255, 0.15);
+	color: white;
+	text-align: center;
+}
+#year-controls-year-input::placeholder {
+	color: rgba(255, 255, 255, 0.5);
 }
 .country-list-item {
 	padding: 8px 4px;

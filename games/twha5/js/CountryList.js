@@ -7,10 +7,6 @@ function CountryList()
 	const closeButton = document.getElementById('country-list-close');
 	const titleEl = document.getElementById('country-list-title');
 	const bodyEl = document.getElementById('country-list-body');
-	const yearEl = document.getElementById('country-list-year');
-	const yearInputEl = document.getElementById('country-list-year-input');
-	const yearPrevButton = document.getElementById('country-list-year-prev');
-	const yearNextButton = document.getElementById('country-list-year-next');
 
 	const TITLE_TEXT = { ja: 'その年の国と元首', en: 'Countries & rulers', zh: '当年的国家与元首' };
 	const COUNT_UNIT_TEXT = { ja: '件', en: '', zh: '个' };
@@ -29,19 +25,6 @@ function CountryList()
 		default:
 			return '(' + n + '年目)';
 		}
-	}
-
-	// 画面上部の#year-textと同じ書式(YearText.jsのupdate_textと同じ規則)
-	function format_year(year, lang)
-	{
-		if (lang === 'en') {
-			return year < 0 ? (-year) + ' BC' : 'AD ' + year;
-		}
-		return year < 0 ? '前' + (-year) + '年' : year + '年';
-	}
-	function update_year_display()
-	{
-		yearEl.innerText = format_year(data.year, data.lang);
 	}
 
 	function lang_name_to_id(lang)
@@ -183,7 +166,6 @@ function CountryList()
 
 		titleEl.innerText = TITLE_TEXT[data.lang] + '(' + count + COUNT_UNIT_TEXT[data.lang] + ')';
 		bodyEl.innerHTML = html;
-		update_year_display();
 	}
 
 	function open()
@@ -196,7 +178,6 @@ function CountryList()
 	{
 		is_open = false;
 		panel.classList.remove('open');
-		stop_year_hold_all();
 	}
 
 	// 年・言語が変わった時に呼ばれる。パネルが閉じている間は再計算しない
@@ -212,128 +193,6 @@ function CountryList()
 	{
 		on_jump_handler = f;
 	};
-
-	// 年表示をタップして数値入力で直接ジャンプする(画面上部の#year-textと
-	// 同じ入力規則: -?で始まる最大4桁の数値。西暦0年は存在しない)
-	let on_year_change_handler = null;
-	this.onyearchange = function(f)
-	{
-		on_year_change_handler = f;
-	};
-
-	function enter_year_input()
-	{
-		yearEl.style.display = 'none';
-		yearInputEl.style.display = 'inline-block';
-		// あらかじめ入力欄を空にしておく(現在の年はplaceholderで示す)。
-		// 値を全選択した状態でフォーカスすると、iOS等で範囲選択ハンドルが
-		// 表示されてしまうため、それを避けつつ入力し直しやすくしている
-		yearInputEl.value = '';
-		yearInputEl.placeholder = String(data.year);
-		setTimeout(function() {
-			yearInputEl.focus();
-		}, 50);
-	}
-	function commit_year_input()
-	{
-		yearEl.style.display = '';
-		yearInputEl.style.display = 'none';
-
-		let text = yearInputEl.value;
-		if (text.match(/^-?\d{1,4}$/)) {
-			data.year = Number(text);
-			data.year_clamp();
-			render();
-			if (on_year_change_handler) {
-				on_year_change_handler();
-			}
-		} else {
-			update_year_display();
-		}
-	}
-	yearEl.addEventListener('click', enter_year_input);
-	yearInputEl.addEventListener('blur', commit_year_input);
-	yearInputEl.addEventListener('keydown', function(e)
-	{
-		if (e.key === 'Enter') {
-			e.preventDefault();
-			yearInputEl.blur();
-		}
-	});
-
-	// ◀/▶ボタン: タップで1年、押し続けると一定間隔で自動的に進み続け、
-	// 指を離すと止まる(その年に達すると自動的に停止する)。
-	// 1〜2秒ほど押し続けるとさらに速い間隔に切り替わる(2段階加速)
-	const YEAR_HOLD_INITIAL_DELAY_MS = 400;
-	const YEAR_HOLD_REPEAT_INTERVAL_MS = 120;
-	const YEAR_HOLD_ACCEL_DELAY_MS = 1200;
-	const YEAR_HOLD_FAST_INTERVAL_MS = 35;
-	const year_hold_stoppers = [];
-
-	function stop_year_hold_all()
-	{
-		for (let i = 0; i < year_hold_stoppers.length; i++) {
-			year_hold_stoppers[i]();
-		}
-	}
-	function bind_year_hold_button(el, delta)
-	{
-		let initial_timer = null;
-		let accel_timer = null;
-		let repeat_timer = null;
-
-		function step()
-		{
-			let before = data.year;
-			data.year += delta;
-			data.year_clamp();
-			render();
-			if (on_year_change_handler) {
-				on_year_change_handler();
-			}
-			if (data.year === before) {
-				stop();
-			}
-		}
-		function start()
-		{
-			stop();
-			step();
-			initial_timer = setTimeout(function() {
-				repeat_timer = setInterval(step, YEAR_HOLD_REPEAT_INTERVAL_MS);
-				accel_timer = setTimeout(function() {
-					clearInterval(repeat_timer);
-					repeat_timer = setInterval(step, YEAR_HOLD_FAST_INTERVAL_MS);
-				}, YEAR_HOLD_ACCEL_DELAY_MS);
-			}, YEAR_HOLD_INITIAL_DELAY_MS);
-		}
-		function stop()
-		{
-			if (initial_timer) {
-				clearTimeout(initial_timer);
-				initial_timer = null;
-			}
-			if (accel_timer) {
-				clearTimeout(accel_timer);
-				accel_timer = null;
-			}
-			if (repeat_timer) {
-				clearInterval(repeat_timer);
-				repeat_timer = null;
-			}
-		}
-
-		el.addEventListener('mousedown', function(e) { start(); e.preventDefault(); });
-		el.addEventListener('touchstart', function(e) { start(); e.preventDefault(); }, { passive: false });
-		el.addEventListener('mouseup', stop);
-		el.addEventListener('mouseleave', stop);
-		el.addEventListener('touchend', stop);
-		el.addEventListener('touchcancel', stop);
-
-		year_hold_stoppers.push(stop);
-	}
-	bind_year_hold_button(yearPrevButton, -1);
-	bind_year_hold_button(yearNextButton, 1);
 
 	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
 	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う
