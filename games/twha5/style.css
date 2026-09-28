@@ -217,11 +217,11 @@ img {
 	bottom: 48px; /* 画面下端の年号コントロールバーの上に重ねて表示する */
 	max-height: 60vh;
 	/* 背後の地図をできるだけ鮮明に見せるため、背景は薄め・ぼかしは
-	   ごく弱めにしている(文字の可読性は個々の項目の背景と
+	   試しに完全になくしている(文字の可読性は個々の項目の背景と
 	   text-shadowで確保する。詳しくは実装メモを参照) */
 	background: rgba(20, 20, 24, 0.45);
-	backdrop-filter: blur(2px);
-	-webkit-backdrop-filter: blur(2px);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
 	color: white;
 	/* 背景を薄くした分、白文字に黒い影を付けて地図の上でも読みやすくする */
 	text-shadow:
