@@ -216,10 +216,17 @@ img {
 	right: 32px; /* 右端の縦年表バー(幅32px)と重ならないようにする */
 	bottom: 48px; /* 画面下端の年号コントロールバーの上に重ねて表示する */
 	max-height: 60vh;
-	background: rgba(20, 20, 24, 0.35);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
+	/* 背後の地図をできるだけ鮮明に見せるため、背景は薄め・ぼかしは
+	   試しに完全になくしている(文字の可読性は個々の項目の背景と
+	   text-shadowで確保する。詳しくは実装メモを参照) */
+	background: rgba(20, 20, 24, 0.45);
+	backdrop-filter: none;
+	-webkit-backdrop-filter: none;
 	color: white;
+	/* 背景を薄くした分、白文字に黒い影を付けて地図の上でも読みやすくする */
+	text-shadow:
+		0 2px 4px rgba(0, 0, 0, 0.9),
+		0 0 2px rgba(0, 0, 0, 0.9);
 	z-index: 20000;
 	border-radius: 12px 12px 0 0;
 	/* bottomの分もまとめて下げないと、閉じた時に上端がわずかに
@@ -245,6 +252,11 @@ img {
 	-webkit-user-select: none;
 	user-select: none;
 	touch-action: none; /* 下スワイプでの閉じる操作をブラウザに奪われないようにする */
+	/* タイトル行だけ項目より少し濃くして見出しとして読みやすくする
+	   (パネル全体を覆う完全な不透明背景にはしない)。角丸はパネルの
+	   上端に合わせて付けておく */
+	background: rgba(0, 0, 0, 0.35);
+	border-radius: 12px 12px 0 0;
 }
 #country-list-grabber {
 	width: 36px;
@@ -392,6 +404,10 @@ img {
 	margin: 0 -4px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 	cursor: pointer;
+	/* パネル全体ではなく項目の周辺だけをうっすら暗くして文字を
+	   読みやすくする(地図はパネルの隙間からできるだけ見せたい) */
+	background: rgba(0, 0, 0, 0.2);
+	border-radius: 6px;
 }
 .country-list-item:active {
 	background: rgba(255, 255, 255, 0.1);
