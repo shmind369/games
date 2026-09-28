@@ -70,9 +70,10 @@
 	{
 		map.update();
 	});
-	country_list.onjump(function(x, y)
+	country_list.onjump(function(x, y, regionIndex)
 	{
 		map.jump_to(x, y);
+		map.highlight_region(regionIndex);
 	});
 	year_controls.onchanged(function()
 	{

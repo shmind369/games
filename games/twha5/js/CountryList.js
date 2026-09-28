@@ -4,7 +4,7 @@ function CountryList()
 {
 	const toggleButton = document.getElementById('country-list-toggle');
 	const panel = document.getElementById('country-list-panel');
-	const closeButton = document.getElementById('country-list-close');
+	const headbarEl = document.getElementById('country-list-headbar');
 	const titleEl = document.getElementById('country-list-title');
 	const bodyEl = document.getElementById('country-list-body');
 
@@ -159,7 +159,8 @@ function CountryList()
 
 			let nameYears = r.name_start_year !== null ? nth_year_text(year - r.name_start_year + 1) : '';
 			let flagImg = r.flag ? '<img class="country-list-flag" src="sym/' + escape_html(r.flag) + '.png" alt="">' : '';
-			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y + '">' +
+			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y +
+				'" data-region-index="' + i + '">' +
 				'<div class="country-list-name">' + flagImg + escape_html(name) +
 				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
@@ -188,6 +189,8 @@ function CountryList()
 		}
 	};
 
+	// on_jump_handler(x, y, regionIndex): regionIndexはregion_list内の
+	// インデックスで、地図側でジャンプ先の地域名を赤くハイライトするために使う
 	let on_jump_handler = null;
 	this.onjump = function(f)
 	{
@@ -204,7 +207,7 @@ function CountryList()
 			return;
 		}
 		if (on_jump_handler) {
-			on_jump_handler(Number(item.dataset.x), Number(item.dataset.y));
+			on_jump_handler(Number(item.dataset.x), Number(item.dataset.y), Number(item.dataset.regionIndex));
 		}
 		close();
 	});
@@ -227,14 +230,55 @@ function CountryList()
 		}
 		e.preventDefault();
 	}, { passive: false });
-	closeButton.addEventListener('mousedown', function(e)
+
+	// ヘッダーを下にスワイプするとパネルを閉じる(×ボタンは廃止)。
+	// 一定距離を超えるまでは指の動きにそのまま追従させ、離した時に
+	// 閾値を超えていれば閉じる・超えていなければ元の位置へ戻す
+	const DRAG_CLOSE_THRESHOLD_PX = 60;
+	let drag_start_y = null;
+	let drag_current_y = 0;
+
+	function drag_start(y)
 	{
-		close();
-		e.preventDefault();
+		drag_start_y = y;
+		drag_current_y = 0;
+		panel.style.transition = 'none';
+	}
+	function drag_move(y)
+	{
+		if (drag_start_y === null) {
+			return;
+		}
+		let dy = y - drag_start_y;
+		if (dy < 0) {
+			dy = 0;
+		}
+		drag_current_y = dy;
+		panel.style.transform = 'translateY(' + dy + 'px)';
+	}
+	function drag_end()
+	{
+		if (drag_start_y === null) {
+			return;
+		}
+		panel.style.transition = '';
+		panel.style.transform = '';
+		if (drag_current_y > DRAG_CLOSE_THRESHOLD_PX) {
+			close();
+		}
+		drag_start_y = null;
+		drag_current_y = 0;
+	}
+
+	headbarEl.addEventListener('touchstart', function(e)
+	{
+		drag_start(e.touches[0].clientY);
 	});
-	closeButton.addEventListener('touchstart', function(e)
+	headbarEl.addEventListener('touchmove', function(e)
 	{
-		close();
+		drag_move(e.touches[0].clientY);
 		e.preventDefault();
 	}, { passive: false });
+	headbarEl.addEventListener('touchend', drag_end);
+	headbarEl.addEventListener('touchcancel', drag_end);
 }

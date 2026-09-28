@@ -160,6 +160,10 @@ img {
 	font-weight: bold;
     cursor: default;
 }
+/* 一覧からジャンプした先の地域名を目立たせる表示(地図を動かすと解除) */
+.region-highlight .region-title {
+	color: #ff3333;
+}
 .person-list {
 	background: rgba(255,255,255,0.75);
 	color: black;
@@ -201,7 +205,9 @@ img {
 	right: 0;
 	bottom: 48px; /* 画面下端の年号コントロールバーの上に重ねて表示する */
 	max-height: 60vh;
-	background: rgba(20, 20, 24, 0.96);
+	background: rgba(20, 20, 24, 0.6);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
 	color: white;
 	z-index: 20000;
 	border-radius: 12px 12px 0 0;
@@ -218,22 +224,23 @@ img {
 }
 #country-list-headbar {
 	display: flex;
+	flex-direction: column;
 	align-items: center;
-	justify-content: space-between;
-	padding: 10px 14px;
+	padding: 8px 14px 10px;
 	border-bottom: 1px solid rgba(255, 255, 255, 0.15);
 	font-weight: bold;
 	font-size: 14px;
 	flex: 0 0 auto;
 	-webkit-user-select: none;
 	user-select: none;
+	touch-action: none; /* 下スワイプでの閉じる操作をブラウザに奪われないようにする */
 }
-#country-list-close {
-	cursor: pointer;
-	font-size: 22px;
-	line-height: 1;
-	padding: 0 4px;
-	flex: 0 0 auto;
+#country-list-grabber {
+	width: 36px;
+	height: 4px;
+	border-radius: 2px;
+	background: rgba(255, 255, 255, 0.35);
+	margin-bottom: 8px;
 }
 #country-list-body {
 	overflow-y: auto;
