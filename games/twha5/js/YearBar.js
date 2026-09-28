@@ -64,12 +64,13 @@ function YearBar()
 
 		// 100年単位の目盛り線と年号。紀元前パートは年数が密集して
 		// ラベル同士が重なるため、直近のラベルから一定間隔空いている
-		// 時だけ文字を描く(目盛り線自体は100年ごとに必ず引く)
-		const LABEL_MIN_GAP_PX = 11;
+		// 時だけ文字を描く(目盛り線自体は100年ごとに必ず引く)。
+		// 数字は縦書きではなく横書きで表示する
+		const LABEL_MIN_GAP_PX = 9;
 		ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
 		ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-		ctx.font = '7px sans-serif';
-		ctx.textAlign = 'center';
+		ctx.font = '8px sans-serif';
+		ctx.textAlign = 'right';
 		ctx.textBaseline = 'middle';
 		let last_label_y = -Infinity;
 		for (let year = MIN_YEAR; year <= 2000; year += 100) {
@@ -81,15 +82,11 @@ function YearBar()
 
 			ctx.beginPath();
 			ctx.moveTo(0, y);
-			ctx.lineTo(6, y);
+			ctx.lineTo(5, y);
 			ctx.stroke();
 
 			if (y - last_label_y >= LABEL_MIN_GAP_PX) {
-				ctx.save();
-				ctx.translate(19, y);
-				ctx.rotate(-Math.PI / 2);
-				ctx.fillText(String(year), 0, 0);
-				ctx.restore();
+				ctx.fillText(String(year), _SIZE - 1, y);
 				last_label_y = y;
 			}
 		}
