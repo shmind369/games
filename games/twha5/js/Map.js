@@ -9,7 +9,13 @@ function Map()
 	const MAP_SIZE = 450;
 	const MAP_X = 8;
 	const MAP_Y = 4;
-	const SCALES = [0.5, 1, 2, 4, 8];
+	// data.zoomは0〜4の連続値(小数可)。0=0.5倍・1=1倍・2=2倍・3=4倍・
+	// 4=8倍という、以前の5段階固定ズーム(SCALES配列)の目盛りと同じ値を
+	// 通るように、1段階=2倍になる指数関数で拡大率を求める
+	function scale_for_zoom(z)
+	{
+		return Math.pow(2, z - 1);
+	}
 
 	const mpLandCache = new Array(MAP_X * MAP_Y);
 	const mpTertCache = new Array(MAP_X * MAP_Y);
@@ -81,15 +87,15 @@ function Map()
 	{
 		// zoomが変化している場合、座標中心も変化する
 		if (prev_zoom !== data.zoom) {
-			data.map_x = Math.round(data.map_x * SCALES[data.zoom] / SCALES[prev_zoom]);
-			data.map_y = Math.round(data.map_y * SCALES[data.zoom] / SCALES[prev_zoom]);
+			data.map_x = Math.round(data.map_x * scale_for_zoom(data.zoom) / scale_for_zoom(prev_zoom));
+			data.map_y = Math.round(data.map_y * scale_for_zoom(data.zoom) / scale_for_zoom(prev_zoom));
 			prev_zoom = data.zoom;
 		}
 
 		// マップの表示範囲を計算
 		let curX = data.map_x;
 		let curY = data.map_y;
-		let mapSize = MAP_SIZE * SCALES[data.zoom];
+		let mapSize = MAP_SIZE * scale_for_zoom(data.zoom);
 		let maxW = Math.ceil(curWidth / mapSize);
 		let maxH = Math.ceil(curHeight / mapSize);
 
@@ -224,7 +230,7 @@ function Map()
 			visible_regions = [];
 			prev_year = data.year;
 		}
-		let scale = SCALES[data.zoom];
+		let scale = scale_for_zoom(data.zoom);
 		let mapSize = MAP_SIZE * scale;
 		let curX = data.map_x;
 		let curY = data.map_y;
@@ -261,7 +267,7 @@ function Map()
 	// スクロール位置を合わせる
 	function limit_map_center()
 	{
-		let mapSize = MAP_SIZE * SCALES[data.zoom];
+		let mapSize = MAP_SIZE * scale_for_zoom(data.zoom);
 		let maxX = MAP_X * mapSize;
 		let maxY = MAP_Y * mapSize;
 
@@ -325,7 +331,7 @@ function Map()
 	{
 		cancel_jump_animation();
 
-		let scale = SCALES[data.zoom];
+		let scale = scale_for_zoom(data.zoom);
 		let mapSize = MAP_SIZE * scale;
 		let maxX = MAP_X * mapSize;
 		let maxY = MAP_Y * mapSize;
@@ -400,6 +406,31 @@ function Map()
 		on_zoom_changed_handler = f;
 	};
 
+	const ZOOM_MIN = 0;
+	const ZOOM_MAX = 4;
+
+	// data.zoomを指定した量だけ連続的に変化させる(ピンチ・ドラッグズーム・
+	// マウスホイールいずれからも共通で使う)。範囲外にはクランプする
+	function apply_zoom_delta(delta)
+	{
+		let z = data.zoom + delta;
+		if (z < ZOOM_MIN) {
+			z = ZOOM_MIN;
+		} else if (z > ZOOM_MAX) {
+			z = ZOOM_MAX;
+		}
+		if (z === data.zoom) {
+			return;
+		}
+		data.zoom = z;
+		if (on_zoom_changed_handler) {
+			on_zoom_changed_handler();
+		}
+		update_map();
+		update_info();
+	}
+	this.adjust_zoom = apply_zoom_delta;
+
 	infoLayer.addEventListener('mousedown', function(e)
 	{
 		cancel_jump_animation();
@@ -429,7 +460,10 @@ function Map()
 	// ダブルタップ後、指を離さず上下にドラッグして片手でズーム(Googleマップ風)
 	const DOUBLE_TAP_INTERVAL_MS = 300;
 	const DOUBLE_TAP_MOVE_PX = 30;
+	// 指をこの距離だけ動かすと、ズームレベル1段階分(拡大率が2倍/半分)
+	// 変化する感度。値が小さいほど少しの動きで大きく拡大縮小する
 	const ZOOM_DRAG_STEP_PX = 28;
+	const PINCH_ZOOM_SENSITIVITY_PX = 24;
 	let last_tap_time = 0;
 	let last_tap_x = 0;
 	let last_tap_y = 0;
@@ -488,21 +522,11 @@ function Map()
 			let y = e.touches[0].clientY;
 
 			if (zoom_drag_active) {
-				// ダブルタップ長押しドラッグでズーム(上方向=拡大、下方向=縮小)
+				// ダブルタップ長押しドラッグでズーム(上方向=拡大、下方向=縮小)。
+				// 指を動かした量に比例して連続的に拡大率を変える
 				let diff = zoom_drag_base_y - y;
-				if (Math.abs(diff) > ZOOM_DRAG_STEP_PX) {
-					if (diff > 0 && data.zoom < 4) {
-						data.zoom++;
-					} else if (diff < 0 && data.zoom > 0) {
-						data.zoom--;
-					}
-					zoom_drag_base_y = y;
-					if (on_zoom_changed_handler) {
-						on_zoom_changed_handler();
-					}
-					update_map();
-					update_info();
-				}
+				apply_zoom_delta(diff / ZOOM_DRAG_STEP_PX);
+				zoom_drag_base_y = y;
 			} else {
 				// 1本指ドラッグでスクロール
 				data.map_x += mousedown_x - x;
@@ -515,26 +539,13 @@ function Map()
 			mousedown_y = y;
 		} else if (e.touches.length == 2) {
 			zoom_drag_active = false;
-			// 2本指ピンチでズーム
+			// 2本指ピンチでズーム。指の間隔の変化量に比例して連続的に
+			// 拡大率を変える
 			let dist = touch_dist(e.touches[0], e.touches[1]);
 			if (touch_pinch_dist > 0) {
-				let diff = dist - touch_pinch_dist;
-				if (Math.abs(diff) > 24) {
-					if (diff > 0 && data.zoom < 4) {
-						data.zoom++;
-					} else if (diff < 0 && data.zoom > 0) {
-						data.zoom--;
-					}
-					if (on_zoom_changed_handler) {
-						on_zoom_changed_handler();
-					}
-					touch_pinch_dist = dist;
-					update_map();
-					update_info();
-				}
-			} else {
-				touch_pinch_dist = dist;
+				apply_zoom_delta((dist - touch_pinch_dist) / PINCH_ZOOM_SENSITIVITY_PX);
 			}
+			touch_pinch_dist = dist;
 		}
 		e.preventDefault();
 	}, { passive: false });

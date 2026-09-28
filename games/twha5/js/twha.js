@@ -19,6 +19,9 @@
 	let screen_width = 0;
 	let screen_height = 0;
 	let resize_timer = -1;
+	// マウスホイールでのズーム感度。ホイール1ノッチ(だいたい±100〜120)
+	// あたりズーム段階のこの分の1だけ変化する(値が大きいほど鈍感になる)
+	const WHEEL_ZOOM_SENSITIVITY = 300;
 
 	data.year_clamp = function()
 	{
@@ -117,19 +120,11 @@
 	})(function(e)
 	{
 		let delta = e.wheelDelta ? e.wheelDelta : e.deltaY ? -e.deltaY : -e.detail;
-		if (delta > 0) {
-			if (data.zoom < 4) {
-				data.zoom++;
-				zoom_bar.update();
-				map.update();
-			}
-		} else if (delta < 0) {
-			if (data.zoom > 0) {
-				data.zoom--;
-				zoom_bar.update();
-				map.update();
-			}
-		}
+		// ホイール1ノッチ(だいたい±100〜120)でズーム1段階分の一部だけ
+		// 連続的に変化させ、5段階のカクカクした切り替えではなく滑らかに
+		// 拡大縮小できるようにする(zoom_bar.update()はmap側の
+		// on_zoom_changedハンドラ経由で呼ばれる)
+		map.adjust_zoom(delta / WHEEL_ZOOM_SENSITIVITY);
 	});
 
 	resize();
