@@ -14,6 +14,7 @@
 	const map = new Map();
 	const country_list = new CountryList();
 	const year_controls = new YearControls();
+	const top_year_bar = new TopYearBar();
 
 	let screen_width = 0;
 	let screen_height = 0;
@@ -41,6 +42,7 @@
 		map.set_size(canvas_w, screen_height);
 
 		year_bar.resize();
+		top_year_bar.resize();
 
 		map.update();
 	}
@@ -51,6 +53,7 @@
 		map.update();
 		country_list.update();
 		year_controls.update();
+		top_year_bar.update();
 	});
 	lang_button.onchanged(function()
 	{
@@ -65,6 +68,7 @@
 		map.update();
 		country_list.update();
 		year_controls.update();
+		top_year_bar.update();
 	});
 	zoom_bar.onchanged(function()
 	{
@@ -81,6 +85,15 @@
 		year_bar.update();
 		map.update();
 		country_list.update();
+		top_year_bar.update();
+	});
+	top_year_bar.onchanged(function()
+	{
+		year_text.update();
+		year_bar.update();
+		map.update();
+		country_list.update();
+		year_controls.update();
 	});
 	map.on_zoom_changed(function()
 	{

@@ -116,6 +116,32 @@ img {
 	font-size: 14px;
 	color: white;
 }
+/* 画面上部の横向き年表バー(現在位置を赤線で示し、直接ドラッグできる) */
+#top-year-bar {
+	position: fixed;
+	top: 48px; /* #headの高さ分だけ空けて配置する */
+	left: 0;
+	right: 32px; /* 右端の縦年表バー(幅32px)を避ける */
+	height: 30px;
+	touch-action: none;
+	z-index: 8000;
+}
+#top-year-bar-scale {
+	display: block;
+	width: 100%;
+	height: 30px;
+}
+#top-year-bar-cursor {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 3px;
+	height: 30px;
+	margin-left: -1px;
+	background: #ff2222;
+	box-shadow: 0 0 4px rgba(255, 0, 0, 0.9);
+	pointer-events: none;
+}
 #year-bar {
 	position: fixed;
 	top: 48px; /* #headの高さ分だけ空けて配置する */
