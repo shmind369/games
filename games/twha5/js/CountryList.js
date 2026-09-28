@@ -14,6 +14,16 @@ function CountryList()
 
 	let is_open = false;
 
+	// 見出しに添える現在の西暦表示(#year-textやYearControls.jsの
+	// format_yearと同じ書式)
+	function format_year(year, lang)
+	{
+		if (lang === 'en') {
+			return year < 0 ? (-year) + ' BC' : 'AD ' + year;
+		}
+		return year < 0 ? '前' + (-year) + '年' : year + '年';
+	}
+
 	// 「(年数)年目」のような経過年数の表示(1年目=最初の年)
 	function nth_year_text(n)
 	{
@@ -177,7 +187,13 @@ function CountryList()
 				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
 
-		titleEl.innerText = TITLE_TEXT[data.lang] + '(' + count + COUNT_UNIT_TEXT[data.lang] + ')';
+		let yearText = format_year(data.year, data.lang);
+		let countText = count + COUNT_UNIT_TEXT[data.lang];
+		if (data.lang === 'en') {
+			titleEl.innerText = TITLE_TEXT[data.lang] + ' (' + yearText + ', ' + countText + ')';
+		} else {
+			titleEl.innerText = TITLE_TEXT[data.lang] + '(' + yearText + '・' + countText + ')';
+		}
 		bodyEl.innerHTML = html;
 	}
 
