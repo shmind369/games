@@ -199,7 +199,9 @@ function CountryList()
 
 	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
 	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う
-	// (mousedown/touchstartだとスクロール開始の指下ろしにも反応してしまう)
+	// (mousedown/touchstartだとスクロール開始の指下ろしにも反応してしまう)。
+	// パネルの背景は透過度が高く地図が透けて見えるため、ジャンプしても
+	// パネルは閉じず、開いたまま連続して別の国へジャンプできるようにする
 	bodyEl.addEventListener('click', function(e)
 	{
 		let item = e.target.closest('.country-list-item');
@@ -209,7 +211,6 @@ function CountryList()
 		if (on_jump_handler) {
 			on_jump_handler(Number(item.dataset.x), Number(item.dataset.y), Number(item.dataset.regionIndex));
 		}
-		close();
 	});
 
 	toggleButton.addEventListener('mousedown', function(e)
