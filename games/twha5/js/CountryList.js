@@ -120,6 +120,11 @@ function CountryList()
 			.replace(/</g, '&lt;')
 			.replace(/>/g, '&gt;');
 	}
+	// data-*属性の値として埋め込むための、ダブルクオートも含めたエスケープ
+	function escape_attr(s)
+	{
+		return escape_html(s).replace(/"/g, '&quot;');
+	}
 
 	function render()
 	{
@@ -150,7 +155,13 @@ function CountryList()
 					let person = p[1][3 + lang];
 					let label = title ? escape_html(title) + ': ' : '';
 					let personYears = nth_year_text(year - p[2] + 1);
-					return '<div class="country-list-person">' + label + escape_html(person) +
+					// 地図上の元首名タップ(Region.js)と同じクエリ形式
+					// (「人物名 称号」)にして、Wikipedia要約パネルの
+					// 検索結果が地図側から開いた時と揃うようにする
+					let personQuery = title ? (person + ' ' + title) : person;
+					return '<div class="country-list-person">' + label +
+						'<span class="country-list-person-name" data-info-query="' + escape_attr(personQuery) + '">' +
+						escape_html(person) + '</span>' +
 						'<span class="country-list-years">' + personYears + '</span></div>';
 				}).join('');
 			} else {
@@ -161,7 +172,8 @@ function CountryList()
 			let flagImg = r.flag ? '<img class="country-list-flag" src="sym/' + escape_html(r.flag) + '.png" alt="">' : '';
 			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y +
 				'" data-region-index="' + i + '">' +
-				'<div class="country-list-name">' + flagImg + escape_html(name) +
+				'<div class="country-list-name">' + flagImg +
+				'<span class="country-list-name-text" data-info-query="' + escape_attr(name) + '">' + escape_html(name) + '</span>' +
 				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
 
@@ -197,13 +209,32 @@ function CountryList()
 		on_jump_handler = f;
 	};
 
+	// on_info_tap_handler(query): 国名・元首名の文字部分がタップされた時に
+	// 呼ばれる(実体はWikiPanel.show()。js/twha.js側で配線する)
+	let on_info_tap_handler = null;
+	this.oninfotap = function(f)
+	{
+		on_info_tap_handler = f;
+	};
+
 	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
 	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う
 	// (mousedown/touchstartだとスクロール開始の指下ろしにも反応してしまう)。
 	// パネルの背景は透過度が高く地図が透けて見えるため、ジャンプしても
-	// パネルは閉じず、開いたまま連続して別の国へジャンプできるようにする
+	// パネルは閉じず、開いたまま連続して別の国へジャンプできるようにする。
+	// ただし国名・元首名の文字部分がタップされた場合は、地図上の同じ名前を
+	// タップした時と同様にWikipedia要約パネルを開き、ジャンプはしない
+	// (地図ジャンプとの誤操作を避けるため、行のそれ以外の部分をタップした
+	// 場合のみジャンプする)
 	bodyEl.addEventListener('click', function(e)
 	{
+		let infoEl = e.target.closest('[data-info-query]');
+		if (infoEl) {
+			if (on_info_tap_handler) {
+				on_info_tap_handler(infoEl.dataset.infoQuery);
+			}
+			return;
+		}
 		let item = e.target.closest('.country-list-item');
 		if (!item) {
 			return;
