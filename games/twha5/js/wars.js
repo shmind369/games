@@ -36,4 +36,14 @@ const war_list = [
 	{ start: 1939, end: 1946, x: 1900, y: 375, type: 'war',
 	  name: { ja: '第二次世界大戦', en: 'World War II', zh: '第二次世界大战' },
 	  sides: { ja: '連合国 vs 枢軸国', en: 'Allies vs Axis', zh: '同盟国 vs 轴心国' } },
+
+	// 赤壁の戦い(208年、長江中流域。魏の曹操軍 vs 孫権・劉備の連合軍)
+	{ start: 208, end: 209, x: 2910, y: 590, type: 'war',
+	  name: { ja: '赤壁の戦い', en: 'Battle of Red Cliffs', zh: '赤壁之战' },
+	  sides: { ja: '曹操(魏) vs 孫権・劉備連合軍', en: 'Cao Cao vs Sun Quan–Liu Bei alliance', zh: '曹操 vs 孙权刘备联军' } },
+
+	// 関ヶ原の戦い(1600年、美濃国関ヶ原。東軍(徳川家康) vs 西軍(石田三成))
+	{ start: 1600, end: 1601, x: 3190, y: 565, type: 'war',
+	  name: { ja: '関ヶ原の戦い', en: 'Battle of Sekigahara', zh: '关原之战' },
+	  sides: { ja: '東軍(徳川家康) vs 西軍(石田三成)', en: 'Eastern Army (Tokugawa Ieyasu) vs Western Army (Ishida Mitsunari)', zh: '东军(德川家康) vs 西军(石田三成)' } },
 ];
