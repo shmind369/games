@@ -347,6 +347,41 @@ img {
 	font-style: italic;
 	font-size: 12px;
 }
+/* その年のWikipedia記事(できごと節)からタップ時にだけ取得する、
+   一般的な出来事一覧。js/wars.jsの出来事(赤バッジ)とは見た目を分け、
+   通常のテキスト一覧として表示する */
+.country-list-wiki-events {
+	margin: 2px -4px 10px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+.country-list-wiki-events-title {
+	font-size: 11px;
+	font-weight: bold;
+	opacity: 0.8;
+	margin-bottom: 4px;
+}
+.country-list-wiki-events-status {
+	padding: 4px 0;
+	opacity: 0.7;
+	font-style: italic;
+	font-size: 12px;
+}
+.country-list-wiki-events-list {
+	margin: 0;
+	padding-left: 18px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+.country-list-wiki-events-list li {
+	margin: 3px 0;
+}
+.country-list-wiki-events-link {
+	display: inline-block;
+	margin-top: 4px;
+	font-size: 12px;
+	color: #9cf;
+}
 #country-list-body {
 	overflow-y: auto;
 	padding: 4px 14px 20px;

@@ -17,6 +17,24 @@ function CountryList()
 	// の一覧を表示/非表示できるようにする
 	let show_events = false;
 
+	// その年のWikipedia記事から取得した一般的な出来事一覧のキャッシュ。
+	// year -> {items:[...]} | {notfound:true,title} | {error:true,title} |
+	// 'loading'(取得中) | undefined(未取得・未予約)
+	let wiki_events_cache = {};
+	// 年を連続送りしている間(◀/▶長押し)に毎回Wikipediaへリクエストを
+	// 送らないよう、一定時間その年のまま変化が無ければ取得を開始する
+	// (見出しタップで一覧を開いた時だけ取得したいので、閉じている間は
+	// この関数自体が呼ばれない)
+	const WIKI_EVENTS_DEBOUNCE_MS = 400;
+	let wiki_fetch_timer = null;
+	let wiki_fetch_pending_year = null;
+
+	const WIKI_EVENTS_TITLE_TEXT = { ja: 'その他の出来事(日本語版Wikipediaより)', en: 'Other events (from Japanese Wikipedia)', zh: '其他事件(来自日语维基百科)' };
+	const WIKI_EVENTS_LOADING_TEXT = { ja: '読み込み中…', en: 'Loading…', zh: '加载中…' };
+	const WIKI_EVENTS_NOTFOUND_TEXT = { ja: 'この年のWikipedia記事が見つかりませんでした', en: 'No Wikipedia article was found for this year', zh: '未找到该年份的维基百科条目' };
+	const WIKI_EVENTS_ERROR_TEXT = { ja: '読み込みに失敗しました', en: 'Failed to load', zh: '加载失败' };
+	const WIKI_EVENTS_SEARCH_LINK_TEXT = { ja: 'Wikipediaで見る', en: 'View on Wikipedia', zh: '在维基百科上查看' };
+
 	// 見出しに使う現在の西暦表示(#year-textやYearControls.jsの
 	// format_yearと同じ書式)
 	function format_year(year, lang)
@@ -209,6 +227,69 @@ function CountryList()
 		return '<div class="country-list-events">' + html + '</div>';
 	}
 
+	// year年のWikipedia記事(js/YearEvents.jsのfetch_year_events)をまだ
+	// 取得・予約していなければ、デバウンス後に取得を開始する
+	function ensure_wiki_events(year)
+	{
+		if (wiki_events_cache[year] !== undefined) {
+			return;
+		}
+		if (wiki_fetch_timer !== null) {
+			if (wiki_fetch_pending_year === year) {
+				return;
+			}
+			clearTimeout(wiki_fetch_timer);
+		}
+		wiki_fetch_pending_year = year;
+		wiki_fetch_timer = setTimeout(function()
+		{
+			wiki_fetch_timer = null;
+			wiki_events_cache[year] = 'loading';
+			fetch_year_events(year, function(result)
+			{
+				wiki_events_cache[year] = result;
+				// 取得完了時にまだ同じ年の出来事一覧を開いたままなら再描画する
+				if (is_open && show_events && data.year === year) {
+					render();
+				}
+			});
+		}, WIKI_EVENTS_DEBOUNCE_MS);
+	}
+
+	// その年のWikipedia記事から取得した一般的な出来事一覧のHTML。
+	// 未取得ならensure_wiki_events()で取得を予約しつつ「読み込み中」を
+	// 表示し、取得済みならその内容(または見つからなかった旨)を表示する
+	function build_wiki_events_html(year)
+	{
+		ensure_wiki_events(year);
+		let entry = wiki_events_cache[year];
+
+		let bodyHtml;
+		if (entry === undefined || entry === 'loading') {
+			bodyHtml = '<div class="country-list-wiki-events-status">' +
+				escape_html(WIKI_EVENTS_LOADING_TEXT[data.lang]) + '</div>';
+		} else if (entry.items) {
+			if (entry.items.length === 0) {
+				bodyHtml = '<div class="country-list-wiki-events-status">' +
+					escape_html(NO_EVENTS_TEXT[data.lang]) + '</div>';
+			} else {
+				bodyHtml = '<ul class="country-list-wiki-events-list">' +
+					entry.items.map(function(t) { return '<li>' + escape_html(t) + '</li>'; }).join('') +
+					'</ul>';
+			}
+		} else {
+			let msg = entry.error ? WIKI_EVENTS_ERROR_TEXT[data.lang] : WIKI_EVENTS_NOTFOUND_TEXT[data.lang];
+			bodyHtml = '<div class="country-list-wiki-events-status">' + escape_html(msg) + '</div>' +
+				'<a class="country-list-wiki-events-link" href="https://ja.wikipedia.org/w/index.php?search=' +
+				encodeURIComponent(entry.title) + '" target="_blank" rel="noopener">' +
+				escape_html(WIKI_EVENTS_SEARCH_LINK_TEXT[data.lang]) + '</a>';
+		}
+
+		return '<div class="country-list-wiki-events">' +
+			'<div class="country-list-wiki-events-title">' + escape_html(WIKI_EVENTS_TITLE_TEXT[data.lang]) + '</div>' +
+			bodyHtml + '</div>';
+	}
+
 	function render()
 	{
 		let anchor = capture_scroll_anchor();
@@ -216,7 +297,7 @@ function CountryList()
 		let lang = lang_name_to_id(data.lang);
 		let year = data.year;
 		let seen = new Set();
-		let html = show_events ? build_events_html(year) : '';
+		let html = show_events ? (build_events_html(year) + build_wiki_events_html(year)) : '';
 		let count = 0;
 
 		for (let i = 0; i < region_list.length; i++) {
