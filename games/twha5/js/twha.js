@@ -14,6 +14,8 @@
 	const map = new Map();
 	const country_list = new CountryList();
 	const wiki_panel = new WikiPanel();
+	const relations_panel = new RelationsPanel();
+	const relations_toggle = new RelationsToggle();
 	const year_controls = new YearControls();
 
 	let screen_width = 0;
@@ -54,6 +56,7 @@
 		year_text.update();
 		map.update();
 		country_list.update();
+		relations_panel.update();
 		year_controls.update();
 	});
 	lang_button.onchanged(function()
@@ -61,6 +64,7 @@
 		year_text.update();
 		map.update_style();
 		country_list.update();
+		relations_panel.update();
 		year_controls.update();
 	});
 	year_text.onchanged(function()
@@ -68,6 +72,7 @@
 		year_bar.update();
 		map.update();
 		country_list.update();
+		relations_panel.update();
 		year_controls.update();
 	});
 	zoom_bar.onchanged(function()
@@ -87,12 +92,30 @@
 	{
 		wiki_panel.show(query);
 	});
+	country_list.onrelationtap(function(jaName)
+	{
+		relations_panel.show(jaName);
+	});
+	Region.onRelationTap(function(jaName)
+	{
+		relations_panel.show(jaName);
+	});
+	// 「国際関係」モードをOFFにした時点で、開いていれば関係性パネルを
+	// 閉じ、それ以上の計算が走らないようにする(要望の「OFFの場合は
+	// 関係性に関する計算・描画を可能な限り行わない」に対応)
+	relations_toggle.onchanged(function(on)
+	{
+		if (!on) {
+			relations_panel.close();
+		}
+	});
 	year_controls.onchanged(function()
 	{
 		year_text.update();
 		year_bar.update();
 		map.update();
 		country_list.update();
+		relations_panel.update();
 	});
 	map.on_zoom_changed(function()
 	{

@@ -22,11 +22,27 @@ function trigger_info_tap(query)
 	}
 }
 
+// 「国際関係」モード中に国名がタップされた時の処理も同様に疎結合で
+// 登録する(実体はRelationsPanel.show())。人物名タップなど国名以外には
+// 影響しない(attach_country_tap()を使う場所だけがこちらに分岐する)
+let relation_tap_handler = null;
+Region.onRelationTap = function(f)
+{
+	relation_tap_handler = f;
+};
+function trigger_relation_tap(jaName)
+{
+	if (jaName && relation_tap_handler) {
+		relation_tap_handler(jaName);
+	}
+}
+
 // タップ(指を動かさず離す)とドラッグ(地図のパン操作)を区別するため、
 // touchstart/touchendの座標差・経過時間で判定する。クリック(マウス)は
 // そのまま利用できるが、タップ側で既に処理済みの場合は二重に開かない
-// ようにフラグで抑制する
-function attach_tap_search(el, get_query)
+// ようにフラグで抑制する。tap_callback()は実際にタップと判定された時に
+// 一度だけ呼ばれる
+function on_tap(el, tap_callback)
 {
 	let start_x = 0, start_y = 0, start_t = 0;
 	let touch_handled = false;
@@ -51,7 +67,7 @@ function attach_tap_search(el, get_query)
 			Date.now() - start_t < TAP_MAX_DURATION_MS)
 		{
 			touch_handled = true;
-			trigger_info_tap(get_query());
+			tap_callback();
 			e.preventDefault();
 		}
 	}, { passive: false });
@@ -61,7 +77,25 @@ function attach_tap_search(el, get_query)
 			touch_handled = false;
 			return;
 		}
-		trigger_info_tap(get_query());
+		tap_callback();
+	});
+}
+function attach_tap_search(el, get_query)
+{
+	on_tap(el, function() { trigger_info_tap(get_query()); });
+}
+// 国名(地域名)のタップ専用。「国際関係」モード中はWikipedia要約の
+// 代わりに関係性パネルを開く。get_ja_name()は関係性データ
+// (js/relations.js)の検索キーであるja表記名を返す必要がある
+function attach_country_tap(el, get_ja_name, get_query)
+{
+	on_tap(el, function()
+	{
+		if (data.relations_mode) {
+			trigger_relation_tap(get_ja_name());
+		} else {
+			trigger_info_tap(get_query());
+		}
 	});
 }
 
@@ -85,11 +119,13 @@ function Region(a)
 		title.classList.add('region-title');
 		node.appendChild(title);
 
-		attach_tap_search(title, function()
-		{
-			let lang = lang_name_to_id(data.lang);
-			return region_name[lang] || region_abbr[lang];
-		});
+		attach_country_tap(title,
+			function() { return region_name[0] || region_abbr[0]; },
+			function()
+			{
+				let lang = lang_name_to_id(data.lang);
+				return region_name[lang] || region_abbr[lang];
+			});
 
 		return node;
 	}
