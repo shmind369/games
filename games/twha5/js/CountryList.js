@@ -339,7 +339,8 @@ function CountryList()
 			html += '<div class="country-list-item" data-x="' + r.pos_x + '" data-y="' + r.pos_y +
 				'" data-region-index="' + i + '">' +
 				'<div class="country-list-name">' + flagImg +
-				'<span class="country-list-name-text" data-info-query="' + escape_attr(name) + '">' + escape_html(name) + '</span>' +
+				'<span class="country-list-name-text" data-info-query="' + escape_attr(name) +
+				'" data-ja-name="' + escape_attr(r.name[0]) + '">' + escape_html(name) + '</span>' +
 				'<span class="country-list-years">' + nameYears + '</span></div>' + peopleHtml + '</div>';
 		}
 
@@ -403,6 +404,16 @@ function CountryList()
 		on_info_tap_handler = f;
 	};
 
+	// on_relation_tap_handler(jaName): 「国際関係」モード中に国名の文字
+	// 部分がタップされた時に呼ばれる(実体はRelationsPanel.show()。
+	// js/twha.js側で配線する)。元首名タップには影響しない
+	// (data-ja-name属性を持つのは国名だけのため)
+	let on_relation_tap_handler = null;
+	this.onrelationtap = function(f)
+	{
+		on_relation_tap_handler = f;
+	};
+
 	// リスト本体はスクロールもできるため、スクロール操作の指離しを誤って
 	// ジャンプと判定しないよう、タップ確定後にのみ発火する'click'を使う
 	// (mousedown/touchstartだとスクロール開始の指下ろしにも反応してしまう)。
@@ -416,7 +427,13 @@ function CountryList()
 	{
 		let infoEl = e.target.closest('[data-info-query]');
 		if (infoEl) {
-			if (on_info_tap_handler) {
+			// 「国際関係」モード中は、国名(data-ja-name属性を持つ要素)の
+			// タップだけWikipedia要約の代わりに関係性パネルを開く。
+			// 元首名・出来事名には影響しない(data-ja-name属性が無いため
+			// 従来通りWikipedia要約パネルが開く)
+			if (data.relations_mode && infoEl.dataset.jaName && on_relation_tap_handler) {
+				on_relation_tap_handler(infoEl.dataset.jaName);
+			} else if (on_info_tap_handler) {
 				on_info_tap_handler(infoEl.dataset.infoQuery);
 			}
 			return;

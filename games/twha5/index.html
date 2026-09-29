@@ -16,6 +16,10 @@ const data = {
 	year: -4000,
 	zoom: 1,
 	lang: 'ja',
+	// 「国際関係」モード。ONの間だけ、国名タップの挙動がWikipedia要約
+	// から関係性パネル表示に切り替わる(js/RelationsToggle.js・
+	// js/RelationsPanel.js参照)
+	relations_mode: false,
 };
 
 </script>
@@ -23,10 +27,13 @@ const data = {
 <script type="application/javascript" src="js/territory.js" defer></script>
 <script type="application/javascript" src="js/regions.js" defer></script>
 <script type="application/javascript" src="js/wars.js" defer></script>
+<script type="application/javascript" src="js/relations.js" defer></script>
 <script type="application/javascript" src="js/YearEvents.js" defer></script>
 <script type="application/javascript" src="js/LangButton.js" defer></script>
 <script type="application/javascript" src="js/CountryList.js" defer></script>
 <script type="application/javascript" src="js/WikiPanel.js" defer></script>
+<script type="application/javascript" src="js/RelationsPanel.js" defer></script>
+<script type="application/javascript" src="js/RelationsToggle.js" defer></script>
 <script type="application/javascript" src="js/YearControls.js" defer></script>
 <script type="application/javascript" src="js/ZoomBar.js" defer></script>
 <script type="application/javascript" src="js/YearText.js" defer></script>
@@ -51,6 +58,7 @@ const data = {
 <canvas id="year-bar-scale"></canvas><div id="year-bar-cursor"></div>
 </div>
 <div id="country-list-toggle">国</div>
+<div id="relations-toggle">🌐</div>
 <div id="country-list-panel">
 <div id="country-list-headbar">
 <div id="country-list-grabber"></div>
@@ -64,6 +72,13 @@ const data = {
 <span id="wiki-panel-title"></span>
 </div>
 <div id="wiki-panel-body"></div>
+</div>
+<div id="relations-panel">
+<div id="relations-panel-headbar">
+<div id="relations-panel-grabber"></div>
+<span id="relations-panel-title"></span>
+</div>
+<div id="relations-panel-body"></div>
 </div>
 <div id="year-controls">
 <button id="year-controls-prev" type="button">&#9664;</button>
