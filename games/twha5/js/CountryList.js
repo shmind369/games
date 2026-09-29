@@ -10,8 +10,12 @@ function CountryList()
 
 	const COUNT_UNIT_TEXT = { ja: '件', en: '', zh: '个' };
 	const NO_PERSON_TEXT = { ja: '(元首データなし)', en: '(no ruler data)', zh: '(无元首数据)' };
+	const NO_EVENTS_TEXT = { ja: 'この年に記録されている出来事はありません', en: 'No recorded events this year', zh: '这一年没有记录的事件' };
 
 	let is_open = false;
+	// 見出しをタップすると、その年に起こった出来事(js/wars.jsのwar_list)
+	// の一覧を表示/非表示できるようにする
+	let show_events = false;
 
 	// 見出しに使う現在の西暦表示(#year-textやYearControls.jsの
 	// format_yearと同じ書式)
@@ -178,6 +182,33 @@ function CountryList()
 		}
 	}
 
+	// その年(year)に起こっている出来事(js/wars.jsのwar_list)の一覧HTML。
+	// js/WarMarker.jsのWAR_TYPE_ICONをそのまま使い、地図上のマーカーと
+	// 同じアイコンで表示する。名前部分は国名・元首名と同じ
+	// data-info-query属性を使っており、タップすると同じ仕組みで
+	// Wikipedia要約パネルが開く(bodyEl側の既存クリックハンドラを再利用)
+	function build_events_html(year)
+	{
+		let events = war_list.filter(function(w) { return year >= w.start && year < w.end; });
+
+		if (events.length === 0) {
+			return '<div class="country-list-events">' +
+				'<div class="country-list-event-none">' + escape_html(NO_EVENTS_TEXT[data.lang]) + '</div></div>';
+		}
+
+		let html = events.map(function(w) {
+			let name = (w.name && w.name[data.lang]) || w.name.ja;
+			let icon = WAR_TYPE_ICON[w.type] || WAR_TYPE_ICON.war;
+			let sidesText = w.sides ? ((w.sides[data.lang] || w.sides.ja)) : '';
+			let sidesHtml = sidesText ? '<div class="country-list-event-sides">' + escape_html(sidesText) + '</div>' : '';
+			return '<div class="country-list-event">' +
+				'<span class="country-list-event-name" data-info-query="' + escape_attr(name) + '">' +
+				escape_html(icon + ' ' + name) + '</span>' + sidesHtml + '</div>';
+		}).join('');
+
+		return '<div class="country-list-events">' + html + '</div>';
+	}
+
 	function render()
 	{
 		let anchor = capture_scroll_anchor();
@@ -185,7 +216,7 @@ function CountryList()
 		let lang = lang_name_to_id(data.lang);
 		let year = data.year;
 		let seen = new Set();
-		let html = '';
+		let html = show_events ? build_events_html(year) : '';
 		let count = 0;
 
 		for (let i = 0; i < region_list.length; i++) {
@@ -233,7 +264,10 @@ function CountryList()
 
 		let yearText = format_year(data.year, data.lang);
 		let countText = count + COUNT_UNIT_TEXT[data.lang];
-		titleEl.innerText = build_title(yearText, countText);
+		// 見出し自体がタップ可能(その年の出来事一覧の開閉)であることを
+		// 示す、開閉状態に応じた小さな矢印を末尾に添える
+		titleEl.innerHTML = escape_html(build_title(yearText, countText)) +
+			' <span class="country-list-title-toggle">' + (show_events ? '▲' : '▼') + '</span>';
 		bodyEl.innerHTML = html;
 
 		restore_scroll_anchor(anchor);
@@ -258,6 +292,19 @@ function CountryList()
 			render();
 		}
 	};
+
+	// 見出し(「〇〇年の国と元首(N件)」)をタップすると、その年に
+	// 起こった出来事(js/wars.jsのwar_list)の一覧を開閉する
+	titleEl.addEventListener('click', function()
+	{
+		show_events = !show_events;
+		render();
+		// render()内のスクロール位置維持(年変更時に表示位置を保つ機能)が
+		// そのまま働くと、出来事一覧を先頭に追加したことで一覧本体が
+		// 下にずれた分だけスクロールされてしまい、開いたはずの出来事
+		// 一覧が画面外に隠れてしまう。ここでは常に先頭へ戻す
+		bodyEl.scrollTop = 0;
+	});
 
 	// on_jump_handler(x, y, regionIndex): regionIndexはregion_list内の
 	// インデックスで、地図側でジャンプ先の地域名を赤くハイライトするために使う
