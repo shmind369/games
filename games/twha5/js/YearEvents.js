@@ -33,10 +33,19 @@ function clean_wikitext_line(s)
 }
 
 // 記事全文のwikitextから「== できごと ==」節の箇条書き行だけを取り出す。
-// 節自体が見つからなければnullを返す(項目0件の配列と区別するため)
+// 節自体が見つからなければnullを返す(項目0件の配列と区別するため)。
+// 「できごと」節は年によって以下のようにさまざまな書式のバリエーションが
+// あるため、できるだけ多くの年で項目を取りこぼさないよう複数のパターンに
+// 対応している:
+// - 見出し表記が「できごと」(ひらがな)ではなく「出来事」(漢字)の年がある
+// - 現代に近い年ほど「=== 1月 === / === 2月 === ...」のように月ごとの
+//   小見出し(レベル3以降)で分割されており、その配下に箇条書きが並ぶ
+//   (小見出し自体はレベル2の次の見出しではないため、節の終端としては
+//   扱わない)
+// - 箇条書きの記号が「*」ではなく「#」(番号付き)になっている年がある
 function parse_year_events_wikitext(wikitext)
 {
-	let heading = wikitext.match(/^==\s*できごと\s*==\s*$/m);
+	let heading = wikitext.match(/^==\s*(?:できごと|出来事)\s*==\s*$/m);
 	if (!heading) {
 		return null;
 	}
@@ -47,10 +56,11 @@ function parse_year_events_wikitext(wikitext)
 	let items = [];
 	let lines = section.split('\n');
 	for (let i = 0; i < lines.length; i++) {
-		if (!/^\*+\s*/.test(lines[i])) {
+		let m = lines[i].match(/^\s*[*#]+\s*/);
+		if (!m) {
 			continue;
 		}
-		let text = clean_wikitext_line(lines[i].replace(/^\*+\s*/, ''));
+		let text = clean_wikitext_line(lines[i].slice(m[0].length));
 		if (text) {
 			items.push(text);
 		}
