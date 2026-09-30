@@ -1,5 +1,61 @@
 import * as THREE from "three";
 
+// ---------- 左右スワイプでの回避移動(Three.js非依存の純粋関数) ----------
+const NEUTRAL_X = 0;
+const DODGE_X = 0.55;
+const OUT_MS = 140;
+const RETURN_MS = 260;
+const FAST_RETURN_MS = 110;
+
+const SWIPE_THRESHOLD_PX = 30;
+const SWIPE_MAX_MS = 500;
+
+// dx/dy/dt(ポインターの移動量と経過時間)から左右スワイプを判定する。
+// 縦画面専用のため、横方向の移動が縦方向より十分大きい場合のみスワイプとみなす
+function classifySwipe(dx, dy, dt) {
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  if (adx >= SWIPE_THRESHOLD_PX && adx > ady * 1.2 && dt <= SWIPE_MAX_MS) {
+    return dx < 0 ? "left" : "right";
+  }
+  return null;
+}
+
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+function easeOutCubic(t) { const p = clamp01(t); return 1 - Math.pow(1 - p, 3); }
+
+function createDodgeState() {
+  return { side: null, phase: null, fromX: NEUTRAL_X, toX: NEUTRAL_X, startAt: 0, durationMs: 0 };
+}
+
+// スワイプ入力を受けて次のドジ状態を返す。
+// 逆方向のスワイプが「ディフェンス中」(out/return いずれかの最中)に来た場合は、
+// ニュートラルへの復帰(return)を通常より速いdurationで即座に開始する
+function onSwipe(state, direction, now, currentX) {
+  if (state.side && state.phase && state.side !== direction) {
+    return { side: state.side, phase: "return", fromX: currentX, toX: NEUTRAL_X, startAt: now, durationMs: FAST_RETURN_MS };
+  }
+  const toX = direction === "left" ? -DODGE_X : DODGE_X;
+  return { side: direction, phase: "out", fromX: currentX, toX, startAt: now, durationMs: OUT_MS };
+}
+
+// 現在時刻がdurationを過ぎていたら次のフェーズへ遷移させる
+// (out完了→return開始、return完了→ニュートラルで停止)
+function advanceDodge(state, now) {
+  if (!state.phase) return state;
+  const elapsed = now - state.startAt;
+  if (elapsed < state.durationMs) return state;
+  if (state.phase === "out") {
+    return { side: state.side, phase: "return", fromX: state.toX, toX: NEUTRAL_X, startAt: now, durationMs: RETURN_MS };
+  }
+  return createDodgeState();
+}
+
+function computeDodgeX(state, now) {
+  if (!state.phase) return NEUTRAL_X;
+  const t = easeOutCubic((now - state.startAt) / state.durationMs);
+  return state.fromX + (state.toX - state.fromX) * t;
+}
+
 // 参照画像の構図(頭が地平線のすぐ下、キャラクターが画面下半分を占める、
 // 見下ろし気味のカメラ)を再現するためのカメラパラメータ。
 // キャラクターは原点に立ち、背中をカメラ側(+Z)に向けている(-Z方向を向く)。
@@ -175,6 +231,27 @@ shadowBlob.rotation.x = -Math.PI / 2;
 shadowBlob.position.set(0.05, 0.015, 0.18);
 scene.add(shadowBlob);
 
+// ---------- 入力(左右スワイプ) ----------
+let dodgeState = createDodgeState();
+let gestureStart = null;
+function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
+function onPointerDown(evt) {
+  gestureStart = { ...pointerPos(evt), t: performance.now() };
+}
+function onPointerUp(evt) {
+  if (!gestureStart) return;
+  const end = pointerPos(evt);
+  const now = performance.now();
+  const dx = end.x - gestureStart.x, dy = end.y - gestureStart.y, dt = now - gestureStart.t;
+  gestureStart = null;
+  const direction = classifySwipe(dx, dy, dt);
+  if (!direction) return;
+  dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now));
+}
+canvas.addEventListener("pointerdown", onPointerDown);
+canvas.addEventListener("pointerup", onPointerUp);
+canvas.addEventListener("pointercancel", () => { gestureStart = null; });
+
 // ---------- リサイズ ----------
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -186,8 +263,13 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
-// ---------- レンダーループ(現時点ではキャラクターは静止したまま) ----------
+// ---------- レンダーループ ----------
 function render() {
+  const now = performance.now();
+  dodgeState = advanceDodge(dodgeState, now);
+  const x = computeDodgeX(dodgeState, now);
+  player.position.x = x;
+  shadowBlob.position.x = x + 0.05;
   renderer.render(scene, camera);
   requestAnimationFrame(render);
 }
@@ -195,3 +277,12 @@ requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
 window.__scene = { scene, camera, player, ground, grid };
+window.__dodge = {
+  classifySwipe,
+  onSwipe,
+  advanceDodge,
+  computeDodgeX,
+  createDodgeState,
+  getState: () => dodgeState,
+  simulateSwipe: (direction, now) => { dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now)); },
+};
