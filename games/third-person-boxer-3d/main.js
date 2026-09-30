@@ -56,6 +56,32 @@ function computeDodgeX(state, now) {
   return state.fromX + (state.toX - state.fromX) * t;
 }
 
+// 回避姿勢(上半身の傾き・腰落とし・膝の曲げ)を駆動するための正規化された
+// 進行度。-1(左いっぱい)〜0(ニュートラル)〜+1(右いっぱい)を返す。
+// X移動と同じdodgeStateから導出するため、常にX移動と同期する
+function computeDodgeProgress(state, now) {
+  return computeDodgeX(state, now) / DODGE_X;
+}
+
+// 回避姿勢のパラメータ。progress(-1〜1)の符号が回避方向、絶対値が
+// 「どれだけ深く回避姿勢に入っているか」を表す
+const MAX_LEAN_Z = 0.5; // 上半身を回避方向へ傾ける角度(ラジアン)
+const MAX_LEAN_X = 0.16; // 上半身を前へかがめる角度(パンチをかわす前傾)
+const MAX_CROUCH_DROP = 0.11; // 腰を落とす量
+const MAX_HIP_BEND = 0.5; // 股関節を曲げる角度(前へ)
+const KNEE_COUNTER = 1.55; // 膝で打ち消す係数(足が浮き上がらないよう、股関節より大きく逆方向に曲げる)
+
+function computeDodgePosture(progress) {
+  const mag = Math.abs(progress);
+  return {
+    leanZ: progress * MAX_LEAN_Z,
+    leanX: mag * MAX_LEAN_X,
+    crouchDrop: mag * MAX_CROUCH_DROP,
+    hipBend: mag * MAX_HIP_BEND,
+    kneeBend: -mag * MAX_HIP_BEND * KNEE_COUNTER,
+  };
+}
+
 // 参照画像の構図(頭が地平線のすぐ下、キャラクターが画面下半分を占める、
 // 見下ろし気味のカメラ)を再現するためのカメラパラメータ。
 // キャラクターは原点に立ち、背中をカメラ側(+Z)に向けている(-Z方向を向く)。
@@ -148,18 +174,25 @@ function segmentMesh(pA, pB, radius, material) {
   return mesh;
 }
 
+// 上半身(胴体・首・頭・腕)は腰の高さ(WAIST_Y)を支点とするグループにまとめ、
+// 回避時にこの支点を中心に傾けられるようにする
+const WAIST_Y = 1.05;
+const upperBody = new THREE.Group();
+upperBody.position.set(0, WAIST_Y, 0);
+player.add(upperBody);
+
 const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.215, 0.46, 4, 12), skinMat);
-torso.position.set(0, 1.28, 0);
-player.add(torso);
+torso.position.set(0, 1.28 - WAIST_Y, 0);
+upperBody.add(torso);
 
 const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.085, 0.12, 10), skinMat);
-neck.position.set(0, 1.605, 0);
-player.add(neck);
+neck.position.set(0, 1.605 - WAIST_Y, 0);
+upperBody.add(neck);
 
 const head = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 16), skinMat);
 head.scale.set(0.92, 1.18, 1.0);
-head.position.set(0, 1.755, 0.005);
-player.add(head);
+head.position.set(0, 1.755 - WAIST_Y, 0.005);
+upperBody.add(head);
 
 const hips = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.1, 4, 12), skinMat);
 hips.position.set(0, 0.92, 0);
@@ -169,30 +202,45 @@ const shorts = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.21, 0.3, 16), 
 shorts.position.set(0, 0.9, 0);
 player.add(shorts);
 
+// 脚は「股関節(hipPivot)」→「膝関節(kneePivot)」の2段階のピボットで構築し、
+// 回避時にその場で膝を曲げて重心を落とせるようにする。各メッシュの位置は
+// 元の(ピボットなしだった頃の)絶対Y座標をそのまま維持するよう、各ピボットの
+// Y座標分だけ差し引いた相対座標にしている(棒立ちの初期姿勢は変えていない)
+const HIP_Y = 0.85;
+const KNEE_Y = 0.44;
 function makeLeg(sign) {
-  const leg = new THREE.Group();
+  const hipPivot = new THREE.Group();
+  hipPivot.position.set(sign * 0.13, HIP_Y, 0);
+
   const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.34, 4, 10), skinMat);
-  thigh.position.set(0, 0.62, 0);
-  leg.add(thigh);
+  thigh.position.set(0, 0.62 - HIP_Y, 0);
+  hipPivot.add(thigh);
+
+  const kneePivot = new THREE.Group();
+  kneePivot.position.set(0, KNEE_Y - HIP_Y, 0);
+  hipPivot.add(kneePivot);
+
   const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.34, 4, 10), skinMat);
-  calf.position.set(0, 0.24, 0.01);
-  leg.add(calf);
+  calf.position.set(0, 0.24 - KNEE_Y, 0.01);
+  kneePivot.add(calf);
   const foot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.24), skinMat);
-  foot.position.set(0, 0.035, 0.06);
-  leg.add(foot);
-  leg.position.set(sign * 0.13, 0, 0);
-  return leg;
+  foot.position.set(0, 0.035 - KNEE_Y, 0.06);
+  kneePivot.add(foot);
+
+  return hipPivot;
 }
-player.add(makeLeg(-1));
-player.add(makeLeg(1));
+const legLeft = makeLeg(-1);
+const legRight = makeLeg(1);
+player.add(legLeft);
+player.add(legRight);
 
 // 腕: 背面視点でガードを構える(肘が体側から突き出し、拳は胸の前に隠れる)ポーズ。
 // 肩→肘→拳を3点の座標で指定し、区間ごとにカプセルを生成する
 function makeArm(sign) {
   const arm = new THREE.Group();
-  const shoulder = new THREE.Vector3(sign * 0.26, 1.46, 0);
-  const elbow = new THREE.Vector3(sign * 0.3, 1.14, 0.12);
-  const fist = new THREE.Vector3(sign * 0.13, 1.5, 0.29);
+  const shoulder = new THREE.Vector3(sign * 0.26, 1.46 - WAIST_Y, 0);
+  const elbow = new THREE.Vector3(sign * 0.3, 1.14 - WAIST_Y, 0.12);
+  const fist = new THREE.Vector3(sign * 0.13, 1.5 - WAIST_Y, 0.29);
 
   arm.add(new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 12), skinMat).translateX(shoulder.x).translateY(shoulder.y).translateZ(shoulder.z));
   arm.add(segmentMesh(shoulder, elbow, 0.075, skinMat));
@@ -202,8 +250,8 @@ function makeArm(sign) {
   arm.add(fistMesh);
   return arm;
 }
-player.add(makeArm(-1));
-player.add(makeArm(1));
+upperBody.add(makeArm(-1));
+upperBody.add(makeArm(1));
 
 player.rotation.y = Math.PI; // 背中をカメラ(+Z)に向ける
 scene.add(player);
@@ -268,20 +316,35 @@ function render() {
   const now = performance.now();
   dodgeState = advanceDodge(dodgeState, now);
   const x = computeDodgeX(dodgeState, now);
+  const progress = computeDodgeProgress(dodgeState, now);
+  const posture = computeDodgePosture(progress);
+
   player.position.x = x;
+  player.position.y = -posture.crouchDrop;
   shadowBlob.position.x = x + 0.05;
+
+  upperBody.rotation.z = posture.leanZ;
+  upperBody.rotation.x = posture.leanX;
+
+  legLeft.rotation.x = posture.hipBend;
+  legRight.rotation.x = posture.hipBend;
+  legLeft.children[1].rotation.x = posture.kneeBend; // kneePivot
+  legRight.children[1].rotation.x = posture.kneeBend; // kneePivot
+
   renderer.render(scene, camera);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, player, ground, grid };
+window.__scene = { scene, camera, player, ground, grid, upperBody, legLeft, legRight };
 window.__dodge = {
   classifySwipe,
   onSwipe,
   advanceDodge,
   computeDodgeX,
+  computeDodgeProgress,
+  computeDodgePosture,
   createDodgeState,
   getState: () => dodgeState,
   simulateSwipe: (direction, now) => { dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now)); },
