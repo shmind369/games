@@ -20,24 +20,10 @@
       user-select: none;
     }
     canvas { display: block; touch-action: none; }
-
-    #hint {
-      position: fixed;
-      bottom: max(14px, env(safe-area-inset-bottom));
-      left: 50%;
-      transform: translateX(-50%);
-      font-size: 12px;
-      opacity: 0.55;
-      pointer-events: none;
-      z-index: 10;
-      text-align: center;
-      text-shadow: 0 1px 3px rgba(255,255,255,0.8);
-    }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
-  <div id="hint">カメラ位置・空間の再現用シーン(キャラクターはまだ動きません)</div>
 
   <script type="importmap">
     {
