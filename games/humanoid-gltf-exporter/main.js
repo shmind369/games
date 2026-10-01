@@ -266,62 +266,6 @@ for (const [upperLeg, lowerLeg, foot] of [
   addPart(new THREE.BoxGeometry(0.085, 0.055, 0.19), shoeMat, foot, new THREE.Vector3(0, -0.015, 0.045));
 }
 
-// ---------- 簡易アニメーション(右手を上げて振る「お辞儀&手振り」) ----------
-function q(x, y, z) {
-  return new THREE.Quaternion().setFromEuler(new THREE.Euler(x, y, z));
-}
-
-const times = [0, 0.4, 0.8, 1.2, 1.6, 2.0];
-
-const spineTrack = new THREE.QuaternionKeyframeTrack(
-  "Spine.quaternion",
-  times,
-  [
-    ...q(0, 0, 0).toArray(),
-    ...q(0.25, 0, 0).toArray(),
-    ...q(0.25, 0, 0).toArray(),
-    ...q(0, 0, 0).toArray(),
-    ...q(0, 0, 0).toArray(),
-    ...q(0, 0, 0).toArray(),
-  ]
-);
-
-const rightShoulderTrack = new THREE.QuaternionKeyframeTrack(
-  "RightShoulder.quaternion",
-  times,
-  [
-    ...q(0, 0, 0).toArray(),
-    ...q(0, 0, -1.4).toArray(),
-    ...q(0, 0, -1.4).toArray(),
-    ...q(0, 0, -1.4).toArray(),
-    ...q(0, 0, -1.4).toArray(),
-    ...q(0, 0, 0).toArray(),
-  ]
-);
-
-const rightForearmTrack = new THREE.QuaternionKeyframeTrack(
-  "RightForearm.quaternion",
-  [0, 0.4, 0.7, 1.0, 1.3, 1.6, 2.0],
-  [
-    ...q(0, 0, 0).toArray(),
-    ...q(-1.2, 0, 0).toArray(),
-    ...q(-1.2, 0, -0.4).toArray(),
-    ...q(-1.2, 0, 0.4).toArray(),
-    ...q(-1.2, 0, -0.4).toArray(),
-    ...q(-1.2, 0, 0).toArray(),
-    ...q(0, 0, 0).toArray(),
-  ]
-);
-
-const clip = new THREE.AnimationClip("Greeting", 2.0, [spineTrack, rightShoulderTrack, rightForearmTrack]);
-
-const mixer = new THREE.AnimationMixer(root);
-const action = mixer.clipAction(clip);
-action.setLoop(THREE.LoopRepeat);
-// 新しいポーズエディタ(FKでのボーン操作)と競合しないよう、プレビューの
-// お辞儀アニメーションはデフォルトでは再生しない(ボタンで手動再生できる)
-action.play();
-
 // ---------- ポーズエディタ(FKによるボーン選択・回転・キーフレーム記録) ----------
 const boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
 
@@ -882,6 +826,34 @@ keyframeBtn.addEventListener("click", () => {
 posePlayBtn.addEventListener("click", () => { posePlaying = true; });
 posePauseBtn.addEventListener("click", () => { posePlaying = false; });
 
+// ---------- ポーズのコピー&ペースト ----------
+// コピー対象は現在フレームの全ボーンのポーズ(回転)。本アプリのFKポーズ編集は
+// 回転のみを扱うため、snapshotPose/applyPoseObjectをそのまま再利用する
+// (将来position/scaleを編集できるようになった場合は、ここにも含める)。
+// ペーストはキーフレーム追加とは別操作であり、ペースト後に+◆を押さない限り
+// タイムライン上には保存されない(他フレームへ移動すると失われる)
+const copyPoseBtn = document.getElementById("copyPoseBtn");
+const pastePoseBtn = document.getElementById("pastePoseBtn");
+let copiedPose = null;
+
+copyPoseBtn.addEventListener("click", () => {
+  copiedPose = snapshotPose();
+  pastePoseBtn.disabled = false;
+  statusEl.textContent = "現在のポーズをコピーしました";
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
+});
+
+pastePoseBtn.addEventListener("click", () => {
+  if (!copiedPose) return;
+  applyPoseObject(copiedPose);
+  statusEl.textContent = "ポーズを貼り付けました(+◆で保存しないと移動時に失われます)";
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+// 3Dモデルの書き出し(.glb)は、メッシュ・マテリアル・ボーン構造のみを
+// 対象とする。アニメーション(ポーズのキーフレーム)はモデルとは別データ
+// として扱うため、ここではGLTFExporterにanimationsを一切渡さない
+// (= 書き出されるGLBには常にアニメーションが含まれない)
 const exportBtn = document.getElementById("exportBtn");
 exportBtn.addEventListener("click", () => {
   const exporter = new GLTFExporter();
@@ -897,16 +869,172 @@ exportBtn.addEventListener("click", () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      statusEl.textContent = "humanoid.glb を書き出しました";
-      setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+      statusEl.textContent = "humanoid.glb を書き出しました(モデルのみ。アニメーションは🎞から別途書き出せます)";
+      setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
     },
     (err) => {
       console.error(err);
       statusEl.textContent = "書き出しに失敗しました";
     },
-    { binary: true, animations: [clip] }
+    { binary: true }
   );
 });
+
+// ---------- アニメーションライブラリ(3Dモデルとは別データとして保存・書き出し) ----------
+// 3Dモデル(メッシュ・マテリアル・ボーン構造。root/GLB書き出し対象)と
+// アニメーション(ボーン名・キーフレーム・各フレームのTransform・FPS・長さ)を
+// 同一データとして扱わず、完全に別の構造として保持する。
+// アニメーション側のデータはボーン名だけをキーにしており、メッシュ等
+// モデル固有の情報を一切含まないため、同じボーン構成(同じボーン名)を
+// 持つ別モデルにもそのまま適用できる(applyPoseObjectは、渡されたポーズに
+// 存在する/モデル側に存在するボーン名同士だけを照合して適用するため、
+// ボーン構成が完全一致していなくても、共通するボーンだけに安全に適用される)。
+//
+// このアプリの既存タイムラインUIは30FPS・60フレーム固定のまま変更していない
+// (「既存のUIは変更しない」という要件のため)。保存・書き出されるアニメーション
+// データ自体にはfps/totalFramesを記録しておき、将来的に可変長のタイムラインへ
+// 拡張できるようにしてある。インポート時に60フレームを超えるキーフレームは
+// 末尾でクランプする
+let animations = []; // [{ name, fps, totalFrames, keyframes: [{ time, pose }] }]
+
+function currentAnimationData(name) {
+  return {
+    name,
+    fps: FPS,
+    totalFrames: TOTAL_FRAMES,
+    keyframes: poseKeyframes.map((k) => ({ time: k.time, pose: k.pose })),
+  };
+}
+
+function loadAnimationData(anim) {
+  const maxTime = TOTAL_FRAMES / FPS;
+  poseKeyframes = (anim.keyframes || [])
+    .map((k) => ({ time: Math.max(0, Math.min(maxTime, k.time)), pose: k.pose }))
+    .sort((a, b) => a.time - b.time);
+  setCurrentTime(0);
+  applyPoseAtTime(0);
+}
+
+function refreshAnimSelect() {
+  animSelectEl.innerHTML = "";
+  if (animations.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(保存されたアニメーションなし)";
+    animSelectEl.appendChild(opt);
+    return;
+  }
+  for (const anim of animations) {
+    const opt = document.createElement("option");
+    opt.value = anim.name;
+    opt.textContent = anim.name;
+    animSelectEl.appendChild(opt);
+  }
+}
+
+function saveCurrentAsAnimation(name) {
+  const data = currentAnimationData(name);
+  const existingIdx = animations.findIndex((a) => a.name === name);
+  if (existingIdx >= 0) animations[existingIdx] = data;
+  else animations.push(data);
+  refreshAnimSelect();
+  animSelectEl.value = name;
+}
+
+function animationToExportJSON(anim) {
+  return {
+    formatVersion: 1,
+    type: "humanoid-pose-animation",
+    name: anim.name,
+    fps: anim.fps,
+    totalFrames: anim.totalFrames,
+    durationSeconds: anim.totalFrames / anim.fps,
+    boneNames: allBones.map((b) => b.name),
+    keyframes: anim.keyframes.map((k) => ({ frame: Math.round(k.time * anim.fps), time: k.time, pose: k.pose })),
+  };
+}
+
+function downloadJSON(obj, filename) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importAnimationJSON(json) {
+  loadAnimationData({ keyframes: (json.keyframes || []).map((k) => ({ time: k.time ?? k.frame / (json.fps || FPS), pose: k.pose })) });
+  if (json.name) {
+    saveCurrentAsAnimation(json.name);
+    animNameInputEl.value = json.name;
+  }
+}
+
+const animMenuBtn = document.getElementById("animMenuBtn");
+const animPanelEl = document.getElementById("animPanel");
+const animNameInputEl = document.getElementById("animNameInput");
+const animSelectEl = document.getElementById("animSelect");
+const animSaveBtn = document.getElementById("animSaveBtn");
+const animLoadBtn = document.getElementById("animLoadBtn");
+const animExportBtn = document.getElementById("animExportBtn");
+const animImportBtn = document.getElementById("animImportBtn");
+const animImportFileEl = document.getElementById("animImportFile");
+
+animMenuBtn.addEventListener("click", () => {
+  animPanelEl.classList.toggle("open");
+  animMenuBtn.classList.toggle("active", animPanelEl.classList.contains("open"));
+});
+
+animSaveBtn.addEventListener("click", () => {
+  const name = animNameInputEl.value.trim();
+  if (!name) {
+    statusEl.textContent = "アニメーション名を入力してください";
+    setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
+    return;
+  }
+  saveCurrentAsAnimation(name);
+  statusEl.textContent = `アニメーション「${name}」を保存しました(モデルとは別データ)`;
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+animLoadBtn.addEventListener("click", () => {
+  const anim = animations.find((a) => a.name === animSelectEl.value);
+  if (!anim) return;
+  loadAnimationData(anim);
+  animNameInputEl.value = anim.name;
+  statusEl.textContent = `アニメーション「${anim.name}」をタイムラインへ読み込みました`;
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+animExportBtn.addEventListener("click", () => {
+  const name = animNameInputEl.value.trim() || "animation";
+  const json = animationToExportJSON(currentAnimationData(name));
+  downloadJSON(json, `${name}.json`);
+  statusEl.textContent = `${name}.json を書き出しました(3Dモデルとは別ファイル)`;
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+animImportBtn.addEventListener("click", () => animImportFileEl.click());
+animImportFileEl.addEventListener("change", async () => {
+  const file = animImportFileEl.files && animImportFileEl.files[0];
+  animImportFileEl.value = "";
+  if (!file) return;
+  try {
+    const json = JSON.parse(await file.text());
+    importAnimationJSON(json);
+    statusEl.textContent = `「${json.name || file.name}」を読み込みました`;
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "アニメーションJSONの読み込みに失敗しました";
+  }
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+refreshAnimSelect();
 
 // ---------- リサイズ ----------
 // レンダラーのサイズは、ウィンドウ全体ではなく#viewportArea(3Dビュー専用領域、
@@ -956,10 +1084,11 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, root, skeleton, allBones, mixer, clip, action };
+window.__scene = { scene, camera, root, skeleton, allBones };
+// モデル書き出し(メッシュ・マテリアル・ボーン構造のみ。アニメーションは含まない)
 window.__exportGLTF = () => new Promise((resolve, reject) => {
   const exporter = new GLTFExporter();
-  exporter.parse(root, resolve, reject, { binary: true, animations: [clip] });
+  exporter.parse(root, resolve, reject, { binary: true });
 });
 
 // ---------- ポーズエディタのテスト/デバッグ用フック ----------
@@ -1025,4 +1154,25 @@ window.__fk = {
   // レイアウト分離(3Dビュー/タイムライン)のテスト/デバッグ用
   getViewportAreaRect: () => viewportArea.getBoundingClientRect().toJSON(),
   getTimelineDockRect: () => document.getElementById("timelineDock").getBoundingClientRect().toJSON(),
+  // ポーズのコピー&ペーストのテスト/デバッグ用
+  copyPose: () => copyPoseBtn.click(),
+  pastePose: () => pastePoseBtn.click(),
+  hasCopiedPose: () => !!copiedPose,
+  getCopiedPose: () => copiedPose,
+  isPasteBtnDisabled: () => pastePoseBtn.disabled,
+  // アニメーションライブラリ(3Dモデルとは別データ)のテスト/デバッグ用
+  saveCurrentAsAnimation,
+  loadAnimationByName: (name) => {
+    const anim = animations.find((a) => a.name === name);
+    if (anim) loadAnimationData(anim);
+    return !!anim;
+  },
+  listAnimationNames: () => animations.map((a) => a.name),
+  exportAnimationJSON: (name) => {
+    const anim = animations.find((a) => a.name === name) || currentAnimationData(name || "animation");
+    return animationToExportJSON(anim);
+  },
+  importAnimationJSON,
+  isAnimPanelOpen: () => animPanelEl.classList.contains("open"),
+  toggleAnimPanel: () => animMenuBtn.click(),
 };
