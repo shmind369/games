@@ -74,7 +74,7 @@
       text-align: right;
       padding-top: 6px;
     }
-    #exportBtn {
+    #exportBtn, #animMenuBtn {
       flex: 0 0 auto;
       width: 40px;
       height: 40px;
@@ -83,14 +83,64 @@
       padding: 0;
       border-radius: 50%;
       border: none;
-      background: #4c8dff;
       color: white;
       font-size: 16px;
       line-height: 1;
       box-shadow: 0 3px 10px rgba(0,0,0,0.4);
       touch-action: manipulation;
     }
-    #exportBtn:active { transform: scale(0.94); }
+    #exportBtn { background: #4c8dff; }
+    #animMenuBtn { background: #8a5cf5; }
+    #exportBtn:active, #animMenuBtn:active { transform: scale(0.94); }
+    #animMenuBtn.active { box-shadow: 0 0 0 2px #ffd24c, 0 3px 10px rgba(0,0,0,0.4); }
+
+    /* アニメーション管理パネル: 3Dモデル(メッシュ・マテリアル・ボーン構造)と
+       アニメーション(ボーン名ごとのキーフレーム)を別データとして扱うための
+       保存・読込・書き出し・読み込みUI。既存のタイムライン/ギズモ領域とは
+       独立しており、普段は非表示(animMenuBtnで開閉)にして画面を圧迫しない */
+    #animPanel {
+      position: absolute;
+      top: max(52px, calc(env(safe-area-inset-top) + 44px));
+      right: 10px;
+      max-width: min(70%, 260px);
+      z-index: 10;
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+      background: rgba(20,22,28,0.9);
+      border-radius: 14px;
+      padding: 10px;
+      pointer-events: auto;
+      font-size: 11px;
+    }
+    #animPanel.open { display: flex; }
+    #animPanel .animTitle { font-weight: 700; opacity: 0.85; }
+    #animPanel .animRow { display: flex; gap: 4px; align-items: center; }
+    #animPanel input[type="text"], #animPanel select {
+      font: inherit;
+      font-size: 11px;
+      flex: 1 1 auto;
+      min-width: 0;
+      background: #2a2e38;
+      color: #eee;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 8px;
+    }
+    #animPanel button {
+      font: inherit;
+      font-size: 13px;
+      flex: 0 0 auto;
+      min-width: 36px;
+      min-height: 32px;
+      padding: 4px 8px;
+      border: none;
+      border-radius: 8px;
+      background: #3a3f4a;
+      color: #eee;
+      touch-action: manipulation;
+    }
+    #animPanel button:active { transform: scale(0.94); }
 
     /* poseBarは3Dビュー上の一部にしか置かないよう、左上に小さく収める
        (全幅に広げると、その帯の下にある3Dビューへのタップを奪ってしまうため) */
@@ -217,8 +267,10 @@
       line-height: 1;
     }
     .iconBtn:active { transform: scale(0.94); }
+    .iconBtn:disabled { opacity: 0.35; }
     #keyframeBtn { background: #e0634c; font-weight: 700; }
     #posePlayBtn, #posePauseBtn { background: #3a3f4a; }
+    #copyPoseBtn, #pastePoseBtn { background: #2f5d8a; }
   </style>
 </head>
 <body>
@@ -237,7 +289,8 @@
         <div id="title">Humanoid glTF Exporter</div>
         <div id="hudRight">
           <div id="boneInfo">選択中のボーン<br /><span id="selectedBoneLabel">なし</span></div>
-          <button id="exportBtn" title="GLBを書き出す">⇩</button>
+          <button id="animMenuBtn" title="アニメーション管理(モデルとは別データとして保存・書き出し)">🎞</button>
+          <button id="exportBtn" title="3Dモデルを書き出す(.glb / メッシュ・マテリアル・ボーン構造のみ)">⇩</button>
         </div>
       </div>
       <div id="poseBar">
@@ -245,6 +298,30 @@
           <option value="">(ボーン未選択)</option>
         </select>
       </div>
+
+      <!-- アニメーション管理パネル: 3Dモデル(character.glb)とは別データとして、
+           ボーン名・キーフレーム・FPS・アニメーション長だけを持つ「アニメーション」を
+           複数名前付きで保存・切替・書き出し(.json)・読み込み(.json)できるようにする。
+           ボーン名だけに依存した形式なので、同じボーン構成の別モデルにも流用できる -->
+      <div id="animPanel">
+        <div class="animTitle">アニメーション管理(モデルとは別データ)</div>
+        <div class="animRow">
+          <input type="text" id="animNameInput" placeholder="アニメーション名" />
+          <button id="animSaveBtn" title="現在のタイムラインを名前付きアニメーションとして保存">💾</button>
+        </div>
+        <div class="animRow">
+          <select id="animSelect">
+            <option value="">(保存されたアニメーションなし)</option>
+          </select>
+          <button id="animLoadBtn" title="選択したアニメーションをタイムラインへ読込">📂</button>
+        </div>
+        <div class="animRow">
+          <button id="animExportBtn" title="現在のタイムラインをアニメーションJSONとして書き出す">📤 書き出し</button>
+          <button id="animImportBtn" title="アニメーションJSONを読み込む">📥 読み込み</button>
+          <input type="file" id="animImportFile" accept="application/json" style="display:none" />
+        </div>
+      </div>
+
       <div id="status">タップでボーン選択・ドラッグで回転</div>
     </div>
 
@@ -258,6 +335,8 @@
         <button id="keyframeBtn" class="iconBtn">+◆</button>
         <button id="posePlayBtn" class="iconBtn">▶</button>
         <button id="posePauseBtn" class="iconBtn">⏸</button>
+        <button id="copyPoseBtn" class="iconBtn" title="現在のポーズをコピー">📋</button>
+        <button id="pastePoseBtn" class="iconBtn" title="コピーしたポーズを貼り付け" disabled>📌</button>
       </div>
     </div>
   </div>
