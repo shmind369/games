@@ -20,6 +20,82 @@ controls.minDistance = 1.2;
 controls.maxDistance = 6;
 controls.update();
 
+// ---------- 4分割ビュー(TOP/FRONT/LEFT/FREE CAMERA) ----------
+// 画面を2x2に分割し、同じシーンを4台のカメラで同時に描画する。
+// FREE CAMERAは既存のPerspectiveCamera+OrbitControlsをそのまま使い、
+// 挙動を変更していない。TOP/FRONT/LEFTは固定の正投影カメラ(パン・ズーム等の
+// 操作は今回のスコープ外のため実装しない)
+const VIEW_TARGET_Y = 1.0; // OrbitControlsのtargetと揃えた、キャラクターの中心あたりの高さ
+const SIDE_HALF_HEIGHT = 1.15; // FRONT/LEFTでの縦方向(頭上〜足元)の表示範囲
+const TOP_HALF_SIZE = 0.9; // TOPでの横方向(ワールドX/Z)の表示範囲
+
+function makeOrthoCamera() {
+  return new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+}
+
+const topCamera = makeOrthoCamera();
+topCamera.position.set(0, VIEW_TARGET_Y + 3, 0);
+topCamera.up.set(0, 0, -1);
+topCamera.lookAt(0, VIEW_TARGET_Y, 0);
+
+const frontCamera = makeOrthoCamera();
+frontCamera.position.set(0, VIEW_TARGET_Y, 3);
+frontCamera.up.set(0, 1, 0);
+frontCamera.lookAt(0, VIEW_TARGET_Y, 0);
+
+const leftCamera = makeOrthoCamera();
+leftCamera.position.set(-3, VIEW_TARGET_Y, 0);
+leftCamera.up.set(0, 1, 0);
+leftCamera.lookAt(0, VIEW_TARGET_Y, 0);
+
+const camerasByKey = { top: topCamera, front: frontCamera, left: leftCamera, free: camera };
+const viewCellEls = {};
+for (const el of document.querySelectorAll(".viewCell")) viewCellEls[el.dataset.view] = el;
+
+// 各ビューのCSSピクセル矩形(canvas基準、左上原点)。resize時に再計算する
+const viewLayout = {};
+function layoutViews() {
+  const w = canvas.clientWidth || window.innerWidth;
+  const h = canvas.clientHeight || window.innerHeight;
+  const halfW = w / 2, halfH = h / 2;
+  viewLayout.top = { x: 0, y: 0, w: halfW, h: halfH };
+  viewLayout.front = { x: halfW, y: 0, w: w - halfW, h: halfH };
+  viewLayout.left = { x: 0, y: halfH, w: halfW, h: h - halfH };
+  viewLayout.free = { x: halfW, y: halfH, w: w - halfW, h: h - halfH };
+
+  updateOrthoFrustum(topCamera, TOP_HALF_SIZE, viewLayout.top.w / viewLayout.top.h);
+  updateOrthoFrustum(frontCamera, SIDE_HALF_HEIGHT, viewLayout.front.w / viewLayout.front.h);
+  updateOrthoFrustum(leftCamera, SIDE_HALF_HEIGHT, viewLayout.left.w / viewLayout.left.h);
+
+  camera.aspect = viewLayout.free.w / viewLayout.free.h;
+  camera.updateProjectionMatrix();
+}
+function updateOrthoFrustum(cam, halfHeight, aspect) {
+  const halfWidth = halfHeight * aspect;
+  cam.left = -halfWidth;
+  cam.right = halfWidth;
+  cam.top = halfHeight;
+  cam.bottom = -halfHeight;
+  cam.updateProjectionMatrix();
+}
+
+// クライアント座標(clientX/clientY)から、どのビュー(象限)かを判定する
+function viewAt(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left, y = clientY - rect.top;
+  const halfW = rect.width / 2, halfH = rect.height / 2;
+  if (y < halfH) return x < halfW ? "top" : "front";
+  return x < halfW ? "left" : "free";
+}
+
+let activeView = null;
+function setActiveView(key) {
+  if (activeView === key) return;
+  activeView = key;
+  for (const k in viewCellEls) viewCellEls[k].classList.toggle("active", k === key);
+}
+setActiveView("free");
+
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
 keyLight.position.set(2, 4, 3);
@@ -304,14 +380,32 @@ for (const b of allBones) {
 const raycaster = new THREE.Raycaster();
 const pointerNDC = new THREE.Vector2();
 
+// タップされた位置がどのビュー(象限)かを判定し、そのビューのカメラで
+// レイキャストする(4分割後は、どの象限をタップしたかによって使うべき
+// カメラが異なるため)
 function pickBoneAt(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
-  pointerNDC.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-  pointerNDC.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-  raycaster.setFromCamera(pointerNDC, camera);
+  const key = viewAt(clientX, clientY);
+  const vp = viewLayout[key];
+  const localX = (clientX - rect.left) - vp.x;
+  const localY = (clientY - rect.top) - vp.y;
+  pointerNDC.x = (localX / vp.w) * 2 - 1;
+  pointerNDC.y = -(localY / vp.h) * 2 + 1;
+  raycaster.setFromCamera(pointerNDC, camerasByKey[key]);
   const hits = raycaster.intersectObjects(boneHitProxies, false);
   return hits.length > 0 ? hits[0].object.userData.bone : null;
 }
+
+// キャプチャフェーズで先に実行し、(1)タップされたビューをアクティブビューにする、
+// (2)FREE CAMERA以外の象限でのドラッグがOrbitControlsを動かさないようにする。
+// OrbitControls自身のpointerdownハンドラより必ず先に実行されるよう、
+// キャプチャフェーズ(true)で登録している
+function onPointerDownGate(evt) {
+  const key = viewAt(evt.clientX, evt.clientY);
+  setActiveView(key);
+  controls.enabled = key === "free" && !selectedBone;
+}
+canvas.addEventListener("pointerdown", onPointerDownGate, { capture: true });
 
 const DRAG_THRESHOLD_PX = 6; // この移動量未満なら「タップ」、以上なら「ドラッグ」とみなす
 const ROTATE_SENSITIVITY = 0.012; // ドラッグ1pxあたりの回転量(ラジアン)
@@ -416,17 +510,113 @@ function applyPoseAtTime(time) {
   }
 }
 
-const timelineEl = document.getElementById("timeline");
-const timeLabelEl = document.getElementById("timeLabel");
-function setCurrentTime(t) {
-  currentTime = t;
-  timelineEl.value = String(t);
-  timeLabelEl.textContent = t.toFixed(2) + "s";
+// ---------- タイムラインUI(30FPS基準のフレーム表示・目盛) ----------
+// 内部的な時刻管理(currentTime, applyPoseAtTime, addKeyframeAt等)は秒単位の
+// ままで変更していない。ここではUI表示・入力のみをフレーム単位に変換している
+const FPS = 30;
+const TOTAL_FRAMES = 60; // 2秒分
+const frameOf = (timeSeconds) => Math.round(timeSeconds * FPS);
+const timeOfFrame = (frame) => frame / FPS;
+
+const frameReadoutEl = document.getElementById("frameReadout");
+const timeReadoutEl = document.getElementById("timeReadout");
+const timelineCanvas = document.getElementById("timelineCanvas");
+const timelineCtx = timelineCanvas.getContext("2d");
+const TIMELINE_MARGIN_X = 6;
+const MAJOR_TICK_STEP = 5;
+
+function timelineFrameToX(frame, cssW) {
+  const usableW = cssW - TIMELINE_MARGIN_X * 2;
+  return TIMELINE_MARGIN_X + (frame / TOTAL_FRAMES) * usableW;
 }
-timelineEl.addEventListener("input", () => {
-  setCurrentTime(parseFloat(timelineEl.value));
+
+function drawTimelineRuler() {
+  const cssW = timelineCanvas.clientWidth;
+  const cssH = timelineCanvas.clientHeight;
+  if (cssW === 0 || cssH === 0) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  timelineCanvas.width = Math.round(cssW * dpr);
+  timelineCanvas.height = Math.round(cssH * dpr);
+  timelineCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  timelineCtx.clearRect(0, 0, cssW, cssH);
+
+  // 目盛(1フレームごとの小目盛、MAJOR_TICK_STEPごとの大目盛+フレーム番号)
+  timelineCtx.font = "9px system-ui, sans-serif";
+  timelineCtx.textAlign = "center";
+  timelineCtx.lineWidth = 1;
+  for (let f = 0; f <= TOTAL_FRAMES; f++) {
+    const x = timelineFrameToX(f, cssW);
+    const isMajor = f % MAJOR_TICK_STEP === 0;
+    timelineCtx.strokeStyle = isMajor ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.28)";
+    const tickTop = isMajor ? cssH * 0.38 : cssH * 0.58;
+    timelineCtx.beginPath();
+    timelineCtx.moveTo(x, tickTop);
+    timelineCtx.lineTo(x, cssH * 0.85);
+    timelineCtx.stroke();
+    if (isMajor) {
+      timelineCtx.fillStyle = "rgba(255,255,255,0.75)";
+      timelineCtx.fillText(String(f), x, cssH * 0.3);
+    }
+  }
+
+  // キーフレームの位置を三角マーカーで表示
+  timelineCtx.fillStyle = "#ffd24c";
+  for (const kf of poseKeyframes) {
+    const x = timelineFrameToX(frameOf(kf.time), cssW);
+    timelineCtx.beginPath();
+    timelineCtx.moveTo(x, cssH * 0.85);
+    timelineCtx.lineTo(x - 4, cssH * 0.98);
+    timelineCtx.lineTo(x + 4, cssH * 0.98);
+    timelineCtx.closePath();
+    timelineCtx.fill();
+  }
+
+  // 現在フレームを示す縦線
+  const curX = timelineFrameToX(frameOf(currentTime), cssW);
+  timelineCtx.strokeStyle = "#ff5c5c";
+  timelineCtx.lineWidth = 2;
+  timelineCtx.beginPath();
+  timelineCtx.moveTo(curX, 1);
+  timelineCtx.lineTo(curX, cssH - 1);
+  timelineCtx.stroke();
+}
+
+function setCurrentTime(t) {
+  currentTime = Math.max(0, Math.min(TOTAL_FRAMES / FPS, t));
+  const frame = frameOf(currentTime);
+  frameReadoutEl.textContent = `Frame: ${frame} / ${TOTAL_FRAMES}`;
+  timeReadoutEl.textContent = `Time: ${currentTime.toFixed(3)}s`;
+  drawTimelineRuler();
+}
+
+function frameFromClientX(clientX) {
+  const rect = timelineCanvas.getBoundingClientRect();
+  const usableW = rect.width - TIMELINE_MARGIN_X * 2;
+  const x = clientX - rect.left - TIMELINE_MARGIN_X;
+  const ratio = usableW > 0 ? x / usableW : 0;
+  return Math.max(0, Math.min(TOTAL_FRAMES, Math.round(ratio * TOTAL_FRAMES)));
+}
+
+let timelineDragging = false;
+function onTimelinePointerDown(evt) {
+  timelineDragging = true;
+  timelineCanvas.setPointerCapture(evt.pointerId);
+  setCurrentTime(timeOfFrame(frameFromClientX(evt.clientX)));
   if (!posePlaying) applyPoseAtTime(currentTime);
-});
+}
+function onTimelinePointerMove(evt) {
+  if (!timelineDragging) return;
+  setCurrentTime(timeOfFrame(frameFromClientX(evt.clientX)));
+  if (!posePlaying) applyPoseAtTime(currentTime);
+}
+function onTimelinePointerUp() {
+  timelineDragging = false;
+}
+timelineCanvas.addEventListener("pointerdown", onTimelinePointerDown);
+timelineCanvas.addEventListener("pointermove", onTimelinePointerMove);
+timelineCanvas.addEventListener("pointerup", onTimelinePointerUp);
+timelineCanvas.addEventListener("pointercancel", () => { timelineDragging = false; });
+window.addEventListener("resize", drawTimelineRuler);
 
 const keyframeBtn = document.getElementById("keyframeBtn");
 const posePlayBtn = document.getElementById("posePlayBtn");
@@ -480,15 +670,16 @@ exportBtn.addEventListener("click", () => {
 // ---------- リサイズ ----------
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  layoutViews();
 }
 window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
+setCurrentTime(0); // 初期状態のフレーム表示・目盛を描画しておく
 
-// ---------- レンダーループ ----------
+// ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
+const VIEW_ORDER = ["top", "front", "left", "free"];
 const clock = new THREE.Clock();
 function render() {
   const dt = clock.getDelta();
@@ -505,7 +696,18 @@ function render() {
 
   updateGizmoTransform();
   controls.update();
-  renderer.render(scene, camera);
+
+  const canvasH = canvas.clientHeight || window.innerHeight;
+  renderer.setScissorTest(true);
+  for (const key of VIEW_ORDER) {
+    const rect = viewLayout[key];
+    const glY = canvasH - (rect.y + rect.h); // Three.jsのビューポートは左下原点のため、Y座標を反転する
+    renderer.setViewport(rect.x, glY, rect.w, rect.h);
+    renderer.setScissor(rect.x, glY, rect.w, rect.h);
+    renderer.render(scene, camerasByKey[key]);
+  }
+  renderer.setScissorTest(false);
+
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
@@ -546,4 +748,16 @@ window.__fk = {
   isPosePlaying: () => posePlaying,
   applyPoseAtTime,
   isGizmoVisible: () => selectionGizmo.visible,
+  // 4分割ビュー・フレームタイムラインのテスト/デバッグ用
+  FPS,
+  TOTAL_FRAMES,
+  frameOf,
+  timeOfFrame,
+  getActiveView: () => activeView,
+  getViewportRect: (key) => ({ ...viewLayout[key] }),
+  getCamera: (key) => camerasByKey[key],
+  simulateTapAt: (clientX, clientY) => {
+    setActiveView(viewAt(clientX, clientY));
+    setSelectedBone(pickBoneAt(clientX, clientY));
+  },
 };
