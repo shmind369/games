@@ -41,29 +41,31 @@ function bone(name, x, y, z) {
   return b;
 }
 
-const hips = bone("Hips", 0, 0.95, 0);
-const spine = bone("Spine", 0, 0.15, 0);
-const chest = bone("Chest", 0, 0.18, 0);
-const neck = bone("Neck", 0, 0.22, 0);
-const head = bone("Head", 0, 0.12, 0);
+// プロポーション調整: 頭を縮小し、首を明確に分離し、肩幅・四肢の太さの
+// バランスを自然にした(ボーンの名前・階層・本数は変更していない)
+const hips = bone("Hips", 0, 0.92, 0);
+const spine = bone("Spine", 0, 0.13, 0);
+const chest = bone("Chest", 0, 0.17, 0);
+const neck = bone("Neck", 0, 0.17, 0);
+const head = bone("Head", 0, 0.14, 0);
 
-const leftShoulder = bone("LeftShoulder", 0.14, 0.16, 0);
-const leftUpperArm = bone("LeftUpperArm", 0.10, 0, 0);
-const leftForearm = bone("LeftForearm", 0, -0.28, 0);
-const leftHand = bone("LeftHand", 0, -0.26, 0);
+const leftShoulder = bone("LeftShoulder", 0.17, 0.13, 0);
+const leftUpperArm = bone("LeftUpperArm", 0.07, 0, 0);
+const leftForearm = bone("LeftForearm", 0, -0.26, 0);
+const leftHand = bone("LeftHand", 0, -0.24, 0);
 
-const rightShoulder = bone("RightShoulder", -0.14, 0.16, 0);
-const rightUpperArm = bone("RightUpperArm", -0.10, 0, 0);
-const rightForearm = bone("RightForearm", 0, -0.28, 0);
-const rightHand = bone("RightHand", 0, -0.26, 0);
+const rightShoulder = bone("RightShoulder", -0.17, 0.13, 0);
+const rightUpperArm = bone("RightUpperArm", -0.07, 0, 0);
+const rightForearm = bone("RightForearm", 0, -0.26, 0);
+const rightHand = bone("RightHand", 0, -0.24, 0);
 
-const leftUpperLeg = bone("LeftUpperLeg", 0.13, -0.03, 0);
-const leftLowerLeg = bone("LeftLowerLeg", 0, -0.42, 0);
-const leftFoot = bone("LeftFoot", 0, -0.42, 0.05);
+const leftUpperLeg = bone("LeftUpperLeg", 0.10, -0.02, 0);
+const leftLowerLeg = bone("LeftLowerLeg", 0, -0.43, 0);
+const leftFoot = bone("LeftFoot", 0, -0.43, 0.045);
 
-const rightUpperLeg = bone("RightUpperLeg", -0.13, -0.03, 0);
-const rightLowerLeg = bone("RightLowerLeg", 0, -0.42, 0);
-const rightFoot = bone("RightFoot", 0, -0.42, 0.05);
+const rightUpperLeg = bone("RightUpperLeg", -0.10, -0.02, 0);
+const rightLowerLeg = bone("RightLowerLeg", 0, -0.43, 0);
+const rightFoot = bone("RightFoot", 0, -0.43, 0.045);
 
 hips.add(spine, leftUpperLeg, rightUpperLeg);
 spine.add(chest);
@@ -135,28 +137,32 @@ function addPart(geometry, material, bone, offset = new THREE.Vector3()) {
   return mesh;
 }
 
-addPart(new THREE.CapsuleGeometry(0.17, 0.32, 4, 10), skinMat, chest, new THREE.Vector3(0, 0.05, 0));
-addPart(new THREE.CapsuleGeometry(0.15, 0.1, 4, 10), skinMat, hips);
-addPart(new THREE.SphereGeometry(0.12, 20, 16), skinMat, head, new THREE.Vector3(0, 0.06, 0));
-addPart(new THREE.CylinderGeometry(0.06, 0.065, 0.08, 10), skinMat, neck, new THREE.Vector3(0, 0.03, 0));
+// 胴体を少し細くして肩幅とのバランスを整え、首がちょうど収まる高さに
+// とどめる(以前は胴体カプセルの上端が首を飲み込んでしまっていた)
+addPart(new THREE.CapsuleGeometry(0.145, 0.16, 4, 10), skinMat, chest, new THREE.Vector3(0, -0.05, 0));
+addPart(new THREE.CapsuleGeometry(0.13, 0.08, 4, 10), skinMat, hips, new THREE.Vector3(0, -0.02, 0));
+// 頭を一回り小さくし、首をはっきり見える長さ・太さにする
+addPart(new THREE.SphereGeometry(0.098, 20, 16), skinMat, head, new THREE.Vector3(0, 0.065, 0));
+addPart(new THREE.CylinderGeometry(0.055, 0.07, 0.2, 10), skinMat, neck, new THREE.Vector3(0, 0.01, 0));
 
 for (const [shoulder, upperArm, forearm, hand] of [
   [leftShoulder, leftUpperArm, leftForearm, leftHand],
   [rightShoulder, rightUpperArm, rightForearm, rightHand],
 ]) {
-  addPart(new THREE.SphereGeometry(0.065, 14, 12), skinMat, shoulder);
-  addPart(new THREE.CapsuleGeometry(0.05, 0.2, 4, 8), skinMat, upperArm, new THREE.Vector3(0, -0.1, 0));
-  addPart(new THREE.CapsuleGeometry(0.045, 0.2, 4, 8), skinMat, forearm, new THREE.Vector3(0, -0.1, 0));
-  addPart(new THREE.SphereGeometry(0.05, 12, 10), skinMat, hand, new THREE.Vector3(0, -0.03, 0));
+  addPart(new THREE.SphereGeometry(0.062, 14, 12), skinMat, shoulder);
+  addPart(new THREE.CapsuleGeometry(0.052, 0.18, 4, 8), skinMat, upperArm, new THREE.Vector3(0, -0.095, 0));
+  addPart(new THREE.CapsuleGeometry(0.044, 0.18, 4, 8), skinMat, forearm, new THREE.Vector3(0, -0.09, 0));
+  addPart(new THREE.SphereGeometry(0.046, 12, 10), skinMat, hand, new THREE.Vector3(0, -0.02, 0));
 }
 
+// 脚は腕より太く、腿からふくらはぎにかけて自然に先細りさせる
 for (const [upperLeg, lowerLeg, foot] of [
   [leftUpperLeg, leftLowerLeg, leftFoot],
   [rightUpperLeg, rightLowerLeg, rightFoot],
 ]) {
-  addPart(new THREE.CapsuleGeometry(0.08, 0.3, 4, 10), clothMat, upperLeg, new THREE.Vector3(0, -0.15, 0));
-  addPart(new THREE.CapsuleGeometry(0.065, 0.3, 4, 10), skinMat, lowerLeg, new THREE.Vector3(0, -0.15, 0));
-  addPart(new THREE.BoxGeometry(0.09, 0.06, 0.2), shoeMat, foot, new THREE.Vector3(0, -0.02, 0.05));
+  addPart(new THREE.CapsuleGeometry(0.095, 0.28, 4, 10), clothMat, upperLeg, new THREE.Vector3(0, -0.14, 0));
+  addPart(new THREE.CapsuleGeometry(0.072, 0.28, 4, 10), skinMat, lowerLeg, new THREE.Vector3(0, -0.14, 0));
+  addPart(new THREE.BoxGeometry(0.085, 0.055, 0.19), shoeMat, foot, new THREE.Vector3(0, -0.015, 0.045));
 }
 
 // ---------- 簡易アニメーション(右手を上げて振る「お辞儀&手振り」) ----------
