@@ -748,14 +748,28 @@ function drawTimelineRuler() {
     }
   }
 
-  // キーフレームの位置を三角マーカーで表示
-  timelineCtx.fillStyle = "#ffd24c";
+  // キーフレームの位置を三角マーカーで表示。ドラッグ中のキーフレームは
+  // 元の位置には描かず、指に追従する現在のドラッグ先の位置に、より大きく
+  // 明るい色のマーカーとして描画することで「掴んで動かしている」ことを
+  // リアルタイムに示す
   for (const kf of poseKeyframes) {
+    if (keyframeDragState && Math.abs(kf.time - keyframeDragState.originalTime) < 1e-6) continue;
     const x = timelineFrameToX(frameOf(kf.time), cssW);
+    timelineCtx.fillStyle = "#ffd24c";
     timelineCtx.beginPath();
     timelineCtx.moveTo(x, cssH * 0.85);
     timelineCtx.lineTo(x - 4, cssH * 0.98);
     timelineCtx.lineTo(x + 4, cssH * 0.98);
+    timelineCtx.closePath();
+    timelineCtx.fill();
+  }
+  if (keyframeDragState) {
+    const x = timelineFrameToX(frameOf(keyframeDragState.liveTime), cssW);
+    timelineCtx.fillStyle = "#ffffff";
+    timelineCtx.beginPath();
+    timelineCtx.moveTo(x, cssH * 0.78);
+    timelineCtx.lineTo(x - 6, cssH * 1.0);
+    timelineCtx.lineTo(x + 6, cssH * 1.0);
     timelineCtx.closePath();
     timelineCtx.fill();
   }
@@ -786,25 +800,92 @@ function frameFromClientX(clientX) {
   return Math.max(0, Math.min(TOTAL_FRAMES, Math.round(ratio * TOTAL_FRAMES)));
 }
 
+// ---------- キーフレーム♦のドラッグ移動 ----------
+// 「キーフレームの確認・選択・ドラッグ移動を最優先の操作とする」という
+// 要件のため、タイムライン上でのpointerdownは、まず既存キーフレームの
+// 近く(見た目のマーカーそのものより十分広い当たり判定)かどうかを
+// 判定し、該当すればスクラブ(現在位置の移動)ではなくキーフレームの
+// ドラッグ移動として扱う
+const KEYFRAME_HIT_PX = 14; // 見た目のマーカー(幅8px程度)よりかなり広いタップ許容範囲
+
+function findKeyframeNearClientX(clientX) {
+  const cssW = timelineCanvas.clientWidth;
+  const rect = timelineCanvas.getBoundingClientRect();
+  const x = clientX - rect.left;
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (const kf of poseKeyframes) {
+    const kx = timelineFrameToX(frameOf(kf.time), cssW);
+    const dist = Math.abs(kx - x);
+    if (dist <= KEYFRAME_HIT_PX && dist < nearestDist) {
+      nearest = kf;
+      nearestDist = dist;
+    }
+  }
+  return nearest;
+}
+
+// ドラッグ先の時刻にスナップし、既存キーフレームと重複する場合は
+// (手動でのキーフレーム上書き保存と同じルールで)そちらを置き換える形で
+// 移動を確定する
+function moveKeyframe(originalTime, targetTime, pose) {
+  const maxTime = TOTAL_FRAMES / FPS;
+  const snappedTime = timeOfFrame(frameOf(Math.max(0, Math.min(maxTime, targetTime))));
+  poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - originalTime) > 1e-6);
+  const existingIdx = poseKeyframes.findIndex((k) => Math.abs(k.time - snappedTime) < 1e-6);
+  if (existingIdx >= 0) poseKeyframes[existingIdx] = { time: snappedTime, pose };
+  else {
+    poseKeyframes.push({ time: snappedTime, pose });
+    poseKeyframes.sort((a, b) => a.time - b.time);
+  }
+  return snappedTime;
+}
+
 let timelineDragging = false;
+let keyframeDragState = null; // { originalTime, pose, liveTime }
+
 function onTimelinePointerDown(evt) {
-  timelineDragging = true;
   timelineCanvas.setPointerCapture(evt.pointerId);
+  const hitKf = findKeyframeNearClientX(evt.clientX);
+  if (hitKf) {
+    keyframeDragState = { originalTime: hitKf.time, pose: hitKf.pose, liveTime: hitKf.time };
+    setCurrentTime(hitKf.time);
+    return; // キーフレームを掴んだ場合はスクラブ(現在位置の移動)は行わない
+  }
+  timelineDragging = true;
   setCurrentTime(timeOfFrame(frameFromClientX(evt.clientX)));
   if (!posePlaying) applyPoseAtTime(currentTime);
 }
 function onTimelinePointerMove(evt) {
+  if (keyframeDragState) {
+    // ドラッグ中は現在のフレーム位置をリアルタイムに更新する(タイムラインの
+    // 赤い現在位置線・ドラッグ中マーカーの両方が指に追従する)
+    keyframeDragState.liveTime = timeOfFrame(frameFromClientX(evt.clientX));
+    setCurrentTime(keyframeDragState.liveTime);
+    return;
+  }
   if (!timelineDragging) return;
   setCurrentTime(timeOfFrame(frameFromClientX(evt.clientX)));
   if (!posePlaying) applyPoseAtTime(currentTime);
 }
 function onTimelinePointerUp() {
+  if (keyframeDragState) {
+    const snappedTime = moveKeyframe(keyframeDragState.originalTime, keyframeDragState.liveTime, keyframeDragState.pose);
+    keyframeDragState = null;
+    setCurrentTime(snappedTime);
+    if (!posePlaying) applyPoseAtTime(snappedTime);
+    return;
+  }
   timelineDragging = false;
 }
 timelineCanvas.addEventListener("pointerdown", onTimelinePointerDown);
 timelineCanvas.addEventListener("pointermove", onTimelinePointerMove);
 timelineCanvas.addEventListener("pointerup", onTimelinePointerUp);
-timelineCanvas.addEventListener("pointercancel", () => { timelineDragging = false; });
+timelineCanvas.addEventListener("pointercancel", () => {
+  timelineDragging = false;
+  keyframeDragState = null;
+  drawTimelineRuler();
+});
 window.addEventListener("resize", drawTimelineRuler);
 
 const keyframeBtn = document.getElementById("keyframeBtn");
@@ -1175,4 +1256,14 @@ window.__fk = {
   importAnimationJSON,
   isAnimPanelOpen: () => animPanelEl.classList.contains("open"),
   toggleAnimPanel: () => animMenuBtn.click(),
+  // タイムラインのレイアウト・キーフレームドラッグのテスト/デバッグ用
+  getTimelineButtonsRect: () => document.getElementById("timelineButtons").getBoundingClientRect().toJSON(),
+  getTimelineCanvasRect: () => timelineCanvas.getBoundingClientRect().toJSON(),
+  frameToClientX: (frame) => {
+    const rect = timelineCanvas.getBoundingClientRect();
+    return rect.left + timelineFrameToX(frame, timelineCanvas.clientWidth);
+  },
+  findKeyframeNearClientX,
+  isKeyframeDragActive: () => !!keyframeDragState,
+  getKeyframeDragLiveFrame: () => (keyframeDragState ? frameOf(keyframeDragState.liveTime) : null),
 };

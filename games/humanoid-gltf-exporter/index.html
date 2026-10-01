@@ -240,18 +240,18 @@
       opacity: 0.7;
       font-size: 10px;
     }
-    #timelineCanvas {
-      display: block;
-      width: 100%;
-      height: 30px;
-      touch-action: none;
-    }
     #timelineButtons {
       display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
       padding-top: 2px;
+    }
+    #timelineCanvas {
+      display: block;
+      width: 100%;
+      height: 30px;
+      touch-action: none;
     }
     .iconBtn {
       font: inherit;
@@ -330,7 +330,6 @@
         <span id="frameReadout">Frame: 0 / 60</span>
         <span id="timeReadout">Time: 0.000s</span>
       </div>
-      <canvas id="timelineCanvas"></canvas>
       <div id="timelineButtons">
         <button id="keyframeBtn" class="iconBtn">+◆</button>
         <button id="posePlayBtn" class="iconBtn">▶</button>
@@ -338,6 +337,10 @@
         <button id="copyPoseBtn" class="iconBtn" title="現在のポーズをコピー">📋</button>
         <button id="pastePoseBtn" class="iconBtn" title="コピーしたポーズを貼り付け" disabled>📌</button>
       </div>
+      <!-- タイムラインバーは常にボタン群の下(=3Dビューから最も遠い、最下段)に
+           独立して配置し、キーフレーム♦の確認・タップ・ドラッグ移動を
+           最優先でき、ボタン領域と重ならないようにしている -->
+      <canvas id="timelineCanvas"></canvas>
     </div>
   </div>
 
