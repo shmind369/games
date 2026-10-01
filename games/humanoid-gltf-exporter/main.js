@@ -197,7 +197,19 @@ rightLowerLeg.add(rightFoot);
 const root = new THREE.Group();
 root.name = "Humanoid";
 root.add(hips);
-scene.add(root);
+
+// ---------- モデル全体のトランスフォーム(Root) ----------
+// 「ポーズ」(各ボーンの回転)と「モデル全体の位置」を別々のデータとして
+// 扱うため、GLTF書き出し対象のroot(ボーン階層・メッシュ一式)を、さらに
+// 1段上の空のグループ(modelTransform)の子として配置する。モデル全体の
+// 移動(MOVEモード)はこのmodelTransformのpositionだけを変更し、root
+// 自身やその配下のボーンの回転には一切触れない。GLTFExporterは常に
+// root自身を起点に書き出すため、modelTransformの移動はGLB書き出し結果
+// (常にワールド原点基準のモデル)に一切影響しない
+const modelTransform = new THREE.Group();
+modelTransform.name = "ModelTransform";
+modelTransform.add(root);
+scene.add(modelTransform);
 root.updateMatrixWorld(true); // レストポーズのワールド行列を確定させる(バインド行列の計算に必要)
 
 const allBones = [
@@ -292,6 +304,14 @@ for (const [upperLeg, lowerLeg, foot] of [
 const boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
 
 let selectedBone = null;
+
+// ---------- 編集モード(POSE / MOVE) ----------
+// POSE: 選択した関節を3軸回転させる(既存の操作)。
+// MOVE: 現在のポーズ(各ボーンの回転・キーフレームに保存された値)を一切
+// 変更せず、モデル全体(modelTransform)の位置だけをドラッグで移動する。
+// この2つは完全に別の編集対象(pose = ボーンの回転、transform = モデル
+// 全体の位置)であり、互いのデータを一切混ぜない
+let editMode = "pose";
 
 // ---------- 肘・膝の回転軸(ヒンジ軸)をボーンのローカル座標系から判定する ----------
 // 「肘・膝は1軸のみ回転可能」とするため、どのローカル軸がその1軸に
@@ -407,7 +427,10 @@ function easyAxisForView(viewKey) {
 }
 
 function updateGizmoTransform() {
-  if (!selectedBone) {
+  // MOVEモード中は関節の回転操作を行わないため、紛らわしくないようギズモ
+  // 自体を非表示にする(選択状態そのものは保持したままなので、POSEモードへ
+  // 戻れば同じボーンのギズモがそのまま復帰する)
+  if (!selectedBone || editMode !== "pose") {
     selectionGizmo.visible = false;
     return;
   }
@@ -482,7 +505,7 @@ function setSelectedBone(b) {
   selectedBoneLabelEl.textContent = b ? b.name : "なし";
   // ボーン選択中は、ギズモのリングをドラッグする操作を優先するため、
   // カメラのオービット(OrbitControls)は無効化しておく
-  controls.enabled = !selectedBone;
+  controls.enabled = editMode === "pose" && !selectedBone;
   updateGizmoAxesForSelection();
   updateGizmoTransform(); // 次の描画フレームを待たず、選択直後にギズモの表示状態を反映する
 }
@@ -490,6 +513,25 @@ function setSelectedBone(b) {
 boneSelectEl.addEventListener("change", () => {
   setSelectedBone(boneNameToBone[boneSelectEl.value] || null);
 });
+
+// ---------- [POSE]/[MOVE]モード切替 ----------
+const modePoseBtn = document.getElementById("modePoseBtn");
+const modeMoveBtn = document.getElementById("modeMoveBtn");
+function setEditMode(mode) {
+  editMode = mode;
+  modePoseBtn.classList.toggle("active", mode === "pose");
+  modeMoveBtn.classList.toggle("active", mode === "move");
+  if (mode === "move") {
+    // MOVEに切り替えた瞬間にリングドラッグ中だった場合はハイライトを戻す
+    if (activeRingDrag) { setRingHighlight(activeRingDrag.key, false); activeRingDrag = null; }
+    controls.enabled = false;
+  } else {
+    controls.enabled = !selectedBone;
+  }
+  updateGizmoTransform();
+}
+modePoseBtn.addEventListener("click", () => setEditMode("pose"));
+modeMoveBtn.addEventListener("click", () => setEditMode("move"));
 
 // ---------- タップでボーン選択・ドラッグでボーンを回転(FK) ----------
 // 注意: Three.jsのSkinnedMeshの標準レイキャストは、ポーズ変更後の変形済み
@@ -579,9 +621,64 @@ function screenAngleAround(center, clientX, clientY, key) {
 function onPointerDownGate(evt) {
   const key = viewAt(evt.clientX, evt.clientY);
   setActiveView(key);
-  controls.enabled = key === "free" && !selectedBone;
+  // MOVEモード中はどのビュー・選択状態でもオービットを無効化し、
+  // ドラッグを常にモデル全体の移動操作に専念させる
+  controls.enabled = editMode === "pose" && key === "free" && !selectedBone;
 }
 canvas.addEventListener("pointerdown", onPointerDownGate, { capture: true });
+
+// ---------- MOVEモード: 現在のポーズを維持したままモデル全体を移動する ----------
+// 各ボーンのrotationには一切触れず、modelTransform(root一式を束ねる
+// 空のグループ)のpositionだけをドラッグで変更する。TOP/FRONT/LEFTの
+// 正投影ビューでは、そのビューのカメラの右方向・上方向ベクトルを使って
+// スクリーン座標の移動量をワールド座標の移動量に変換することで、
+// 各カメラの向き(TOP/FRONT/LEFTで異なる)に応じて自動的にそのビューの
+// 平面方向への移動になる(カメラの奥行き方向の成分は含まれないため、
+// そのビューにとっての奥行き軸は変化しない)。FREE CAMERA(透視投影)でも
+// 同じ考え方で、カメラから基準点までの距離をもとにスクリーン1pxあたりの
+// ワールド距離を近似して同様に変換する
+function screenDeltaToWorld(key, dxPx, dyPx, referencePoint) {
+  const cam = camerasByKey[key];
+  const vp = viewLayout[key];
+  const camRight = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+  const camUp = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+  let worldPerPxX, worldPerPxY;
+  if (cam.isOrthographicCamera) {
+    worldPerPxX = (cam.right - cam.left) / (cam.zoom * vp.w);
+    worldPerPxY = (cam.top - cam.bottom) / (cam.zoom * vp.h);
+  } else {
+    const dist = Math.max(0.01, cam.position.distanceTo(referencePoint));
+    const worldHeightAtDist = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) * dist;
+    worldPerPxY = worldHeightAtDist / vp.h;
+    worldPerPxX = worldPerPxY * cam.aspect;
+  }
+  return camRight.multiplyScalar(dxPx * worldPerPxX).add(camUp.multiplyScalar(-dyPx * worldPerPxY));
+}
+
+let modelDrag = null; // { key, startClientX, startClientY, startPosition }
+
+function onPointerDownModel(evt) {
+  modelDrag = {
+    key: viewAt(evt.clientX, evt.clientY),
+    startClientX: evt.clientX,
+    startClientY: evt.clientY,
+    startPosition: modelTransform.position.clone(),
+  };
+  controls.enabled = false;
+}
+
+function onPointerMoveModel(evt) {
+  if (!modelDrag) return;
+  const dx = evt.clientX - modelDrag.startClientX;
+  const dy = evt.clientY - modelDrag.startClientY;
+  const worldDelta = screenDeltaToWorld(modelDrag.key, dx, dy, modelDrag.startPosition);
+  modelTransform.position.copy(modelDrag.startPosition).add(worldDelta);
+}
+
+function onPointerUpModel() {
+  modelDrag = null;
+  controls.enabled = false; // POSEモードへ切り替えるまでオービットは無効のまま
+}
 
 const DRAG_THRESHOLD_PX = 6; // この移動量未満なら「タップ」、以上なら「ドラッグ」とみなす
 
@@ -607,6 +704,7 @@ function beginRingDrag(evt, ringHit, key) {
 }
 
 function onPointerDownPose(evt) {
+  if (editMode === "move") { onPointerDownModel(evt); return; }
   activeRingDrag = null;
   pointerDownInfo = { x: evt.clientX, y: evt.clientY, hitBone: null };
 
@@ -624,6 +722,7 @@ function onPointerDownPose(evt) {
 }
 
 function onPointerMovePose(evt) {
+  if (editMode === "move") { onPointerMoveModel(evt); return; }
   if (activeRingDrag) {
     const key = viewAt(evt.clientX, evt.clientY); // ドラッグ中に象限をまたいでも、その時点のビューで再投影する
     const currentAngle = screenAngleAround(activeRingDrag.center, evt.clientX, evt.clientY, key);
@@ -637,6 +736,7 @@ function onPointerMovePose(evt) {
 }
 
 function onPointerUpPose(evt) {
+  if (editMode === "move") { onPointerUpModel(); return; }
   if (activeRingDrag) {
     setRingHighlight(activeRingDrag.key, false);
     // ドラッグによって実際に回転が変化した場合のみUndo履歴に積む
@@ -650,7 +750,7 @@ function onPointerUpPose(evt) {
     }
     activeRingDrag = null;
     pointerDownInfo = null;
-    controls.enabled = !selectedBone;
+    controls.enabled = editMode === "pose" && !selectedBone;
     return;
   }
   if (!pointerDownInfo) return;
@@ -661,7 +761,7 @@ function onPointerUpPose(evt) {
     setSelectedBone(pointerDownInfo.hitBone);
   }
   pointerDownInfo = null;
-  controls.enabled = !selectedBone;
+  controls.enabled = editMode === "pose" && !selectedBone;
 }
 
 canvas.addEventListener("pointerdown", onPointerDownPose);
@@ -671,7 +771,8 @@ canvas.addEventListener("pointercancel", () => {
   if (activeRingDrag) setRingHighlight(activeRingDrag.key, false);
   activeRingDrag = null;
   pointerDownInfo = null;
-  controls.enabled = !selectedBone;
+  modelDrag = null;
+  controls.enabled = editMode === "pose" && !selectedBone;
 });
 
 // ---------- タイムライン・キーフレーム ----------
@@ -1346,7 +1447,7 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, root, skeleton, allBones };
+window.__scene = { scene, camera, root, skeleton, allBones, modelTransform };
 // モデル書き出し(メッシュ・マテリアル・ボーン構造のみ。アニメーションは含まない)
 window.__exportGLTF = () => new Promise((resolve, reject) => {
   const exporter = new GLTFExporter();
@@ -1456,4 +1557,9 @@ window.__fk = {
   getSelectedKeyframeFrame: () => (selectedKeyframeTime === null ? null : frameOf(selectedKeyframeTime)),
   deleteSelectedKeyframe: () => deleteKeyframeBtn.click(),
   isDeleteKeyframeBtnDisabled: () => deleteKeyframeBtn.disabled,
+  // POSE/MOVEモードのテスト/デバッグ用
+  getEditMode: () => editMode,
+  setEditMode,
+  getModelTransformPosition: () => modelTransform.position.toArray(),
+  isOrbitControlsEnabled: () => controls.enabled,
 };

@@ -194,6 +194,39 @@
       touch-action: manipulation;
     }
 
+    /* [POSE]/[MOVE]モード切替。poseBarと同様、左上に小さく収めて
+       3Dビューへのタップを奪わないようにする */
+    #modeBar {
+      position: absolute;
+      top: max(92px, calc(env(safe-area-inset-top) + 84px));
+      left: 10px;
+      z-index: 10;
+      display: flex;
+      gap: 3px;
+      background: rgba(20,22,28,0.55);
+      border-radius: 999px;
+      padding: 4px;
+      pointer-events: auto;
+    }
+    .modeBtn {
+      font: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      padding: 6px 12px;
+      min-height: 32px;
+      border: none;
+      border-radius: 999px;
+      background: transparent;
+      color: rgba(255,255,255,0.55);
+      touch-action: manipulation;
+    }
+    .modeBtn.active {
+      background: #4c8dff;
+      color: #fff;
+    }
+    .modeBtn:active { transform: scale(0.95); }
+
     #status {
       position: absolute;
       bottom: 20px;
@@ -323,6 +356,13 @@
         <select id="boneSelect">
           <option value="">(ボーン未選択)</option>
         </select>
+      </div>
+      <!-- POSE: 選択した関節を3軸回転させる(既存の操作)。
+           MOVE: 現在のポーズ(各ボーンの回転・キーフレーム)を一切変更せず、
+           モデル全体(ModelTransform)の位置だけをドラッグで移動する -->
+      <div id="modeBar">
+        <button id="modePoseBtn" class="modeBtn active">POSE</button>
+        <button id="modeMoveBtn" class="modeBtn">MOVE</button>
       </div>
 
       <!-- アニメーション管理パネル: 3Dモデル(character.glb)とは別データとして、
