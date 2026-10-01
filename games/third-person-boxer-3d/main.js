@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 
 // ---------- 左右スワイプでの回避移動(Three.js非依存の純粋関数) ----------
 const NEUTRAL_X = 0;
@@ -158,103 +159,36 @@ scene.add(keyLight);
 const skyFill = new THREE.HemisphereLight(0x9fb8e6, 0x8a91a0, 0.6);
 scene.add(skyFill);
 
-// ---------- キャラクター(プリミティブ形状で構築、背面から見た構図) ----------
-const skinMat = new THREE.MeshStandardMaterial({ color: 0x93a1b5, roughness: 0.55, metalness: 0.05 });
-const shortsMat = new THREE.MeshStandardMaterial({ color: 0x18181c, roughness: 0.6 });
-
+// ---------- キャラクター(humanoid-gltf-exporterで書き出したGLTFモデルを読み込む) ----------
+// 回避の姿勢制御(腰を支点にした上半身の傾き、股関節・膝の曲げ)は、
+// モデルの内部にある同名のボーン(Spine/LeftUpperLeg/LeftLowerLeg等)を
+// 直接回転させることで実現する。モデルが届くまでは空のグループのまま
+// レンダーループを回し、読み込み完了時にボーン参照をセットする
 const player = new THREE.Group();
-
-function segmentMesh(pA, pB, radius, material) {
-  const dir = new THREE.Vector3().subVectors(pB, pA);
-  const length = dir.length();
-  const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, Math.max(0.001, length - radius * 2), 4, 10), material);
-  const mid = new THREE.Vector3().addVectors(pA, pB).multiplyScalar(0.5);
-  mesh.position.copy(mid);
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.clone().normalize());
-  return mesh;
-}
-
-// 上半身(胴体・首・頭・腕)は腰の高さ(WAIST_Y)を支点とするグループにまとめ、
-// 回避時にこの支点を中心に傾けられるようにする
-const WAIST_Y = 1.05;
-const upperBody = new THREE.Group();
-upperBody.position.set(0, WAIST_Y, 0);
-player.add(upperBody);
-
-const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.215, 0.46, 4, 12), skinMat);
-torso.position.set(0, 1.28 - WAIST_Y, 0);
-upperBody.add(torso);
-
-const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.085, 0.12, 10), skinMat);
-neck.position.set(0, 1.605 - WAIST_Y, 0);
-upperBody.add(neck);
-
-const head = new THREE.Mesh(new THREE.SphereGeometry(0.115, 20, 16), skinMat);
-head.scale.set(0.92, 1.18, 1.0);
-head.position.set(0, 1.755 - WAIST_Y, 0.005);
-upperBody.add(head);
-
-const hips = new THREE.Mesh(new THREE.CapsuleGeometry(0.21, 0.1, 4, 12), skinMat);
-hips.position.set(0, 0.92, 0);
-player.add(hips);
-
-const shorts = new THREE.Mesh(new THREE.CylinderGeometry(0.235, 0.21, 0.3, 16), shortsMat);
-shorts.position.set(0, 0.9, 0);
-player.add(shorts);
-
-// 脚は「股関節(hipPivot)」→「膝関節(kneePivot)」の2段階のピボットで構築し、
-// 回避時にその場で膝を曲げて重心を落とせるようにする。各メッシュの位置は
-// 元の(ピボットなしだった頃の)絶対Y座標をそのまま維持するよう、各ピボットの
-// Y座標分だけ差し引いた相対座標にしている(棒立ちの初期姿勢は変えていない)
-const HIP_Y = 0.85;
-const KNEE_Y = 0.44;
-function makeLeg(sign) {
-  const hipPivot = new THREE.Group();
-  hipPivot.position.set(sign * 0.13, HIP_Y, 0);
-
-  const thigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.1, 0.34, 4, 10), skinMat);
-  thigh.position.set(0, 0.62 - HIP_Y, 0);
-  hipPivot.add(thigh);
-
-  const kneePivot = new THREE.Group();
-  kneePivot.position.set(0, KNEE_Y - HIP_Y, 0);
-  hipPivot.add(kneePivot);
-
-  const calf = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.34, 4, 10), skinMat);
-  calf.position.set(0, 0.24 - KNEE_Y, 0.01);
-  kneePivot.add(calf);
-  const foot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.24), skinMat);
-  foot.position.set(0, 0.035 - KNEE_Y, 0.06);
-  kneePivot.add(foot);
-
-  return hipPivot;
-}
-const legLeft = makeLeg(-1);
-const legRight = makeLeg(1);
-player.add(legLeft);
-player.add(legRight);
-
-// 腕: 背面視点でガードを構える(肘が体側から突き出し、拳は胸の前に隠れる)ポーズ。
-// 肩→肘→拳を3点の座標で指定し、区間ごとにカプセルを生成する
-function makeArm(sign) {
-  const arm = new THREE.Group();
-  const shoulder = new THREE.Vector3(sign * 0.26, 1.46 - WAIST_Y, 0);
-  const elbow = new THREE.Vector3(sign * 0.3, 1.14 - WAIST_Y, 0.12);
-  const fist = new THREE.Vector3(sign * 0.13, 1.5 - WAIST_Y, 0.29);
-
-  arm.add(new THREE.Mesh(new THREE.SphereGeometry(0.095, 14, 12), skinMat).translateX(shoulder.x).translateY(shoulder.y).translateZ(shoulder.z));
-  arm.add(segmentMesh(shoulder, elbow, 0.075, skinMat));
-  arm.add(segmentMesh(elbow, fist, 0.065, skinMat));
-  const fistMesh = new THREE.Mesh(new THREE.SphereGeometry(0.08, 12, 10), skinMat);
-  fistMesh.position.copy(fist);
-  arm.add(fistMesh);
-  return arm;
-}
-upperBody.add(makeArm(-1));
-upperBody.add(makeArm(1));
-
 player.rotation.y = Math.PI; // 背中をカメラ(+Z)に向ける
 scene.add(player);
+
+const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerLeg: null, rightLowerLeg: null };
+new GLTFLoader().load(
+  "./assets/humanoid.glb",
+  (gltf) => {
+    const model = gltf.scene;
+    // 書き出し元(humanoid-gltf-exporter)はアニメーション再生中にエクスポート
+    // されたため、各ボーンの初期回転にアニメーション途中の姿勢が焼き込まれて
+    // いる。回避動作の回転と衝突しないよう、全ボーンを回転なしの直立姿勢に
+    // リセットしてから使う
+    model.traverse((o) => { if (o.isBone) o.quaternion.identity(); });
+    player.add(model);
+    bones.hips = model.getObjectByName("Hips");
+    bones.spine = model.getObjectByName("Spine");
+    bones.leftUpperLeg = model.getObjectByName("LeftUpperLeg");
+    bones.rightUpperLeg = model.getObjectByName("RightUpperLeg");
+    bones.leftLowerLeg = model.getObjectByName("LeftLowerLeg");
+    bones.rightLowerLeg = model.getObjectByName("RightLowerLeg");
+  },
+  undefined,
+  (err) => console.error("humanoid.glb の読み込みに失敗しました", err)
+);
 
 // ---------- 接地シャドウ(ソフトな円形のフェイクシャドウ) ----------
 function makeShadowTexture() {
@@ -323,13 +257,14 @@ function render() {
   player.position.y = -posture.crouchDrop;
   shadowBlob.position.x = x + 0.05;
 
-  upperBody.rotation.z = posture.leanZ;
-  upperBody.rotation.x = posture.leanX;
-
-  legLeft.rotation.x = posture.hipBend;
-  legRight.rotation.x = posture.hipBend;
-  legLeft.children[1].rotation.x = posture.kneeBend; // kneePivot
-  legRight.children[1].rotation.x = posture.kneeBend; // kneePivot
+  if (bones.spine) {
+    bones.spine.rotation.z = posture.leanZ;
+    bones.spine.rotation.x = posture.leanX;
+    bones.leftUpperLeg.rotation.x = posture.hipBend;
+    bones.rightUpperLeg.rotation.x = posture.hipBend;
+    bones.leftLowerLeg.rotation.x = posture.kneeBend;
+    bones.rightLowerLeg.rotation.x = posture.kneeBend;
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(render);
@@ -337,7 +272,7 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, player, ground, grid, upperBody, legLeft, legRight };
+window.__scene = { scene, camera, player, ground, grid, bones };
 window.__dodge = {
   classifySwipe,
   onSwipe,
