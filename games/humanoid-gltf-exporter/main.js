@@ -41,23 +41,24 @@ function bone(name, x, y, z) {
   return b;
 }
 
-// プロポーション調整: 頭を縮小し、首を明確に分離し、肩幅・四肢の太さの
-// バランスを自然にした(ボーンの名前・階層・本数は変更していない)
+// プロポーション調整(第2段): 頭を少し拡大、首を細く伸ばして肩への
+// つながりを自然にし、肩幅をさらに拡張、腕を少し伸ばして人体比率に
+// 近づけた(ボーンの名前・階層・本数は変更していない)
 const hips = bone("Hips", 0, 0.92, 0);
 const spine = bone("Spine", 0, 0.13, 0);
 const chest = bone("Chest", 0, 0.17, 0);
-const neck = bone("Neck", 0, 0.17, 0);
-const head = bone("Head", 0, 0.14, 0);
+const neck = bone("Neck", 0, 0.19, 0);
+const head = bone("Head", 0, 0.15, 0);
 
-const leftShoulder = bone("LeftShoulder", 0.17, 0.13, 0);
+const leftShoulder = bone("LeftShoulder", 0.195, 0.13, 0);
 const leftUpperArm = bone("LeftUpperArm", 0.07, 0, 0);
-const leftForearm = bone("LeftForearm", 0, -0.26, 0);
-const leftHand = bone("LeftHand", 0, -0.24, 0);
+const leftForearm = bone("LeftForearm", 0, -0.29, 0);
+const leftHand = bone("LeftHand", 0, -0.27, 0);
 
-const rightShoulder = bone("RightShoulder", -0.17, 0.13, 0);
+const rightShoulder = bone("RightShoulder", -0.195, 0.13, 0);
 const rightUpperArm = bone("RightUpperArm", -0.07, 0, 0);
-const rightForearm = bone("RightForearm", 0, -0.26, 0);
-const rightHand = bone("RightHand", 0, -0.24, 0);
+const rightForearm = bone("RightForearm", 0, -0.29, 0);
+const rightHand = bone("RightHand", 0, -0.27, 0);
 
 const leftUpperLeg = bone("LeftUpperLeg", 0.10, -0.02, 0);
 const leftLowerLeg = bone("LeftLowerLeg", 0, -0.43, 0);
@@ -137,21 +138,25 @@ function addPart(geometry, material, bone, offset = new THREE.Vector3()) {
   return mesh;
 }
 
-// 胴体を少し細くして肩幅とのバランスを整え、首がちょうど収まる高さに
-// とどめる(以前は胴体カプセルの上端が首を飲み込んでしまっていた)
-addPart(new THREE.CapsuleGeometry(0.145, 0.16, 4, 10), skinMat, chest, new THREE.Vector3(0, -0.05, 0));
-addPart(new THREE.CapsuleGeometry(0.13, 0.08, 4, 10), skinMat, hips, new THREE.Vector3(0, -0.02, 0));
-// 頭を一回り小さくし、首をはっきり見える長さ・太さにする
-addPart(new THREE.SphereGeometry(0.098, 20, 16), skinMat, head, new THREE.Vector3(0, 0.065, 0));
-addPart(new THREE.CylinderGeometry(0.055, 0.07, 0.2, 10), skinMat, neck, new THREE.Vector3(0, 0.01, 0));
+// 胴体: 円柱(上下で半径を変える)で「胸部から腰にかけて細くなる」
+// 逆台形型のシルエットにする(上端=胸・肩側を太く、下端=ウエスト側を細く)
+addPart(new THREE.CylinderGeometry(0.16, 0.115, 0.3, 12), skinMat, chest, new THREE.Vector3(0, -0.08, 0));
+// 骨盤: ウエストから骨盤にかけて下側がやや広がる自然な形にする
+addPart(new THREE.CylinderGeometry(0.115, 0.14, 0.18, 12), skinMat, hips, new THREE.Vector3(0, -0.02, 0));
+// 頭を一回り大きくし、首は細く伸ばして頭から肩へ自然につながるようにする
+addPart(new THREE.SphereGeometry(0.108, 20, 16), skinMat, head, new THREE.Vector3(0, 0.07, 0));
+addPart(new THREE.CylinderGeometry(0.046, 0.057, 0.21, 10), skinMat, neck, new THREE.Vector3(0, 0, 0));
 
 for (const [shoulder, upperArm, forearm, hand] of [
   [leftShoulder, leftUpperArm, leftForearm, leftHand],
   [rightShoulder, rightUpperArm, rightForearm, rightHand],
 ]) {
+  // 肩関節が分かるように肩の位置に球を置く
   addPart(new THREE.SphereGeometry(0.062, 14, 12), skinMat, shoulder);
-  addPart(new THREE.CapsuleGeometry(0.052, 0.18, 4, 8), skinMat, upperArm, new THREE.Vector3(0, -0.095, 0));
-  addPart(new THREE.CapsuleGeometry(0.044, 0.18, 4, 8), skinMat, forearm, new THREE.Vector3(0, -0.09, 0));
+  addPart(new THREE.CapsuleGeometry(0.052, 0.186, 4, 8), skinMat, upperArm, new THREE.Vector3(0, -0.145, 0));
+  // 肘関節が分かるように、前腕ボーンの位置(=肘の位置)に小さな球を置く
+  addPart(new THREE.SphereGeometry(0.04, 12, 10), skinMat, forearm);
+  addPart(new THREE.CapsuleGeometry(0.044, 0.182, 4, 8), skinMat, forearm, new THREE.Vector3(0, -0.135, 0));
   addPart(new THREE.SphereGeometry(0.046, 12, 10), skinMat, hand, new THREE.Vector3(0, -0.02, 0));
 }
 
@@ -160,7 +165,11 @@ for (const [upperLeg, lowerLeg, foot] of [
   [leftUpperLeg, leftLowerLeg, leftFoot],
   [rightUpperLeg, rightLowerLeg, rightFoot],
 ]) {
+  // 股関節が分かるように、腿ボーンの位置(=股関節の位置)に小さな球を置く
+  addPart(new THREE.SphereGeometry(0.052, 12, 10), skinMat, upperLeg);
   addPart(new THREE.CapsuleGeometry(0.095, 0.28, 4, 10), clothMat, upperLeg, new THREE.Vector3(0, -0.14, 0));
+  // 膝関節が分かるように、すねボーンの位置(=膝の位置)に小さな球を置く
+  addPart(new THREE.SphereGeometry(0.05, 12, 10), skinMat, lowerLeg);
   addPart(new THREE.CapsuleGeometry(0.072, 0.28, 4, 10), skinMat, lowerLeg, new THREE.Vector3(0, -0.14, 0));
   addPart(new THREE.BoxGeometry(0.085, 0.055, 0.19), shoeMat, foot, new THREE.Vector3(0, -0.015, 0.045));
 }
