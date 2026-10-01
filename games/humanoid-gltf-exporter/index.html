@@ -18,6 +18,28 @@
     }
     canvas { display: block; touch-action: none; }
 
+    /* ---------- モバイルでのテキスト選択/コンテキストメニュー抑制 ----------
+       スマートフォンのSafari/Chromeで、タイムラインや3Dビューをドラッグ操作
+       している最中に、ブラウザ標準のテキスト選択(「コピー」「Googleで検索」
+       等のメニュー)や長押しのコールアウトメニューが表示されてしまう問題を
+       防ぐため、アプリのUI全体をuser-select:noneにする。
+       ただし、実際に文字入力する要素(input/textarea。今回は
+       #animNameInputのみ)は対象から除外し、通常のテキスト選択・コピー
+       操作を維持する */
+    #appRoot, #appRoot * {
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none; /* iOS Safariの長押しコールアウト(コピー等)を抑制 */
+    }
+    #appRoot input,
+    #appRoot textarea {
+      -webkit-user-select: text;
+      -moz-user-select: text;
+      user-select: text;
+      -webkit-touch-callout: default;
+    }
+
     /* ---------- 全体レイアウト ----------
        3Dビュー領域とタイムライン領域を、z-indexの重ね合わせではなく
        実際のドキュメントフロー(flex column)で完全に分離する。
@@ -126,6 +148,7 @@
       border: none;
       border-radius: 8px;
       padding: 6px 8px;
+      touch-action: manipulation;
     }
     #animPanel button {
       font: inherit;
@@ -168,6 +191,7 @@
       border: none;
       border-radius: 999px;
       padding: 5px 8px;
+      touch-action: manipulation;
     }
 
     #status {

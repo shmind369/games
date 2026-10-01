@@ -2,6 +2,28 @@ import * as THREE from "three";
 import { OrbitControls } from "./vendor/controls/OrbitControls.js";
 import { GLTFExporter } from "./vendor/exporters/GLTFExporter.js";
 
+// ---------- モバイルでのテキスト選択/コンテキストメニュー抑制 ----------
+// スマートフォンのSafari/Chromeでタイムラインや3Dビューをドラッグしている
+// 最中に、ブラウザ標準のテキスト選択(「コピー」「Googleで検索」等の
+// メニュー)や長押し・右クリックのコンテキストメニューが表示されてしまう
+// 問題を防ぐ。CSS側のuser-select:noneだけでは、ブラウザによっては
+// 長押しのコールアウトやcontextmenuイベントが別途発火することがあるため、
+// JS側でも明示的に抑制している。input/textarea(実際に文字入力する要素。
+// 今回はアニメーション名の#animNameInputのみ)は対象から除外し、通常の
+// テキスト選択・コピー・右クリックは維持する
+function isTextEntryElement(el) {
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
+document.addEventListener("selectstart", (evt) => {
+  if (!isTextEntryElement(evt.target)) evt.preventDefault();
+});
+document.addEventListener("contextmenu", (evt) => {
+  if (!isTextEntryElement(evt.target)) evt.preventDefault();
+});
+document.addEventListener("dragstart", (evt) => {
+  if (!isTextEntryElement(evt.target)) evt.preventDefault();
+});
+
 // ---------- Renderer / scene / camera ----------
 const canvas = document.getElementById("game");
 const viewportArea = document.getElementById("viewportArea"); // 3Dビュー専用領域(タイムラインとは完全に分離されたDOM領域)
