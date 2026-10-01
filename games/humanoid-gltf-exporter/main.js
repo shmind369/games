@@ -413,6 +413,49 @@ selectionGizmo.visible = false;
 selectionGizmo.renderOrder = 999;
 scene.add(selectionGizmo);
 
+// ---------- 3Dカーソル(基準点)の表示 ----------
+// 「3D空間上の基準点・目安」として視覚的に表示するだけのマーカー。
+// 現時点では回転中心・移動基準・スナップ先などの機能は一切持たせず、
+// ドラッグ移動・クリック移動・回転にも対応しない(見た目のみ)。
+// ポーズ(ボーンの回転)やモデル全体のトランスフォーム(modelTransform)
+// とは完全に独立した、ワールド座標系の値(cursorPosition)として管理する
+const CURSOR_AXIS_LENGTH = 0.12; // ボーンの3軸ギズモ(半径0.17)より一回り控えめにし、目立ちすぎないようにしている
+const CURSOR_AXIS_COLOR = { x: 0xff5050, y: 0x55e06a, z: 0x4d9bff }; // 既存の3軸ギズモ(X=赤,Y=緑,Z=青)と同じ配色にして、見た目の意味を揃えている
+
+function makeCursorAxisMesh(color, axisVec) {
+  // デフォルトでローカルY軸方向に伸びる細い円柱を作り、原点から
+  // axisVec方向へ伸びる「軸」になるよう土台を原点に揃えてから向きを合わせる
+  const geometry = new THREE.CylinderGeometry(0.004, 0.004, CURSOR_AXIS_LENGTH, 6);
+  geometry.translate(0, CURSOR_AXIS_LENGTH / 2, 0);
+  const material = new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), axisVec.clone().normalize());
+  return mesh;
+}
+
+const cursorMarker = new THREE.Group();
+cursorMarker.add(
+  makeCursorAxisMesh(CURSOR_AXIS_COLOR.x, new THREE.Vector3(1, 0, 0)),
+  makeCursorAxisMesh(CURSOR_AXIS_COLOR.y, new THREE.Vector3(0, 1, 0)),
+  makeCursorAxisMesh(CURSOR_AXIS_COLOR.z, new THREE.Vector3(0, 0, 1))
+);
+const cursorDot = new THREE.Mesh(
+  new THREE.SphereGeometry(0.012, 8, 6),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.9 })
+);
+cursorMarker.add(cursorDot);
+cursorMarker.renderOrder = 998; // ギズモ(999)よりわずかに手前にならないようにしつつ、通常のメッシュよりは手前に描く
+scene.add(cursorMarker);
+
+// 将来的な拡張(回転中心・移動基準点・スナップ先・ポーズ編集の基準点など)に
+// 備えて、cursorPositionはモデルのRoot位置やボーン位置とは別の、独立した
+// 単純な3D座標オブジェクトとして管理する。初期位置はワールド原点
+let cursorPosition = { x: 0, y: 0, z: 0 };
+function setCursorPosition(x, y, z) {
+  cursorPosition = { x, y, z };
+  cursorMarker.position.set(x, y, z);
+}
+
 const ringByAxisKey = { x: ringX, y: ringY, z: ringZ };
 function ringLocalAxis(key) {
   return key === "x" ? new THREE.Vector3(1, 0, 0) : key === "y" ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
@@ -576,6 +619,34 @@ function pickBoneAt(clientX, clientY) {
   setRaycasterFromClient(clientX, clientY, viewAt(clientX, clientY));
   const hits = raycaster.intersectObjects(boneHitProxies, false);
   return hits.length > 0 ? hits[0].object.userData.bone : null;
+}
+
+// 3Dカーソルの配置先となる平面の法線(=そのビューにとっての奥行き軸)。
+// TOPはY=0、FRONTはZ=0、LEFTはX=0の平面上に配置する(FREE CAMERAは
+// 今回未対応のため含めていない)
+const CURSOR_PLANE_NORMAL_BY_VIEW = {
+  top: new THREE.Vector3(0, 1, 0),
+  front: new THREE.Vector3(0, 0, 1),
+  left: new THREE.Vector3(1, 0, 0),
+};
+
+// 指定したビュー(正投影のTOP/FRONT/LEFTのみ)でのタップ位置を、そのビューの
+// 奥行き軸を0に固定した3D座標へ変換し、3Dカーソルをそこへ移動する。
+// 正投影カメラのレイは互いに平行で、かつカメラの向き自体がそのビューの
+// 奥行き軸と一致しているため、対応する平面(原点を通る)との交点は
+// 必ず一意に求まる
+function placeCursorAt(clientX, clientY, viewKey) {
+  const planeNormal = CURSOR_PLANE_NORMAL_BY_VIEW[viewKey];
+  if (!planeNormal) return; // FREE CAMERAは今回未対応
+  setRaycasterFromClient(clientX, clientY, viewKey);
+  const plane = new THREE.Plane(planeNormal, 0);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(plane, hit)) return;
+  // 浮動小数点の誤差を避け、奥行き軸を厳密に0へ固定する
+  if (viewKey === "top") hit.y = 0;
+  else if (viewKey === "front") hit.z = 0;
+  else if (viewKey === "left") hit.x = 0;
+  setCursorPosition(hit.x, hit.y, hit.z);
 }
 
 // ギズモのリング(選択中ボーンがある場合のみ)に対するヒットテスト。
@@ -759,6 +830,10 @@ function onPointerUpPose(evt) {
   if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) {
     // タップ: ヒットしたボーンを選択(ヒットしなければ選択解除)
     setSelectedBone(pointerDownInfo.hitBone);
+    if (!pointerDownInfo.hitBone) {
+      // 空白部分のタップ: 3Dカーソルをそのビューの平面上に配置する
+      placeCursorAt(evt.clientX, evt.clientY, viewAt(evt.clientX, evt.clientY));
+    }
   }
   pointerDownInfo = null;
   controls.enabled = editMode === "pose" && !selectedBone;
@@ -1447,7 +1522,7 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, root, skeleton, allBones, modelTransform };
+window.__scene = { scene, camera, root, skeleton, allBones, modelTransform, cursorMarker };
 // モデル書き出し(メッシュ・マテリアル・ボーン構造のみ。アニメーションは含まない)
 window.__exportGLTF = () => new Promise((resolve, reject) => {
   const exporter = new GLTFExporter();
@@ -1562,4 +1637,9 @@ window.__fk = {
   setEditMode,
   getModelTransformPosition: () => modelTransform.position.toArray(),
   isOrbitControlsEnabled: () => controls.enabled,
+  // 3Dカーソル(基準点)のテスト/デバッグ用
+  getCursorPosition: () => ({ ...cursorPosition }),
+  setCursorPosition,
+  placeCursorAt,
+  isCursorMarkerVisible: () => cursorMarker.visible,
 };
