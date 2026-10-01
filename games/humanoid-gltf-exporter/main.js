@@ -760,15 +760,19 @@ function drawTimelineRuler() {
   // キーフレームの位置を三角マーカーで表示。ドラッグ中のキーフレームは
   // 元の位置には描かず、指に追従する現在のドラッグ先の位置に、より大きく
   // 明るい色のマーカーとして描画することで「掴んで動かしている」ことを
-  // リアルタイムに示す
+  // リアルタイムに示す。選択中のキーフレーム(削除対象)は、通常の黄色とは
+  // 異なる色で少し大きく描き、どれが選択されているか分かるようにする
   for (const kf of poseKeyframes) {
     if (keyframeDragState && Math.abs(kf.time - keyframeDragState.originalTime) < 1e-6) continue;
+    const isSelected = selectedKeyframeTime !== null && Math.abs(kf.time - selectedKeyframeTime) < 1e-6;
     const x = timelineFrameToX(frameOf(kf.time), cssW);
-    timelineCtx.fillStyle = "#ffd24c";
+    timelineCtx.fillStyle = isSelected ? "#ff8a3d" : "#ffd24c";
+    const halfWidth = isSelected ? 6 : 4;
+    const bottomY = isSelected ? cssH * 1.0 : cssH * 0.98;
     timelineCtx.beginPath();
     timelineCtx.moveTo(x, cssH * 0.85);
-    timelineCtx.lineTo(x - 4, cssH * 0.98);
-    timelineCtx.lineTo(x + 4, cssH * 0.98);
+    timelineCtx.lineTo(x - halfWidth, bottomY);
+    timelineCtx.lineTo(x + halfWidth, bottomY);
     timelineCtx.closePath();
     timelineCtx.fill();
   }
@@ -864,10 +868,10 @@ function moveKeyframe(originalTime, targetTime, pose) {
 // クォータニオン配列や、既存のpose/キーフレームオブジェクトへの参照のみで、
 // いずれも数値の小さな配列程度のサイズしかない)。
 // 対象は「実際に存在する編集操作」のみ(ボーンの回転・キーフレームの
-// 追加・キーフレームの移動・ポーズの貼り付け)。このアプリには現状
-// ボーンの位置(Position)を編集する機能や、キーフレームを削除する機能
-// 自体が無いため、それらの操作のUndoは実装していない(今回の依頼は
-// Undo機能の追加のみで、新しい編集機能は追加しないため)。
+// 追加・キーフレームの移動・キーフレームの削除・ポーズの貼り付け)。
+// このアプリには現状ボーンの位置(Position)を編集する機能が無いため、
+// その操作のUndoは実装していない(今回の依頼はUndo機能の追加のみで、
+// 新しい編集機能は追加しないため)。
 const UNDO_LIMIT = 50;
 let undoStack = [];
 
@@ -896,6 +900,7 @@ function performUndo() {
         poseKeyframes.push(entry.previous);
         poseKeyframes.sort((a, b) => a.time - b.time);
       }
+      selectedKeyframeTime = entry.previous ? entry.time : null;
       setCurrentTime(entry.time);
       if (!posePlaying) applyPoseAtTime(entry.time);
       break;
@@ -905,27 +910,46 @@ function performUndo() {
       if (entry.replaced) poseKeyframes.push(entry.replaced);
       poseKeyframes.push({ time: entry.originalTime, pose: entry.originalPose });
       poseKeyframes.sort((a, b) => a.time - b.time);
+      selectedKeyframeTime = entry.originalTime;
       setCurrentTime(entry.originalTime);
       if (!posePlaying) applyPoseAtTime(entry.originalTime);
+      break;
+    }
+    case "keyframeDelete": {
+      poseKeyframes.push(entry.removed);
+      poseKeyframes.sort((a, b) => a.time - b.time);
+      selectedKeyframeTime = entry.removed.time;
+      setCurrentTime(entry.removed.time);
+      if (!posePlaying) applyPoseAtTime(entry.removed.time);
       break;
     }
   }
   drawTimelineRuler();
   updateUndoBtnState();
+  updateDeleteKeyframeBtnState();
   return true;
 }
 
 let timelineDragging = false;
 let keyframeDragState = null; // { originalTime, pose, liveTime }
+let selectedKeyframeTime = null; // タップ/ドラッグで選択中のキーフレームの時刻(削除対象)
 
 function onTimelinePointerDown(evt) {
   timelineCanvas.setPointerCapture(evt.pointerId);
   const hitKf = findKeyframeNearClientX(evt.clientX);
   if (hitKf) {
     keyframeDragState = { originalTime: hitKf.time, pose: hitKf.pose, liveTime: hitKf.time };
+    // 掴んだ時点でそのキーフレームを選択状態にする(タップのみでドラッグ
+    // しなかった場合も、そのまま「選択してこのキーフレームを確認・削除
+    // できる」状態になる)
+    selectedKeyframeTime = hitKf.time;
+    updateDeleteKeyframeBtnState();
     setCurrentTime(hitKf.time);
     return; // キーフレームを掴んだ場合はスクラブ(現在位置の移動)は行わない
   }
+  // キーフレーム以外の場所をタップ/ドラッグした場合は選択を解除する
+  selectedKeyframeTime = null;
+  updateDeleteKeyframeBtnState();
   timelineDragging = true;
   setCurrentTime(timeOfFrame(frameFromClientX(evt.clientX)));
   if (!posePlaying) applyPoseAtTime(currentTime);
@@ -957,6 +981,9 @@ function onTimelinePointerUp() {
       pushUndo({ type: "keyframeMove", originalTime, originalPose: pose, targetTime: snappedTime, replaced });
     }
     keyframeDragState = null;
+    // 選択状態は、移動後のキーフレームの新しい位置に追従させる
+    selectedKeyframeTime = snappedTime;
+    updateDeleteKeyframeBtnState();
     setCurrentTime(snappedTime);
     if (!posePlaying) applyPoseAtTime(snappedTime);
     return;
@@ -1032,6 +1059,33 @@ undoBtn.addEventListener("click", () => {
     statusEl.textContent = "元に戻しました";
     setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 1500);
   }
+});
+
+// ---------- キーフレームの削除 ----------
+// タイムライン上でキーフレーム♦をタップ/ドラッグで掴むと選択状態になる
+// (selectedKeyframeTime、pickGizmoRingAt等とは無関係の別概念)。選択中は
+// 🗑ボタンが有効になり、押すとそのキーフレーム1つだけを削除する。削除は
+// Undo対象としており、誤って削除してしまっても元に戻せる
+const deleteKeyframeBtn = document.getElementById("deleteKeyframeBtn");
+function updateDeleteKeyframeBtnState() {
+  deleteKeyframeBtn.disabled = selectedKeyframeTime === null;
+}
+deleteKeyframeBtn.addEventListener("click", () => {
+  if (selectedKeyframeTime === null) return;
+  const idx = poseKeyframes.findIndex((k) => Math.abs(k.time - selectedKeyframeTime) < 1e-6);
+  if (idx < 0) return;
+  const removed = poseKeyframes[idx];
+  // 削除対象のキーフレームだけを取り除く。配列の他の要素(=他の
+  // キーフレーム)の内容には一切触れないため、他のキーフレームへの
+  // 影響は無い
+  poseKeyframes = poseKeyframes.filter((_, i) => i !== idx);
+  pushUndo({ type: "keyframeDelete", removed });
+  selectedKeyframeTime = null;
+  updateDeleteKeyframeBtnState();
+  drawTimelineRuler();
+  if (!posePlaying) applyPoseAtTime(currentTime);
+  statusEl.textContent = "選択したキーフレームを削除しました";
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 1500);
 });
 
 // 3Dモデルの書き出し(.glb)は、メッシュ・マテリアル・ボーン構造のみを
@@ -1234,6 +1288,7 @@ if (window.visualViewport) window.visualViewport.addEventListener("resize", resi
 resize();
 setCurrentTime(0); // 初期状態のフレーム表示・目盛を描画しておく
 updateUndoBtnState(); // 初期状態ではUndo履歴が空のためボタンを無効化しておく
+updateDeleteKeyframeBtnState(); // 初期状態ではキーフレーム未選択のためボタンを無効化しておく
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
 const VIEW_ORDER = ["top", "front", "left", "free"];
@@ -1375,4 +1430,8 @@ window.__fk = {
   canUndo: () => !undoBtn.disabled,
   getUndoStackSize: () => undoStack.length,
   peekUndoType: () => (undoStack.length > 0 ? undoStack[undoStack.length - 1].type : null),
+  // キーフレームの選択・削除のテスト/デバッグ用
+  getSelectedKeyframeFrame: () => (selectedKeyframeTime === null ? null : frameOf(selectedKeyframeTime)),
+  deleteSelectedKeyframe: () => deleteKeyframeBtn.click(),
+  isDeleteKeyframeBtnDisabled: () => deleteKeyframeBtn.disabled,
 };
