@@ -4,6 +4,7 @@ import { GLTFExporter } from "./vendor/exporters/GLTFExporter.js";
 
 // ---------- Renderer / scene / camera ----------
 const canvas = document.getElementById("game");
+const viewportArea = document.getElementById("viewportArea"); // 3Dビュー専用領域(タイムラインとは完全に分離されたDOM領域)
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
@@ -49,6 +50,18 @@ leftCamera.up.set(0, 1, 0);
 leftCamera.lookAt(0, VIEW_TARGET_Y, 0);
 
 const camerasByKey = { top: topCamera, front: frontCamera, left: leftCamera, free: camera };
+
+// 各ビューのカメラが、どのギズモ軸レイヤーを描画するかを設定する。
+// TOP/FRONT/LEFTはそれぞれ正面から見やすい1軸のみ、FREE CAMERAは3軸とも有効にする
+// (レイヤー定数(LAYER_RING_X等)はこの後のギズモ設定箇所で定義されるが、
+// 数値自体は1/2/3で固定なのでここで先に有効化しておいて問題ない)
+topCamera.layers.enable(2); // LAYER_RING_Y
+frontCamera.layers.enable(3); // LAYER_RING_Z
+leftCamera.layers.enable(1); // LAYER_RING_X
+camera.layers.enable(1);
+camera.layers.enable(2);
+camera.layers.enable(3);
+
 const viewCellEls = {};
 for (const el of document.querySelectorAll(".viewCell")) viewCellEls[el.dataset.view] = el;
 
@@ -358,40 +371,73 @@ const HINGE_BONES = [leftForearm, rightForearm, leftLowerLeg, rightLowerLeg];
 const hingeAxisByBoneName = {};
 for (const b of HINGE_BONES) hingeAxisByBoneName[b.name] = computeHingeAxisLocal(b);
 
-// ---------- 選択中のボーンを操作する3軸回転ギズモ ----------
+// ---------- 選択中のボーンを操作する3軸回転ギズモ(スマートフォン向け) ----------
 // 球体をドラッグして自由回転させる方式は廃止し、X/Y/Z軸ごとのリングを
 // 個別にドラッグして、その軸だけを回転させる方式にした。リングは
 // root(=GLTF書き出し対象)には含めず、scene直下に置くことで書き出し
 // 結果に含まれないようにしている
-const RING_RADIUS = 0.13;
-const RING_TUBE = 0.011;
-function makeRing(color) {
-  return new THREE.Mesh(
-    new THREE.TorusGeometry(RING_RADIUS, RING_TUBE, 8, 48),
-    new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 })
+//
+// スマートフォンでの操作性のため、以下の工夫をしている:
+// - 見た目のリングとは別に、はるかに太い非表示の当たり判定用トーラスを
+//   同じ位置に重ねて用意し、指が細い線から多少ズレてもつかめるようにする
+// - TOP/FRONT/LEFTの固定視点では、その視点から見て正面(操作しやすい)な
+//   1軸だけを表示・操作可能にし、見えにくい(真横から見える線状の)軸は
+//   そのビューでは表示しない。FREE CAMERAでは従来通り3軸とも有効
+const RING_RADIUS = 0.17; // 以前(0.13)より大きくして視認性を上げた
+const RING_TUBE = 0.016; // 見た目のリングの太さ(以前の0.011より太くした)
+const HIT_TUBE = 0.075; // 当たり判定用(非表示)トーラスの太さ。見た目よりかなり太くして、指のズレを許容する
+
+// Three.jsのレイヤー機能で「どのカメラにどのリングを見せるか」を切り替える。
+// レイヤー0は全カメラが常に見ているデフォルト(ヒンジ関節の唯一の軸や
+// ギズモの中心点など、常にどのビューでも見せたいものに使う)
+const LAYER_RING_X = 1;
+const LAYER_RING_Y = 2;
+const LAYER_RING_Z = 3;
+const LAYER_BY_AXIS_KEY = { x: LAYER_RING_X, y: LAYER_RING_Y, z: LAYER_RING_Z };
+
+function makeRingPair(color) {
+  const visual = new THREE.Mesh(
+    new THREE.TorusGeometry(RING_RADIUS, RING_TUBE, 10, 56),
+    new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.95 })
   );
+  const hitProxy = new THREE.Mesh(
+    new THREE.TorusGeometry(RING_RADIUS, HIT_TUBE, 8, 32),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitProxy.visible = false; // 非表示だが、Three.jsのレイキャストは非表示オブジェクトにも反応するため当たり判定には使える
+  const group = new THREE.Group();
+  group.add(visual, hitProxy);
+  return { group, visual, hitProxy };
 }
 const RING_COLOR = { x: 0xff5050, y: 0x55e06a, z: 0x4d9bff };
-const ringX = makeRing(RING_COLOR.x);
-const ringY = makeRing(RING_COLOR.y);
-const ringZ = makeRing(RING_COLOR.z);
-ringX.rotation.y = Math.PI / 2; // デフォルト(法線=ローカルZ)のトーラスを、法線がローカルXになるよう向ける
-ringY.rotation.x = Math.PI / 2; // 法線がローカルYになるよう向ける
+const ringX = makeRingPair(RING_COLOR.x);
+const ringY = makeRingPair(RING_COLOR.y);
+const ringZ = makeRingPair(RING_COLOR.z);
+ringX.group.rotation.y = Math.PI / 2; // デフォルト(法線=ローカルZ)のトーラスを、法線がローカルXになるよう向ける
+ringY.group.rotation.x = Math.PI / 2; // 法線がローカルYになるよう向ける
 // ringZ はデフォルトのまま(法線=ローカルZ)
 const gizmoDot = new THREE.Mesh(
-  new THREE.SphereGeometry(0.018, 10, 8),
+  new THREE.SphereGeometry(0.022, 10, 8),
   new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false })
 );
 
 const selectionGizmo = new THREE.Group();
-selectionGizmo.add(ringX, ringY, ringZ, gizmoDot);
+selectionGizmo.add(ringX.group, ringY.group, ringZ.group, gizmoDot);
 selectionGizmo.visible = false;
 selectionGizmo.renderOrder = 999;
 scene.add(selectionGizmo);
 
-const ringMeshByAxisKey = { x: ringX, y: ringY, z: ringZ };
+const ringByAxisKey = { x: ringX, y: ringY, z: ringZ };
 function ringLocalAxis(key) {
   return key === "x" ? new THREE.Vector3(1, 0, 0) : key === "y" ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+}
+
+// 固定ビュー(TOP/FRONT/LEFT)それぞれで、正面から見えて操作しやすい軸
+function easyAxisForView(viewKey) {
+  if (viewKey === "top") return "y";
+  if (viewKey === "front") return "z";
+  if (viewKey === "left") return "x";
+  return null; // free: 制限なし(3軸とも有効)
 }
 
 function updateGizmoTransform() {
@@ -404,32 +450,55 @@ function updateGizmoTransform() {
   selectedBone.getWorldQuaternion(selectionGizmo.quaternion);
 }
 
-// 選択したボーンが肘・膝(ヒンジ関節)かどうかで、表示する軸の本数を切り替える
+// 選択したボーンが肘・膝(ヒンジ関節)かどうかで、表示する軸の本数を切り替える。
+// 基本関節(3軸)の場合は、各軸リングを専用レイヤーに割り当てて、
+// カメラ側のレイヤー設定でビューごとの表示を切り替えられるようにする。
+// ヒンジ関節の場合は、唯一有効な軸をレイヤー0(全カメラ共通)に戻し、
+// どのビューからでも常に操作できるようにする
 function updateGizmoAxesForSelection() {
   const hinge = selectedBone ? hingeAxisByBoneName[selectedBone.name] : null;
-  if (hinge) {
-    ringX.visible = hinge.key === "x";
-    ringY.visible = hinge.key === "y";
-    ringZ.visible = hinge.key === "z";
-  } else {
-    ringX.visible = !!selectedBone;
-    ringY.visible = !!selectedBone;
-    ringZ.visible = !!selectedBone;
+  for (const key of ["x", "y", "z"]) {
+    const ring = ringByAxisKey[key];
+    const isHingeAxis = hinge && hinge.key === key;
+    const layer = hinge ? 0 : LAYER_BY_AXIS_KEY[key];
+    ring.group.visible = hinge ? isHingeAxis : !!selectedBone;
+    // レイヤーは各メッシュ自身に設定する必要がある(Three.jsでは親Groupの
+    // layersは子に自動で伝播しないため、グループにセットするだけでは
+    // カメラ側のレイヤー制限が効かない)
+    ring.visual.layers.set(layer);
+    ring.hitProxy.layers.set(layer);
+    ring.visual.material.opacity = 0.95;
+    ring.visual.scale.setScalar(1);
   }
 }
 
-// 現在のボーンで有効な(表示中の)リングの一覧(ヒットテスト対象)
-function activeGizmoRings() {
-  const list = [];
-  if (ringX.visible) list.push({ key: "x", mesh: ringX, axisLocal: ringLocalAxis("x") });
-  if (ringY.visible) list.push({ key: "y", mesh: ringY, axisLocal: ringLocalAxis("y") });
-  if (ringZ.visible) list.push({ key: "z", mesh: ringZ, axisLocal: ringLocalAxis("z") });
-  return list;
+// 現在のボーン・ビューで実際に操作可能なリングの一覧(ヒットテスト対象)。
+// 基本関節(3軸)はビューごとに「正面から見える1軸」だけに絞り込み、
+// ヒンジ関節はどのビューでも唯一の軸のみを返す
+function activeGizmoRings(viewKey) {
+  if (!selectedBone) return [];
+  const hinge = hingeAxisByBoneName[selectedBone.name];
+  if (hinge) {
+    return [{ key: hinge.key, ring: ringByAxisKey[hinge.key], axisLocal: ringLocalAxis(hinge.key) }];
+  }
+  const keys = viewKey === "free" || !viewKey ? ["x", "y", "z"] : [easyAxisForView(viewKey)].filter(Boolean);
+  return keys.map((key) => ({ key, ring: ringByAxisKey[key], axisLocal: ringLocalAxis(key) }));
 }
 
-function setRingHighlight(mesh, on) {
-  mesh.material.opacity = on ? 1 : 0.9;
-  mesh.scale.setScalar(on ? 1.12 : 1);
+// ドラッグ中の軸を明確にハイライトし、同時に他の軸を薄く表示して
+// 「ドラッグ中は他の軸を一時的に無効化している」ことを視覚的に示す
+function setRingHighlight(activeKey, on) {
+  for (const key of ["x", "y", "z"]) {
+    const ring = ringByAxisKey[key];
+    if (key === activeKey) {
+      ring.visual.material.opacity = on ? 1 : 0.95;
+      ring.visual.scale.setScalar(on ? 1.25 : 1);
+    } else if (on) {
+      ring.visual.material.opacity = 0.18;
+    } else {
+      ring.visual.material.opacity = 0.95;
+    }
+  }
 }
 
 const boneSelectEl = document.getElementById("boneSelect");
@@ -473,6 +542,12 @@ for (const b of allBones) {
 }
 
 const raycaster = new THREE.Raycaster();
+// レイキャスト対象の絞り込みは、常にactiveGizmoRings(viewKey)で明示的な
+// 候補リストとして行っているため、Raycaster自身のレイヤーフィルタ
+// (デフォルトはレイヤー0のみ)はここでは使わず、全レイヤーを見るようにする。
+// そうしないと、カメラの描画用レイヤー設定(ビューごとの軸の絞り込み)の
+// 影響で、ギズモ用リング(レイヤー0以外に割り当てたもの)がヒットしなくなる
+raycaster.layers.enableAll();
 const pointerNDC = new THREE.Vector2();
 
 // クライアント座標から、その象限のカメラを使ったNDC座標でraycasterをセットする
@@ -495,14 +570,18 @@ function pickBoneAt(clientX, clientY) {
   return hits.length > 0 ? hits[0].object.userData.bone : null;
 }
 
-// ギズモのリング(選択中ボーンがある場合のみ)に対するヒットテスト
+// ギズモのリング(選択中ボーンがある場合のみ)に対するヒットテスト。
+// 見た目の細いリングではなく、太い非表示の当たり判定用トーラス(hitProxy)に
+// 対して判定することで、指が多少ズレても同じ軸をつかめるようにしている。
+// どの軸が候補になるかはビュー(象限)ごとに絞り込まれる(activeGizmoRings参照)
 function pickGizmoRingAt(clientX, clientY) {
   if (!selectedBone) return null;
-  setRaycasterFromClient(clientX, clientY, viewAt(clientX, clientY));
-  const rings = activeGizmoRings();
-  const hits = raycaster.intersectObjects(rings.map((r) => r.mesh), false);
+  const viewKey = viewAt(clientX, clientY);
+  setRaycasterFromClient(clientX, clientY, viewKey);
+  const rings = activeGizmoRings(viewKey);
+  const hits = raycaster.intersectObjects(rings.map((r) => r.ring.hitProxy), false);
   if (hits.length === 0) return null;
-  return rings.find((r) => r.mesh === hits[0].object) || null;
+  return rings.find((r) => r.ring.hitProxy === hits[0].object) || null;
 }
 
 // ワールド座標を、指定したビュー(カメラ)でのクライアント座標に変換する
@@ -541,7 +620,7 @@ canvas.addEventListener("pointerdown", onPointerDownGate, { capture: true });
 const DRAG_THRESHOLD_PX = 6; // この移動量未満なら「タップ」、以上なら「ドラッグ」とみなす
 
 let pointerDownInfo = null; // { x, y, hitBone } (タップ判定用)
-let activeRingDrag = null; // { key, mesh, axisLocal, center, sign, startAngle, startQuat }
+let activeRingDrag = null; // { key, axisLocal, center, sign, startAngle, startQuat }
 
 function beginRingDrag(evt, ringHit, key) {
   const center = new THREE.Vector3();
@@ -555,7 +634,6 @@ function beginRingDrag(evt, ringHit, key) {
   const startAngle = screenAngleAround(center, evt.clientX, evt.clientY, key);
   return {
     key: ringHit.key,
-    mesh: ringHit.mesh,
     axisLocal: ringHit.axisLocal.clone(),
     center, sign, startAngle,
     startQuat: selectedBone.quaternion.clone(),
@@ -571,7 +649,7 @@ function onPointerDownPose(evt) {
     if (ringHit) {
       const drag = beginRingDrag(evt, ringHit, viewAt(evt.clientX, evt.clientY));
       activeRingDrag = drag;
-      setRingHighlight(drag.mesh, true);
+      setRingHighlight(drag.key, true); // 掴んだ軸をハイライトし、他の軸は一時的に薄くして操作不可を示す
       controls.enabled = false;
       return; // ギズモを掴んだ場合はタップ判定(ボーンの選択切替)は行わない
     }
@@ -594,7 +672,7 @@ function onPointerMovePose(evt) {
 
 function onPointerUpPose(evt) {
   if (activeRingDrag) {
-    setRingHighlight(activeRingDrag.mesh, false);
+    setRingHighlight(activeRingDrag.key, false);
     activeRingDrag = null;
     pointerDownInfo = null;
     controls.enabled = !selectedBone;
@@ -615,7 +693,7 @@ canvas.addEventListener("pointerdown", onPointerDownPose);
 canvas.addEventListener("pointermove", onPointerMovePose);
 canvas.addEventListener("pointerup", onPointerUpPose);
 canvas.addEventListener("pointercancel", () => {
-  if (activeRingDrag) setRingHighlight(activeRingDrag.mesh, false);
+  if (activeRingDrag) setRingHighlight(activeRingDrag.key, false);
   activeRingDrag = null;
   pointerDownInfo = null;
   controls.enabled = !selectedBone;
@@ -787,15 +865,13 @@ window.addEventListener("resize", drawTimelineRuler);
 
 const keyframeBtn = document.getElementById("keyframeBtn");
 const posePlayBtn = document.getElementById("posePlayBtn");
+const posePauseBtn = document.getElementById("posePauseBtn");
 const statusEl = document.getElementById("status");
 
 // ---------- UI ----------
-const playBtn = document.getElementById("playBtn");
-let playing = false;
-playBtn.addEventListener("click", () => {
-  playing = !playing;
-  playBtn.textContent = playing ? "お辞儀アニメーション停止" : "お辞儀アニメーション再生";
-});
+// 「お辞儀アニメーション再生」ボタンは廃止した(ポーズエディタと同じボーンを
+// 奪い合うため)。書き出し用のclip/mixer/actionオブジェクト自体は
+// GLB書き出しに必要なため残しているが、プレビュー再生するUIはない
 
 keyframeBtn.addEventListener("click", () => {
   addKeyframeAt(currentTime);
@@ -803,10 +879,8 @@ keyframeBtn.addEventListener("click", () => {
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
 });
 
-posePlayBtn.addEventListener("click", () => {
-  posePlaying = !posePlaying;
-  posePlayBtn.textContent = posePlaying ? "ポーズ停止" : "ポーズ再生";
-});
+posePlayBtn.addEventListener("click", () => { posePlaying = true; });
+posePauseBtn.addEventListener("click", () => { posePlaying = false; });
 
 const exportBtn = document.getElementById("exportBtn");
 exportBtn.addEventListener("click", () => {
@@ -835,8 +909,11 @@ exportBtn.addEventListener("click", () => {
 });
 
 // ---------- リサイズ ----------
+// レンダラーのサイズは、ウィンドウ全体ではなく#viewportArea(3Dビュー専用領域、
+// タイムラインドックを除いた残り全体)の実サイズに合わせる。これにより
+// タイムラインと3Dビューは常に重ならない
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
+  const w = viewportArea.clientWidth, h = viewportArea.clientHeight;
   renderer.setSize(w, h);
   layoutViews();
 }
@@ -850,7 +927,6 @@ const VIEW_ORDER = ["top", "front", "left", "free"];
 const clock = new THREE.Clock();
 function render() {
   const dt = clock.getDelta();
-  if (playing) mixer.update(dt);
 
   if (posePlaying && poseKeyframes.length > 0) {
     const first = poseKeyframes[0].time;
@@ -911,7 +987,7 @@ window.__fk = {
   addKeyframeAt,
   getKeyframes: () => poseKeyframes.map((k) => ({ time: k.time, pose: k.pose })),
   clearKeyframes: () => { poseKeyframes = []; },
-  setPosePlaying: (v) => { posePlaying = v; posePlayBtn.textContent = posePlaying ? "ポーズ停止" : "ポーズ再生"; },
+  setPosePlaying: (v) => { posePlaying = v; },
   isPosePlaying: () => posePlaying,
   applyPoseAtTime,
   isGizmoVisible: () => selectionGizmo.visible,
@@ -930,12 +1006,14 @@ window.__fk = {
   // 3軸回転ギズモ・ヒンジ軸のテスト/デバッグ用
   getHingeAxis: (name) => (hingeAxisByBoneName[name] ? { key: hingeAxisByBoneName[name].key, axis: hingeAxisByBoneName[name].axis.toArray() } : null),
   isHingeBone: (name) => !!hingeAxisByBoneName[name],
-  getActiveRingKeys: () => activeGizmoRings().map((r) => r.key),
+  // viewKeyを省略した場合は'free'(3軸とも有効)として扱う
+  getActiveRingKeys: (viewKey) => activeGizmoRings(viewKey || "free").map((r) => r.key),
+  easyAxisForView,
   getSideAxisWorld: () => SIDE_AXIS_WORLD.toArray(),
   pickGizmoRingAt,
+  isRingHitProxyVisible: (axisKey) => ringByAxisKey[axisKey].group.visible,
   getRingWorldPosition: (axisKey) => {
-    const ring = ringMeshByAxisKey[axisKey];
-    if (!ring || !ring.visible) return null;
+    if (!ringByAxisKey[axisKey] || !ringByAxisKey[axisKey].group.visible) return null;
     const center = new THREE.Vector3();
     selectedBone.getWorldPosition(center);
     const axisWorld = ringLocalAxis(axisKey).applyQuaternion(selectedBone.getWorldQuaternion(new THREE.Quaternion())).normalize();
@@ -944,4 +1022,7 @@ window.__fk = {
     return center.clone().addScaledVector(refA, RING_RADIUS).toArray();
   },
   isRingDragActive: () => !!activeRingDrag,
+  // レイアウト分離(3Dビュー/タイムライン)のテスト/デバッグ用
+  getViewportAreaRect: () => viewportArea.getBoundingClientRect().toJSON(),
+  getTimelineDockRect: () => document.getElementById("timelineDock").getBoundingClientRect().toJSON(),
 };
