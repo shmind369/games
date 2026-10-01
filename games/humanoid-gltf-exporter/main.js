@@ -851,10 +851,14 @@ canvas.addEventListener("pointercancel", () => {
 });
 
 // ---------- タイムライン・キーフレーム ----------
-// キーフレームは「その時刻での全ボーンの回転のスナップショット」として保存する。
-// 2つのキーフレーム間は球面線形補間(slerp)でつなぎ、ポーズをなめらかに再現する
+// キーフレームは「その時刻でのPOSE(全ボーンの回転)」と「その時刻でのMOVE
+// (モデル全体のmodelTransform.position、絶対座標)」を、同じ1つのフレーム
+// エントリの中に別々のフィールドとして持つ(どちらか一方だけが設定されている
+// ことも、両方設定されていることもある)。POSEは2つのキーフレーム間を
+// 球面線形補間(slerp)、MOVEは線形補間(lerp)でつなぎ、それぞれ独立に
+// なめらかに再現する
 let currentTime = 0;
-let poseKeyframes = []; // [{ time, pose: { [boneName]: [x,y,z,w] } }] (time昇順)
+let poseKeyframes = []; // [{ time, pose: {[boneName]:[x,y,z,w]}|null, modelPosition: [x,y,z]|null }] (time昇順)
 let posePlaying = false;
 
 function snapshotPose() {
@@ -870,40 +874,80 @@ function applyPoseObject(pose) {
   }
 }
 
+// POSE(editMode !== "move")では現在の全ボーン回転を、MOVE(editMode === "move")
+// では現在のmodelTransform.position(絶対座標)をそのフレームに保存する。
+// 既にそのフレームにもう一方の種類のキーフレームが存在する場合は、それは
+// そのまま温存する(POSEとMOVEは互いに独立したデータのため、一方の保存で
+// もう一方を消したり書き換えたりしない)
 function addKeyframeAt(time) {
-  const pose = snapshotPose();
   const existingIdx = poseKeyframes.findIndex((k) => Math.abs(k.time - time) < 1e-6);
-  if (existingIdx >= 0) poseKeyframes[existingIdx] = { time, pose };
+  const existing = existingIdx >= 0 ? poseKeyframes[existingIdx] : null;
+  const entry = editMode === "move"
+    ? { time, pose: existing ? existing.pose : null, modelPosition: modelTransform.position.toArray() }
+    : { time, pose: snapshotPose(), modelPosition: existing ? existing.modelPosition : null };
+  if (existingIdx >= 0) poseKeyframes[existingIdx] = entry;
   else {
-    poseKeyframes.push({ time, pose });
+    poseKeyframes.push(entry);
     poseKeyframes.sort((a, b) => a.time - b.time);
   }
 }
 
-function applyPoseAtTime(time) {
-  if (poseKeyframes.length === 0) return;
-  const first = poseKeyframes[0];
-  const last = poseKeyframes[poseKeyframes.length - 1];
-  if (time <= first.time) { applyPoseObject(first.pose); return; }
-  if (time >= last.time) { applyPoseObject(last.pose); return; }
-  let k0 = first, k1 = last;
-  for (let i = 0; i < poseKeyframes.length - 1; i++) {
-    if (poseKeyframes[i].time <= time && time <= poseKeyframes[i + 1].time) {
-      k0 = poseKeyframes[i];
-      k1 = poseKeyframes[i + 1];
-      break;
+// 指定した時刻を挟む2つのキーフレーム(と補間係数alpha)を求める汎用ヘルパー。
+// POSEトラック(pose!=nullのエントリだけ)とMOVEトラック(modelPosition!=null
+// のエントリだけ)は、それぞれ別の「フィルタ済みリスト」として渡すことで、
+// 互いに完全に独立して補間できるようにしている
+function findBoundingKeyframes(list, time) {
+  if (list.length === 0) return null;
+  const first = list[0];
+  const last = list[list.length - 1];
+  if (time <= first.time) return { k0: first, k1: first, alpha: 0 };
+  if (time >= last.time) return { k0: last, k1: last, alpha: 0 };
+  for (let i = 0; i < list.length - 1; i++) {
+    if (list[i].time <= time && time <= list[i + 1].time) {
+      const span = list[i + 1].time - list[i].time;
+      return { k0: list[i], k1: list[i + 1], alpha: span > 1e-9 ? (time - list[i].time) / span : 0 };
     }
   }
-  const span = k1.time - k0.time;
-  const alpha = span > 1e-9 ? (time - k0.time) / span : 0;
-  for (const b of allBones) {
-    const q0 = k0.pose[b.name], q1 = k1.pose[b.name];
+  return { k0: first, k1: first, alpha: 0 };
+}
+
+function applyBonePoseAtTime(time) {
+  const track = poseKeyframes.filter((k) => k.pose);
+  const b = findBoundingKeyframes(track, time);
+  if (!b) return;
+  if (b.k0 === b.k1) { applyPoseObject(b.k0.pose); return; }
+  for (const bone of allBones) {
+    const q0 = b.k0.pose[bone.name], q1 = b.k1.pose[bone.name];
     if (!q0 || !q1) continue;
     const a = new THREE.Quaternion(q0[0], q0[1], q0[2], q0[3]);
     const c = new THREE.Quaternion(q1[0], q1[1], q1[2], q1[3]);
-    a.slerp(c, alpha);
-    b.quaternion.copy(a);
+    a.slerp(c, b.alpha);
+    bone.quaternion.copy(a);
   }
+}
+
+// MOVEキーフレームが1つも無い場合は、modelTransform.positionには一切
+// 触れない(編集中にドラッグで動かした位置や、既定の原点をそのまま保つ。
+// これによりMOVEキーフレームを使わない既存のPOSEアニメーションの挙動は
+// 完全に元のまま変化しない)
+function applyModelTransformAtTime(time) {
+  const track = poseKeyframes.filter((k) => k.modelPosition);
+  const b = findBoundingKeyframes(track, time);
+  if (!b) return;
+  const p0 = b.k0.modelPosition, p1 = b.k1.modelPosition;
+  modelTransform.position.set(
+    p0[0] + (p1[0] - p0[0]) * b.alpha,
+    p0[1] + (p1[1] - p0[1]) * b.alpha,
+    p0[2] + (p1[2] - p0[2]) * b.alpha
+  );
+}
+
+// 1. ModelRoot(modelTransform)のTransformを適用 → 2. 各ボーンのPOSEを適用
+// → 3. レンダリング、という順序を踏襲する(呼び出し元のrender()が3を行う)
+function applyPoseAtTime(time) {
+  if (poseKeyframes.length === 0) return;
+  applyModelTransformAtTime(time);
+  applyBonePoseAtTime(time);
 }
 
 // ---------- タイムラインUI(30FPS基準のフレーム表示・目盛) ----------
@@ -1046,14 +1090,17 @@ function clampSnapTime(targetTime) {
 
 // ドラッグ先の時刻にスナップし、既存キーフレームと重複する場合は
 // (手動でのキーフレーム上書き保存と同じルールで)そちらを置き換える形で
-// 移動を確定する
-function moveKeyframe(originalTime, targetTime, pose) {
+// 移動を確定する。pose・modelPositionの両方をまとめて運ぶことで、
+// POSE/MOVEどちらか一方だけのキーフレームも、両方持つキーフレームも
+// 内容を失わずに移動できる
+function moveKeyframe(originalTime, targetTime, pose, modelPosition) {
   const snappedTime = clampSnapTime(targetTime);
   poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - originalTime) > 1e-6);
+  const entry = { time: snappedTime, pose, modelPosition };
   const existingIdx = poseKeyframes.findIndex((k) => Math.abs(k.time - snappedTime) < 1e-6);
-  if (existingIdx >= 0) poseKeyframes[existingIdx] = { time: snappedTime, pose };
+  if (existingIdx >= 0) poseKeyframes[existingIdx] = entry;
   else {
-    poseKeyframes.push({ time: snappedTime, pose });
+    poseKeyframes.push(entry);
     poseKeyframes.sort((a, b) => a.time - b.time);
   }
   return snappedTime;
@@ -1106,7 +1153,7 @@ function performUndo() {
     case "keyframeMove": {
       poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - entry.targetTime) > 1e-6);
       if (entry.replaced) poseKeyframes.push(entry.replaced);
-      poseKeyframes.push({ time: entry.originalTime, pose: entry.originalPose });
+      poseKeyframes.push({ time: entry.originalTime, pose: entry.originalPose, modelPosition: entry.originalModelPosition });
       poseKeyframes.sort((a, b) => a.time - b.time);
       selectedKeyframeTime = entry.originalTime;
       setCurrentTime(entry.originalTime);
@@ -1129,14 +1176,14 @@ function performUndo() {
 }
 
 let timelineDragging = false;
-let keyframeDragState = null; // { originalTime, pose, liveTime }
+let keyframeDragState = null; // { originalTime, pose, modelPosition, liveTime }
 let selectedKeyframeTime = null; // タップ/ドラッグで選択中のキーフレームの時刻(削除対象)
 
 function onTimelinePointerDown(evt) {
   timelineCanvas.setPointerCapture(evt.pointerId);
   const hitKf = findKeyframeNearClientX(evt.clientX);
   if (hitKf) {
-    keyframeDragState = { originalTime: hitKf.time, pose: hitKf.pose, liveTime: hitKf.time };
+    keyframeDragState = { originalTime: hitKf.time, pose: hitKf.pose, modelPosition: hitKf.modelPosition, liveTime: hitKf.time };
     // 掴んだ時点でそのキーフレームを選択状態にする(タップのみでドラッグ
     // しなかった場合も、そのまま「選択してこのキーフレームを確認・削除
     // できる」状態になる)
@@ -1166,7 +1213,7 @@ function onTimelinePointerMove(evt) {
 }
 function onTimelinePointerUp() {
   if (keyframeDragState) {
-    const { originalTime, pose } = keyframeDragState;
+    const { originalTime, pose, modelPosition } = keyframeDragState;
     const snappedTime = clampSnapTime(keyframeDragState.liveTime);
     // 移動先に別のキーフレームが既にある場合、そのキーフレームはmoveKeyframeに
     // よって置き換えられてしまうため、Undoで復元できるよう移動前に内容を控えておく
@@ -1174,9 +1221,9 @@ function onTimelinePointerUp() {
       ? poseKeyframes.find((k) => Math.abs(k.time - snappedTime) < 1e-6) || null
       : null;
     const actuallyMoved = Math.abs(snappedTime - originalTime) > 1e-9 || !!replaced;
-    moveKeyframe(originalTime, keyframeDragState.liveTime, pose);
+    moveKeyframe(originalTime, keyframeDragState.liveTime, pose, modelPosition);
     if (actuallyMoved) {
-      pushUndo({ type: "keyframeMove", originalTime, originalPose: pose, targetTime: snappedTime, replaced });
+      pushUndo({ type: "keyframeMove", originalTime, originalPose: pose, originalModelPosition: modelPosition, targetTime: snappedTime, replaced });
     }
     keyframeDragState = null;
     // 選択状態は、移動後のキーフレームの新しい位置に追従させる
@@ -1214,7 +1261,8 @@ keyframeBtn.addEventListener("click", () => {
   const previous = poseKeyframes.find((k) => Math.abs(k.time - currentTime) < 1e-6) || null;
   addKeyframeAt(currentTime);
   pushUndo({ type: "keyframeAdd", time: currentTime, previous });
-  statusEl.textContent = `${currentTime.toFixed(2)}s にキーフレームを保存しました(全${poseKeyframes.length}個)`;
+  const kindLabel = editMode === "move" ? "MOVE(位置)" : "POSE(姿勢)";
+  statusEl.textContent = `${currentTime.toFixed(2)}s に${kindLabel}キーフレームを保存しました(全${poseKeyframes.length}個)`;
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
 });
 
@@ -1338,16 +1386,17 @@ function currentAnimationData(name) {
     name,
     fps: FPS,
     totalFrames: TOTAL_FRAMES,
-    keyframes: poseKeyframes.map((k) => ({ time: k.time, pose: k.pose })),
+    keyframes: poseKeyframes.map((k) => ({ time: k.time, pose: k.pose, modelPosition: k.modelPosition || null })),
   };
 }
 
 function loadAnimationData(anim) {
   const maxTime = TOTAL_FRAMES / FPS;
   poseKeyframes = (anim.keyframes || [])
-    .map((k) => ({ time: Math.max(0, Math.min(maxTime, k.time)), pose: k.pose }))
+    .map((k) => ({ time: Math.max(0, Math.min(maxTime, k.time)), pose: k.pose || null, modelPosition: k.modelPosition || null }))
     .sort((a, b) => a.time - b.time);
   setCurrentTime(0);
+  modelTransform.position.set(0, 0, 0);
   applyPoseAtTime(0);
 }
 
@@ -1386,7 +1435,7 @@ function animationToExportJSON(anim) {
     totalFrames: anim.totalFrames,
     durationSeconds: anim.totalFrames / anim.fps,
     boneNames: allBones.map((b) => b.name),
-    keyframes: anim.keyframes.map((k) => ({ frame: Math.round(k.time * anim.fps), time: k.time, pose: k.pose })),
+    keyframes: anim.keyframes.map((k) => ({ frame: Math.round(k.time * anim.fps), time: k.time, pose: k.pose, modelPosition: k.modelPosition || null })),
   };
 }
 
@@ -1403,7 +1452,7 @@ function downloadJSON(obj, filename) {
 }
 
 function importAnimationJSON(json) {
-  loadAnimationData({ keyframes: (json.keyframes || []).map((k) => ({ time: k.time ?? k.frame / (json.fps || FPS), pose: k.pose })) });
+  loadAnimationData({ keyframes: (json.keyframes || []).map((k) => ({ time: k.time ?? k.frame / (json.fps || FPS), pose: k.pose || null, modelPosition: k.modelPosition || null })) });
   if (json.name) {
     saveCurrentAsAnimation(json.name);
     animNameInputEl.value = json.name;
@@ -1552,7 +1601,7 @@ window.__fk = {
   setCurrentTime: (t) => { setCurrentTime(t); if (!posePlaying) applyPoseAtTime(t); },
   getCurrentTime: () => currentTime,
   addKeyframeAt,
-  getKeyframes: () => poseKeyframes.map((k) => ({ time: k.time, pose: k.pose })),
+  getKeyframes: () => poseKeyframes.map((k) => ({ time: k.time, pose: k.pose, modelPosition: k.modelPosition })),
   clearKeyframes: () => { poseKeyframes = []; },
   setPosePlaying: (v) => { posePlaying = v; },
   isPosePlaying: () => posePlaying,
