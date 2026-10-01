@@ -617,6 +617,15 @@ function onPointerMovePose(evt) {
 function onPointerUpPose(evt) {
   if (activeRingDrag) {
     setRingHighlight(activeRingDrag.key, false);
+    // ドラッグによって実際に回転が変化した場合のみUndo履歴に積む
+    // (リングを掴んだだけで動かさなかった場合に無意味な履歴を残さないため)
+    if (!activeRingDrag.startQuat.equals(selectedBone.quaternion)) {
+      pushUndo({
+        type: "rotateBone",
+        boneName: selectedBone.name,
+        beforeQuat: activeRingDrag.startQuat.toArray(),
+      });
+    }
     activeRingDrag = null;
     pointerDownInfo = null;
     controls.enabled = !selectedBone;
@@ -825,12 +834,19 @@ function findKeyframeNearClientX(clientX) {
   return nearest;
 }
 
+// ドラッグ先の時刻を、タイムラインの範囲内にクランプした上でフレーム単位に
+// スナップする(moveKeyframeと、そのUndo用情報を集める側の両方から使う
+// ため、計算式を1箇所にまとめている)
+function clampSnapTime(targetTime) {
+  const maxTime = TOTAL_FRAMES / FPS;
+  return timeOfFrame(frameOf(Math.max(0, Math.min(maxTime, targetTime))));
+}
+
 // ドラッグ先の時刻にスナップし、既存キーフレームと重複する場合は
 // (手動でのキーフレーム上書き保存と同じルールで)そちらを置き換える形で
 // 移動を確定する
 function moveKeyframe(originalTime, targetTime, pose) {
-  const maxTime = TOTAL_FRAMES / FPS;
-  const snappedTime = timeOfFrame(frameOf(Math.max(0, Math.min(maxTime, targetTime))));
+  const snappedTime = clampSnapTime(targetTime);
   poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - originalTime) > 1e-6);
   const existingIdx = poseKeyframes.findIndex((k) => Math.abs(k.time - snappedTime) < 1e-6);
   if (existingIdx >= 0) poseKeyframes[existingIdx] = { time: snappedTime, pose };
@@ -839,6 +855,64 @@ function moveKeyframe(originalTime, targetTime, pose) {
     poseKeyframes.sort((a, b) => a.time - b.time);
   }
   return snappedTime;
+}
+
+// ---------- Undo(元に戻す) ----------
+// 直前の編集操作を1つ元に戻せるようにする。履歴は「操作ごとに、元に戻すのに
+// 必要な最小限の情報だけ」を積む軽量な方式にしている(3Dモデル全体や
+// メッシュを複製するような重い処理は行わない。保存する値はボーンの
+// クォータニオン配列や、既存のpose/キーフレームオブジェクトへの参照のみで、
+// いずれも数値の小さな配列程度のサイズしかない)。
+// 対象は「実際に存在する編集操作」のみ(ボーンの回転・キーフレームの
+// 追加・キーフレームの移動・ポーズの貼り付け)。このアプリには現状
+// ボーンの位置(Position)を編集する機能や、キーフレームを削除する機能
+// 自体が無いため、それらの操作のUndoは実装していない(今回の依頼は
+// Undo機能の追加のみで、新しい編集機能は追加しないため)。
+const UNDO_LIMIT = 50;
+let undoStack = [];
+
+function pushUndo(entry) {
+  undoStack.push(entry);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  updateUndoBtnState();
+}
+
+function performUndo() {
+  if (undoStack.length === 0) return false;
+  const entry = undoStack.pop();
+  switch (entry.type) {
+    case "rotateBone": {
+      const bone = boneNameToBone[entry.boneName];
+      if (bone) bone.quaternion.fromArray(entry.beforeQuat);
+      break;
+    }
+    case "pastePose": {
+      applyPoseObject(entry.beforePose);
+      break;
+    }
+    case "keyframeAdd": {
+      poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - entry.time) > 1e-6);
+      if (entry.previous) {
+        poseKeyframes.push(entry.previous);
+        poseKeyframes.sort((a, b) => a.time - b.time);
+      }
+      setCurrentTime(entry.time);
+      if (!posePlaying) applyPoseAtTime(entry.time);
+      break;
+    }
+    case "keyframeMove": {
+      poseKeyframes = poseKeyframes.filter((k) => Math.abs(k.time - entry.targetTime) > 1e-6);
+      if (entry.replaced) poseKeyframes.push(entry.replaced);
+      poseKeyframes.push({ time: entry.originalTime, pose: entry.originalPose });
+      poseKeyframes.sort((a, b) => a.time - b.time);
+      setCurrentTime(entry.originalTime);
+      if (!posePlaying) applyPoseAtTime(entry.originalTime);
+      break;
+    }
+  }
+  drawTimelineRuler();
+  updateUndoBtnState();
+  return true;
 }
 
 let timelineDragging = false;
@@ -870,7 +944,18 @@ function onTimelinePointerMove(evt) {
 }
 function onTimelinePointerUp() {
   if (keyframeDragState) {
-    const snappedTime = moveKeyframe(keyframeDragState.originalTime, keyframeDragState.liveTime, keyframeDragState.pose);
+    const { originalTime, pose } = keyframeDragState;
+    const snappedTime = clampSnapTime(keyframeDragState.liveTime);
+    // 移動先に別のキーフレームが既にある場合、そのキーフレームはmoveKeyframeに
+    // よって置き換えられてしまうため、Undoで復元できるよう移動前に内容を控えておく
+    const replaced = Math.abs(snappedTime - originalTime) > 1e-9
+      ? poseKeyframes.find((k) => Math.abs(k.time - snappedTime) < 1e-6) || null
+      : null;
+    const actuallyMoved = Math.abs(snappedTime - originalTime) > 1e-9 || !!replaced;
+    moveKeyframe(originalTime, keyframeDragState.liveTime, pose);
+    if (actuallyMoved) {
+      pushUndo({ type: "keyframeMove", originalTime, originalPose: pose, targetTime: snappedTime, replaced });
+    }
     keyframeDragState = null;
     setCurrentTime(snappedTime);
     if (!posePlaying) applyPoseAtTime(snappedTime);
@@ -899,7 +984,11 @@ const statusEl = document.getElementById("status");
 // GLB書き出しに必要なため残しているが、プレビュー再生するUIはない
 
 keyframeBtn.addEventListener("click", () => {
+  // Undoで復元できるよう、上書き保存される場合に備えてその時刻の既存
+  // キーフレームを事前に控えておく(新規追加の場合はnullのまま)
+  const previous = poseKeyframes.find((k) => Math.abs(k.time - currentTime) < 1e-6) || null;
   addKeyframeAt(currentTime);
+  pushUndo({ type: "keyframeAdd", time: currentTime, previous });
   statusEl.textContent = `${currentTime.toFixed(2)}s にキーフレームを保存しました(全${poseKeyframes.length}個)`;
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
 });
@@ -926,9 +1015,23 @@ copyPoseBtn.addEventListener("click", () => {
 
 pastePoseBtn.addEventListener("click", () => {
   if (!copiedPose) return;
+  const beforePose = snapshotPose();
   applyPoseObject(copiedPose);
+  pushUndo({ type: "pastePose", beforePose });
   statusEl.textContent = "ポーズを貼り付けました(+◆で保存しないと移動時に失われます)";
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+});
+
+const undoBtn = document.getElementById("undoBtn");
+function updateUndoBtnState() {
+  undoBtn.disabled = undoStack.length === 0;
+}
+undoBtn.addEventListener("click", () => {
+  const didUndo = performUndo();
+  if (didUndo) {
+    statusEl.textContent = "元に戻しました";
+    setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 1500);
+  }
 });
 
 // 3Dモデルの書き出し(.glb)は、メッシュ・マテリアル・ボーン構造のみを
@@ -1130,6 +1233,7 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 setCurrentTime(0); // 初期状態のフレーム表示・目盛を描画しておく
+updateUndoBtnState(); // 初期状態ではUndo履歴が空のためボタンを無効化しておく
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
 const VIEW_ORDER = ["top", "front", "left", "free"];
@@ -1266,4 +1370,9 @@ window.__fk = {
   findKeyframeNearClientX,
   isKeyframeDragActive: () => !!keyframeDragState,
   getKeyframeDragLiveFrame: () => (keyframeDragState ? frameOf(keyframeDragState.liveTime) : null),
+  // Undo(元に戻す)のテスト/デバッグ用
+  undo: () => undoBtn.click(),
+  canUndo: () => !undoBtn.disabled,
+  getUndoStackSize: () => undoStack.length,
+  peekUndoType: () => (undoStack.length > 0 ? undoStack[undoStack.length - 1].type : null),
 };
