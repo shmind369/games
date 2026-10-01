@@ -36,21 +36,65 @@
       opacity: 0.8;
       text-shadow: 0 1px 3px rgba(0,0,0,0.8);
     }
+    #boneInfo {
+      font-size: 12px;
+      opacity: 0.85;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      text-align: right;
+    }
+    #poseBar {
+      position: fixed;
+      top: max(40px, calc(env(safe-area-inset-top) + 32px));
+      left: 14px;
+      right: 14px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(20,22,28,0.55);
+      border-radius: 999px;
+      padding: 8px 12px;
+      pointer-events: auto;
+    }
+    #poseBar select {
+      font: inherit;
+      font-size: 12px;
+      flex: 0 0 auto;
+      max-width: 38%;
+      background: #2a2e38;
+      color: #eee;
+      border: none;
+      border-radius: 999px;
+      padding: 6px 8px;
+    }
+    #poseBar input[type="range"] {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    #timeLabel {
+      font-size: 11px;
+      opacity: 0.8;
+      flex: 0 0 auto;
+      min-width: 46px;
+      text-align: right;
+    }
     #controls {
       position: fixed;
       bottom: max(16px, env(safe-area-inset-bottom));
       left: 0;
       right: 0;
       display: flex;
+      flex-wrap: wrap;
       justify-content: center;
       gap: 10px;
       z-index: 10;
+      padding: 0 10px;
     }
     button {
       font: inherit;
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
-      padding: 11px 20px;
+      padding: 10px 16px;
       border-radius: 999px;
       border: none;
       background: #4c8dff;
@@ -59,10 +103,11 @@
       box-shadow: 0 4px 14px rgba(0,0,0,0.35);
     }
     button:active { transform: scale(0.96); }
-    #playBtn { background: #3a3f4a; }
+    #playBtn, #posePlayBtn { background: #3a3f4a; }
+    #keyframeBtn { background: #e0634c; }
     #status {
       position: fixed;
-      bottom: max(70px, calc(env(safe-area-inset-bottom) + 54px));
+      bottom: max(96px, calc(env(safe-area-inset-bottom) + 80px));
       left: 0;
       right: 0;
       text-align: center;
@@ -79,10 +124,20 @@
 
   <div id="hud">
     <div id="title">Humanoid glTF Exporter</div>
+    <div id="boneInfo">選択中のボーン<br /><span id="selectedBoneLabel">なし</span></div>
   </div>
-  <div id="status">ドラッグで視点回転・ピンチでズーム</div>
+  <div id="poseBar">
+    <select id="boneSelect">
+      <option value="">(ボーン未選択)</option>
+    </select>
+    <input type="range" id="timeline" min="0" max="5" step="0.01" value="0" />
+    <span id="timeLabel">0.00s</span>
+  </div>
+  <div id="status">タップでボーン選択・ドラッグで回転</div>
   <div id="controls">
-    <button id="playBtn">アニメーション停止</button>
+    <button id="playBtn">お辞儀アニメーション再生</button>
+    <button id="keyframeBtn">キーフレーム追加</button>
+    <button id="posePlayBtn">ポーズ再生</button>
     <button id="exportBtn">GLTFを書き出す(.glb)</button>
   </div>
 
