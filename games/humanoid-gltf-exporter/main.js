@@ -1039,6 +1039,66 @@ function drawTimelineRuler() {
   timelineCtx.stroke();
 }
 
+// ---------- タイムラインの高さをドラッグで伸縮 ----------
+// 4分割ビューとタイムラインの境界(#timelineResizeHandle)をドラッグすると、
+// タイムライン全体の高さを変更できる。タイムライン内のFrame/Time表示・
+// ボタン群の高さ(「chrome」部分)は変化させず、キャンバス部分の高さだけを
+// 伸縮することで、既存のUI要素(ボタン等)のレイアウトは常に維持される
+const appRootEl = document.getElementById("appRoot");
+const timelineDock = document.getElementById("timelineDock");
+const timelineResizeHandle = document.getElementById("timelineResizeHandle");
+const TIMELINE_MIN_CANVAS_PX = 20; // どれだけ縮めても、タイムライン操作領域はこの高さを下回らない
+const TIMELINE_MIN_VIEWPORT_PX = 160; // 4分割ビュー側に必ず残す最小高さ
+
+// タイムラインキャンバス以外(Frame/Time表示・ボタン群・上下パディング)の
+// 高さは、ページ読み込み時の自然なレイアウト(この時点ではまだ伸縮操作が
+// 行われていない既定のCSSレイアウト)から一度だけ測っておく。この部分の
+// 内容自体は高さ変更の影響を受けないため、以後は定数として扱って良い
+const timelineChromePx = timelineDock.getBoundingClientRect().height - timelineCanvas.getBoundingClientRect().height;
+let timelineHeight = timelineDock.getBoundingClientRect().height; // 初期値=現状の自然な高さ(見た目を変えない)
+
+function clampTimelineHeight(h) {
+  const min = timelineChromePx + TIMELINE_MIN_CANVAS_PX;
+  const max = Math.max(min, Math.min(appRootEl.clientHeight - TIMELINE_MIN_VIEWPORT_PX, appRootEl.clientHeight * 0.6));
+  return Math.max(min, Math.min(max, h));
+}
+
+function applyTimelineHeight(h) {
+  timelineHeight = clampTimelineHeight(h);
+  timelineDock.style.height = `${timelineHeight}px`;
+  timelineCanvas.style.height = `${timelineHeight - timelineChromePx}px`;
+  // タイムラインの高さが変わると#viewportArea(4分割ビュー)の実サイズも
+  // flexboxによって変化するため、レンダラー・各カメラ・4分割レイアウトも
+  // 同期して更新する(resizeはこのファイルの末尾で定義されているが、
+  // 関数宣言はホイストされるためここから呼び出せる)
+  resize();
+  drawTimelineRuler();
+}
+
+let timelineResizeDrag = null; // { startClientY, startHeight }
+function onTimelineResizePointerDown(evt) {
+  timelineResizeHandle.setPointerCapture(evt.pointerId);
+  timelineResizeDrag = { startClientY: evt.clientY, startHeight: timelineHeight };
+}
+function onTimelineResizePointerMove(evt) {
+  if (!timelineResizeDrag) return;
+  // 境界を上方向(clientYが減る方向)へドラッグするとタイムラインを拡大、
+  // 下方向(clientYが増える方向)へドラッグすると縮小する
+  const dy = evt.clientY - timelineResizeDrag.startClientY;
+  applyTimelineHeight(timelineResizeDrag.startHeight - dy);
+}
+function onTimelineResizePointerUp() {
+  timelineResizeDrag = null;
+}
+timelineResizeHandle.addEventListener("pointerdown", onTimelineResizePointerDown);
+timelineResizeHandle.addEventListener("pointermove", onTimelineResizePointerMove);
+timelineResizeHandle.addEventListener("pointerup", onTimelineResizePointerUp);
+timelineResizeHandle.addEventListener("pointercancel", () => { timelineResizeDrag = null; });
+
+// 画面回転・ウィンドウサイズ変更時も、新しい画面サイズに応じて高さの
+// 上限/下限を再計算し、現在の高さをクランプし直す
+window.addEventListener("resize", () => applyTimelineHeight(timelineHeight));
+
 function setCurrentTime(t) {
   currentTime = Math.max(0, Math.min(TOTAL_FRAMES / FPS, t));
   const frame = frameOf(currentTime);
@@ -1691,4 +1751,17 @@ window.__fk = {
   setCursorPosition,
   placeCursorAt,
   isCursorMarkerVisible: () => cursorMarker.visible,
+  // タイムラインの高さ伸縮のテスト/デバッグ用
+  getTimelineHeight: () => timelineHeight,
+  getTimelineChromePx: () => timelineChromePx,
+  getTimelineMinMaxHeight: () => ({
+    min: timelineChromePx + TIMELINE_MIN_CANVAS_PX,
+    max: Math.max(
+      timelineChromePx + TIMELINE_MIN_CANVAS_PX,
+      Math.min(appRootEl.clientHeight - TIMELINE_MIN_VIEWPORT_PX, appRootEl.clientHeight * 0.6)
+    ),
+  }),
+  setTimelineHeight: applyTimelineHeight,
+  getTimelineResizeHandleRect: () => timelineResizeHandle.getBoundingClientRect().toJSON(),
+  getViewportAreaClientHeight: () => viewportArea.clientHeight,
 };
