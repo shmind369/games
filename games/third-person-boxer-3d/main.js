@@ -11,12 +11,18 @@ const FAST_RETURN_MS = 110;
 const SWIPE_THRESHOLD_PX = 30;
 const SWIPE_MAX_MS = 500;
 
-// dx/dy/dt(ポインターの移動量と経過時間)から左右スワイプを判定する。
-// 縦画面専用のため、横方向の移動が縦方向より十分大きい場合のみスワイプとみなす
+// dx/dy/dt(ポインターの移動量と経過時間)からスワイプ方向を判定する。
+// 横方向の移動が縦方向より十分大きい場合は左右スワイプ、縦方向の移動が
+// 横方向より十分大きく、かつ下向きの場合は下スワイプ(しゃがみ込み)と
+// みなす(上スワイプは今回のスコープに含まれないため未対応のまま)
 function classifySwipe(dx, dy, dt) {
+  if (dt > SWIPE_MAX_MS) return null;
   const adx = Math.abs(dx), ady = Math.abs(dy);
-  if (adx >= SWIPE_THRESHOLD_PX && adx > ady * 1.2 && dt <= SWIPE_MAX_MS) {
+  if (adx >= SWIPE_THRESHOLD_PX && adx > ady * 1.2) {
     return dx < 0 ? "left" : "right";
+  }
+  if (ady >= SWIPE_THRESHOLD_PX && ady > adx * 1.2 && dy > 0) {
+    return "down";
   }
   return null;
 }
@@ -81,6 +87,126 @@ function computeDodgePosture(progress) {
     hipBend: mag * MAX_HIP_BEND,
     kneeBend: -mag * MAX_HIP_BEND * KNEE_COUNTER,
   };
+}
+
+// ---------- 下スワイプでのしゃがみ込み(humanoid-gltf-exporterで作成した ----------
+// ポーズアニメーションJSONを再生する、小さなクリッププレイヤー)
+// クリップのデータ構造(pose: 各ボーンの姿勢、modelPosition: ModelRootの
+// 絶対座標)は、humanoid-gltf-exporter側のキーフレームシステムとそのまま
+// 互換性がある。このゲームでは、そのうちの1本(しゃがみ込みながら
+// 後方へ沈み込むポーズ)をアセットとして同梱し、下スワイプで再生する
+const DUCK_CLIP = {
+  keyframes: [
+    {
+      time: 0,
+      pose: {
+        Hips: [0, 0, 0, 1], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [0, 0, 0, 1], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [0, 0, 0, 1], LeftLowerLeg: [0, 0, 0, 1], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [0, 0, 0, 1], RightFoot: [0, 0, 0, 1],
+      },
+      modelPosition: [0, 0, 0],
+    },
+    {
+      time: 0.5,
+      pose: {
+        Hips: [0.00854071962748727, 0, 0, 0.9999635273889966], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [-0.8966347975492622, 0, 0, 0.44277086605127214], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [-0.6836714393495077, 0, 0, 0.729789944448245], LeftLowerLeg: [-0.7248182352526064, 0, 0, -0.6889401467800358], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [-0.741607709700769, 0, 0, -0.6708338131850391], RightFoot: [0, 0, 0, 1],
+      },
+      modelPosition: [-0.02706766917293233, -0.4035087719298246, -0.412781954887218],
+    },
+    {
+      time: 0.9,
+      pose: {
+        Hips: [0.00854071962748727, 0, 0, 0.9999635273889966], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [-0.8966347975492622, 0, 0, 0.44277086605127214], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [-0.6836714393495077, 0, 0, 0.729789944448245], LeftLowerLeg: [-0.7248182352526064, 0, 0, -0.6889401467800358], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [-0.741607709700769, 0, 0, -0.6708338131850391], RightFoot: [0, 0, 0, 1],
+      },
+      modelPosition: [-0.013533834586466165, -0.4035087719298246, -0.42180451127819535],
+    },
+  ],
+};
+const DUCK_CLIP_END_TIME = DUCK_CLIP.keyframes[DUCK_CLIP.keyframes.length - 1].time;
+// クリップ本来のテンポ(0→0.9秒でしゃがみ込む)を、しゃがむ方向・戻る方向の
+// 両方にそのまま使う(対称な速さで、しゃがんで→戻る、という動作にする)
+const DUCK_OUT_MS = DUCK_CLIP_END_TIME * 1000;
+const DUCK_RETURN_MS = DUCK_CLIP_END_TIME * 1000;
+
+// 指定した時刻を挟む2つのキーフレーム(と補間係数alpha)を求める汎用ヘルパー。
+// humanoid-gltf-exporter側のfindBoundingKeyframesと同じ考え方で、POSEトラック
+// (pose!=nullのエントリ)とMOVEトラック(modelPosition!=nullのエントリ)を
+// それぞれ独立に補間できるようにしている
+function findBoundingKeyframes(list, time) {
+  if (list.length === 0) return null;
+  const first = list[0], last = list[list.length - 1];
+  if (time <= first.time) return { k0: first, k1: first, alpha: 0 };
+  if (time >= last.time) return { k0: last, k1: last, alpha: 0 };
+  for (let i = 0; i < list.length - 1; i++) {
+    if (list[i].time <= time && time <= list[i + 1].time) {
+      const span = list[i + 1].time - list[i].time;
+      return { k0: list[i], k1: list[i + 1], alpha: span > 1e-9 ? (time - list[i].time) / span : 0 };
+    }
+  }
+  return { k0: first, k1: first, alpha: 0 };
+}
+
+// クリップを指定した時刻でサンプリングし、{ pose: {ボーン名: THREE.Quaternion},
+// modelPosition: [x,y,z] }を返す(POSEはslerp、MOVEはlerpで補間する)
+function sampleClip(clip, time) {
+  const poseTrack = clip.keyframes.filter((k) => k.pose);
+  const moveTrack = clip.keyframes.filter((k) => k.modelPosition);
+  const pose = {};
+  const pb = findBoundingKeyframes(poseTrack, time);
+  if (pb) {
+    for (const name of Object.keys(pb.k0.pose)) {
+      const q0 = pb.k0.pose[name], q1 = pb.k1.pose[name];
+      if (!q0 || !q1) continue;
+      const a = new THREE.Quaternion(q0[0], q0[1], q0[2], q0[3]);
+      const b = new THREE.Quaternion(q1[0], q1[1], q1[2], q1[3]);
+      a.slerp(b, pb.alpha);
+      pose[name] = a;
+    }
+  }
+  let modelPosition = [0, 0, 0];
+  const mb = findBoundingKeyframes(moveTrack, time);
+  if (mb) {
+    const p0 = mb.k0.modelPosition, p1 = mb.k1.modelPosition;
+    modelPosition = [0, 1, 2].map((i) => p0[i] + (p1[i] - p0[i]) * mb.alpha);
+  }
+  return { pose, modelPosition };
+}
+
+// しゃがみ込みの状態機械(Three.js非依存の純粋関数。既存の左右スワイプ回避
+// (dodgeState)と同じ「out→return→ニュートラル」という構成にしている)
+function createDuckState() { return { phase: null, startAt: 0 }; }
+
+function triggerDuck(state, now) {
+  if (state.phase) return state; // 再生中は多重起動しない
+  return { phase: "out", startAt: now };
+}
+
+function advanceDuck(state, now) {
+  if (!state.phase) return state;
+  const dur = state.phase === "out" ? DUCK_OUT_MS : DUCK_RETURN_MS;
+  if (now - state.startAt < dur) return state;
+  if (state.phase === "out") return { phase: "return", startAt: now };
+  return createDuckState();
+}
+
+// 現在のduckStateから、クリップ上の再生時刻(秒)を求める。
+// outフェーズは0→クリップ終端、returnフェーズはクリップ終端→0と、
+// クリップを逆再生することでしゃがんだ姿勢から自然に元の姿勢へ戻す
+function computeDuckClipTime(state, now) {
+  if (!state.phase) return 0;
+  const dur = state.phase === "out" ? DUCK_OUT_MS : DUCK_RETURN_MS;
+  const t = clamp01((now - state.startAt) / dur);
+  return state.phase === "out" ? DUCK_CLIP_END_TIME * t : DUCK_CLIP_END_TIME * (1 - t);
 }
 
 // 参照画像の構図(頭が地平線のすぐ下、キャラクターが画面下半分を占める、
@@ -169,6 +295,11 @@ player.rotation.y = Math.PI; // 背中をカメラ(+Z)に向ける
 scene.add(player);
 
 const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerLeg: null, rightLowerLeg: null };
+// しゃがみ込みクリップ(DUCK_CLIP)はSpine/LeftUpperLeg等だけでなく、Hips・
+// LeftForearmなど回避動作では使っていないボーンも操作するため、ボーン名で
+// 引けるマップを別途用意する(将来別のクリップを追加する場合もそのまま
+// 流用できる汎用的な仕組みにしている)
+let allBonesByName = {};
 new GLTFLoader().load(
   "./assets/humanoid.glb",
   (gltf) => {
@@ -179,16 +310,28 @@ new GLTFLoader().load(
     // リセットしてから使う
     model.traverse((o) => { if (o.isBone) o.quaternion.identity(); });
     player.add(model);
+    model.traverse((o) => { if (o.isBone) allBonesByName[o.name] = o; });
     bones.hips = model.getObjectByName("Hips");
     bones.spine = model.getObjectByName("Spine");
     bones.leftUpperLeg = model.getObjectByName("LeftUpperLeg");
     bones.rightUpperLeg = model.getObjectByName("RightUpperLeg");
     bones.leftLowerLeg = model.getObjectByName("LeftLowerLeg");
     bones.rightLowerLeg = model.getObjectByName("RightLowerLeg");
+    bones.leftForearm = model.getObjectByName("LeftForearm");
   },
   undefined,
   (err) => console.error("humanoid.glb の読み込みに失敗しました", err)
 );
+
+// クリップのサンプル結果(pose: ボーン名→Quaternion、modelPosition)を、
+// 実際のシーングラフ(ボーン・player.position)へ適用する
+function applyClipSample(sample) {
+  for (const name of Object.keys(sample.pose)) {
+    const bone = allBonesByName[name];
+    if (bone) bone.quaternion.copy(sample.pose[name]);
+  }
+  player.position.set(sample.modelPosition[0], sample.modelPosition[1], sample.modelPosition[2]);
+}
 
 // ---------- 接地シャドウ(ソフトな円形のフェイクシャドウ) ----------
 function makeShadowTexture() {
@@ -213,8 +356,9 @@ shadowBlob.rotation.x = -Math.PI / 2;
 shadowBlob.position.set(0.05, 0.015, 0.18);
 scene.add(shadowBlob);
 
-// ---------- 入力(左右スワイプ) ----------
+// ---------- 入力(左右スワイプ・下スワイプ) ----------
 let dodgeState = createDodgeState();
+let duckState = createDuckState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 function onPointerDown(evt) {
@@ -228,6 +372,14 @@ function onPointerUp(evt) {
   gestureStart = null;
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
+  // しゃがみ込み中は、一連の動作(しゃがむ→戻る)が終わるまで新しい入力を
+  // 受け付けない(左右の回避移動としゃがみ込みが同時に競合しないようにする)
+  if (duckState.phase) return;
+  if (direction === "down") {
+    duckState = triggerDuck(duckState, now);
+    dodgeState = createDodgeState(); // 進行中の回避があれば、しゃがみ込みで打ち切る
+    return;
+  }
   dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now));
 }
 canvas.addEventListener("pointerdown", onPointerDown);
@@ -248,22 +400,41 @@ resize();
 // ---------- レンダーループ ----------
 function render() {
   const now = performance.now();
-  dodgeState = advanceDodge(dodgeState, now);
-  const x = computeDodgeX(dodgeState, now);
-  const progress = computeDodgeProgress(dodgeState, now);
-  const posture = computeDodgePosture(progress);
+  duckState = advanceDuck(duckState, now);
 
-  player.position.x = x;
-  player.position.y = -posture.crouchDrop;
-  shadowBlob.position.x = x + 0.05;
+  if (duckState.phase) {
+    // しゃがみ込みクリップ再生中は、このクリップが19本全ボーンの姿勢と
+    // モデル全体の位置を毎フレーム丸ごと決めるため、通常の回避姿勢の
+    // 計算・適用は行わない(両者が同じボーン・位置を奪い合わないように
+    // 完全に排他にしている)
+    const clipTime = computeDuckClipTime(duckState, now);
+    const sample = sampleClip(DUCK_CLIP, clipTime);
+    applyClipSample(sample);
+    shadowBlob.position.x = sample.modelPosition[0] + 0.05;
+  } else {
+    dodgeState = advanceDodge(dodgeState, now);
+    const x = computeDodgeX(dodgeState, now);
+    const progress = computeDodgeProgress(dodgeState, now);
+    const posture = computeDodgePosture(progress);
 
-  if (bones.spine) {
-    bones.spine.rotation.z = posture.leanZ;
-    bones.spine.rotation.x = posture.leanX;
-    bones.leftUpperLeg.rotation.x = posture.hipBend;
-    bones.rightUpperLeg.rotation.x = posture.hipBend;
-    bones.leftLowerLeg.rotation.x = posture.kneeBend;
-    bones.rightLowerLeg.rotation.x = posture.kneeBend;
+    player.position.x = x;
+    player.position.y = -posture.crouchDrop;
+    player.position.z = 0;
+    shadowBlob.position.x = x + 0.05;
+
+    if (bones.spine) {
+      // しゃがみ込みクリップだけが操作するボーン(Hips・LeftForearm)は、
+      // 回避姿勢には含まれないため、ここで明示的に直立姿勢へ戻しておく
+      // (しゃがみ込みの最終フレームの端数が残らないようにするため)
+      if (bones.hips) bones.hips.quaternion.identity();
+      if (bones.leftForearm) bones.leftForearm.quaternion.identity();
+      bones.spine.rotation.z = posture.leanZ;
+      bones.spine.rotation.x = posture.leanX;
+      bones.leftUpperLeg.rotation.x = posture.hipBend;
+      bones.rightUpperLeg.rotation.x = posture.hipBend;
+      bones.leftLowerLeg.rotation.x = posture.kneeBend;
+      bones.rightLowerLeg.rotation.x = posture.kneeBend;
+    }
   }
 
   renderer.render(scene, camera);
@@ -272,7 +443,7 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, player, ground, grid, bones };
+window.__scene = { scene, camera, player, ground, grid, bones, allBonesByName: () => allBonesByName };
 window.__dodge = {
   classifySwipe,
   onSwipe,
@@ -283,4 +454,16 @@ window.__dodge = {
   createDodgeState,
   getState: () => dodgeState,
   simulateSwipe: (direction, now) => { dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now)); },
+};
+// しゃがみ込み(下スワイプ)のテスト/デバッグ用
+window.__duck = {
+  createDuckState,
+  triggerDuck,
+  advanceDuck,
+  computeDuckClipTime,
+  sampleClip,
+  clip: DUCK_CLIP,
+  clipEndTime: DUCK_CLIP_END_TIME,
+  getState: () => duckState,
+  simulateDown: (now) => { duckState = triggerDuck(duckState, now); dodgeState = createDodgeState(); },
 };
