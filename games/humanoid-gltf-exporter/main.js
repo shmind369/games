@@ -874,17 +874,19 @@ function applyPoseObject(pose) {
   }
 }
 
-// POSE(editMode !== "move")では現在の全ボーン回転を、MOVE(editMode === "move")
-// では現在のmodelTransform.position(絶対座標)をそのフレームに保存する。
-// 既にそのフレームにもう一方の種類のキーフレームが存在する場合は、それは
-// そのまま温存する(POSEとMOVEは互いに独立したデータのため、一方の保存で
-// もう一方を消したり書き換えたりしない)
+// ユーザーがPOSE/MOVEのどちらを編集していたかに関わらず、「+◆」を1回
+// 押すだけで「このフレームのキャラクターの姿勢」と「このフレームの
+// キャラクターの位置」を同時に保存する(ユーザーの編集操作を一体化する
+// ための統合ポイント)。内部データとしては、引き続きpose(全ボーンの
+// 姿勢)とmodelPosition(ModelRootの絶対座標)を別々のフィールドとして
+// 保持しており、技術的に1つのデータへ統合しているわけではない。再生時の
+// 補間もそれぞれ独立したトラックとして行う(applyBonePoseAtTime/
+// applyModelTransformAtTimeを参照)。これにより、POSEのみ・MOVEのみ・
+// 両方、という3パターンのキーフレーム(JSONインポート等で作られた
+// ものも含む)を引き続き正しく扱える
 function addKeyframeAt(time) {
+  const entry = { time, pose: snapshotPose(), modelPosition: modelTransform.position.toArray() };
   const existingIdx = poseKeyframes.findIndex((k) => Math.abs(k.time - time) < 1e-6);
-  const existing = existingIdx >= 0 ? poseKeyframes[existingIdx] : null;
-  const entry = editMode === "move"
-    ? { time, pose: existing ? existing.pose : null, modelPosition: modelTransform.position.toArray() }
-    : { time, pose: snapshotPose(), modelPosition: existing ? existing.modelPosition : null };
   if (existingIdx >= 0) poseKeyframes[existingIdx] = entry;
   else {
     poseKeyframes.push(entry);
@@ -1321,8 +1323,7 @@ keyframeBtn.addEventListener("click", () => {
   const previous = poseKeyframes.find((k) => Math.abs(k.time - currentTime) < 1e-6) || null;
   addKeyframeAt(currentTime);
   pushUndo({ type: "keyframeAdd", time: currentTime, previous });
-  const kindLabel = editMode === "move" ? "MOVE(位置)" : "POSE(姿勢)";
-  statusEl.textContent = `${currentTime.toFixed(2)}s に${kindLabel}キーフレームを保存しました(全${poseKeyframes.length}個)`;
+  statusEl.textContent = `${currentTime.toFixed(2)}s に姿勢+位置のキーフレームを保存しました(全${poseKeyframes.length}個)`;
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
 });
 
