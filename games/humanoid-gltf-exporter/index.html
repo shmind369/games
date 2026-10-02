@@ -276,10 +276,13 @@
        3Dビュー用canvasには一切イベントが伝わらない(別要素・別領域のため) */
     #timelineDock {
       flex: 0 0 auto;
+      box-sizing: border-box; /* JSから設定するstyle.heightがborder/paddingを
+        含んだ実高さ(getBoundingClientRectと同じ基準)と一致するようにする */
       background: #14161b;
       border-top: 1px solid rgba(255,255,255,0.08);
       padding: 4px 10px max(6px, env(safe-area-inset-bottom)) 10px;
       touch-action: none;
+      overflow: hidden; /* 高さを伸縮しても内部要素がはみ出さないようにする保険 */
     }
     #timelineReadout {
       display: flex;
@@ -303,12 +306,40 @@
       justify-content: center;
       gap: 6px;
       padding-top: 2px;
+      margin-bottom: 10px; /* ボタン群とタイムライン目盛りの間の余白(視覚的に少し分離する) */
     }
     #timelineCanvas {
       display: block;
       width: 100%;
-      height: 30px;
+      height: 30px; /* 初期値。以後はタイムラインの伸縮ドラッグに応じてJSが上書きする */
       touch-action: none;
+    }
+
+    /* ---------- タイムラインの高さを伸縮するドラッグハンドル ----------
+       4分割ビューとタイムラインの境界をドラッグすると、タイムライン全体の
+       高さを変更できる。「見た目の境界線は太くしないが、指で掴みやすい
+       十分な高さの当たり判定を確保する」という要件のため、要素自体の
+       高さ(36px)をmargin-top/bottomの負値(-18px)で相殺し、レイアウト上は
+       占有スペース0のまま、視覚的な境界線の上下にまたがる当たり判定だけを
+       重ねて配置している */
+    #timelineResizeHandle {
+      flex: 0 0 auto;
+      position: relative;
+      z-index: 5;
+      height: 36px;
+      margin-top: -18px;
+      margin-bottom: -18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      cursor: ns-resize;
+    }
+    #timelineResizeHandle .resizeGripBar {
+      width: 36px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(255,255,255,0.25);
     }
     .iconBtn {
       font: inherit;
@@ -390,6 +421,10 @@
 
       <div id="status">タップでボーン選択・ドラッグで回転</div>
     </div>
+
+    <!-- 4分割ビューとタイムラインの境界。ドラッグするとタイムラインの
+         高さを伸縮できる(上へドラッグで拡大、下へドラッグで縮小) -->
+    <div id="timelineResizeHandle"><span class="resizeGripBar"></span></div>
 
     <div id="timelineDock">
       <div id="timelineReadout">
