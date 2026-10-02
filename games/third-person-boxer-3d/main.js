@@ -138,6 +138,78 @@ const DUCK_CLIP_END_TIME = DUCK_CLIP.keyframes[DUCK_CLIP.keyframes.length - 1].t
 const DUCK_OUT_MS = DUCK_CLIP_END_TIME * 1000;
 const DUCK_RETURN_MS = DUCK_CLIP_END_TIME * 1000;
 
+// ---------- アイドル状態(常時構え)でループ再生するクリップ ----------
+// humanoid-gltf-exporterで作成した、両腕を構えたボクシングのガードポーズ
+// アニメーション。先頭(time=0)と末尾(time=1.333...秒)の姿勢・位置が
+// 完全に一致しているため、末尾から先頭へそのままループさせても
+// 継ぎ目(ポーズの飛び)が発生しない
+const IDLE_CLIP = {
+  keyframes: [
+    {
+      time: 0,
+      pose: {
+        Hips: [-0.04842264996522426, -0.24941858804105652, -0.012488328193081991, 0.9671037465385465],
+        Spine: [0.08414530459210005, 0, 0, 0.9964534950087248], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [-0.5227817586896102, 0, 0, 0.8524665581601417],
+        LeftForearm: [0.7694078993313046, 0, 0, -0.6387577666428714], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0.07150273705091792, 0.3494341390607078, -0.18728522048578872, 0.9152635616262229],
+        RightUpperArm: [-0.5412665217663173, 0, 0, 0.8408510881333227],
+        RightForearm: [-0.7288168373837771, 0, 0, 0.6847087099971119], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [-0.24950254146038775, 0.12167020706280558, 0.13173444128486084, 0.9516253882161125],
+        LeftLowerLeg: [0.3318099345747083, 0, 0, 0.9433462605626461], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0.08670532327429584, 0.1583461580516255, -0.10766720648910869, 0.9776586591408178],
+        RightLowerLeg: [0.34144127400634583, 0, 0, 0.9399031101155711],
+        RightFoot: [-0.43481250254054554, 0, 0, 0.9005210089911441],
+      },
+      modelPosition: [6.399781846210084e-19, -0.09223057644110243, 0.00288220551378442],
+    },
+    {
+      time: 0.7666666666666667,
+      pose: {
+        Hips: [-0.01961155453880588, -0.24967981163842193, -0.005057871257211775, 0.9681166234122413],
+        Spine: [0.12373336335538015, -0.05672298058888147, -0.04396848980232421, 0.989716792911175], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [-0.5227817586896102, 0, 0, 0.8524665581601417],
+        LeftForearm: [0.7694078993313048, 0, 0, -0.6387577666428715], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0.07150273705091792, 0.3494341390607078, -0.18728522048578872, 0.9152635616262229],
+        RightUpperArm: [-0.5412665217663173, 0, 0, 0.8408510881333227],
+        RightForearm: [-0.7288168373837771, 0, 0, 0.6847087099971119], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [-0.3143984497686581, 0.11231628451154163, 0.13979504476505192, 0.9321995561443506],
+        LeftLowerLeg: [-0.4021841959584104, 0, 0, -0.9155587761150493], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0.08670532327429584, 0.1583461580516255, -0.10766720648910869, 0.9776586591408178],
+        RightLowerLeg: [0.34144127400634583, 0, 0, 0.9399031101155711],
+        RightFoot: [-0.43481250254054554, 0, 0, 0.9005210089911441],
+      },
+      modelPosition: [0.0021761128031455063, -0.10081066625099666, 0.04925439032807323],
+    },
+    {
+      time: 1.3333333333333333,
+      pose: {
+        Hips: [-0.04842264996522426, -0.24941858804105652, -0.012488328193081991, 0.9671037465385465],
+        Spine: [0.08414530459210005, 0, 0, 0.9964534950087248], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
+        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [-0.5227817586896102, 0, 0, 0.8524665581601417],
+        LeftForearm: [0.7694078993313046, 0, 0, -0.6387577666428714], LeftHand: [0, 0, 0, 1],
+        RightShoulder: [0.07150273705091792, 0.3494341390607078, -0.18728522048578872, 0.9152635616262229],
+        RightUpperArm: [-0.5412665217663173, 0, 0, 0.8408510881333227],
+        RightForearm: [-0.7288168373837771, 0, 0, 0.6847087099971119], RightHand: [0, 0, 0, 1],
+        LeftUpperLeg: [-0.24950254146038775, 0.12167020706280558, 0.13173444128486084, 0.9516253882161125],
+        LeftLowerLeg: [0.3318099345747083, 0, 0, 0.9433462605626461], LeftFoot: [0, 0, 0, 1],
+        RightUpperLeg: [0.08670532327429584, 0.1583461580516255, -0.10766720648910869, 0.9776586591408178],
+        RightLowerLeg: [0.34144127400634583, 0, 0, 0.9399031101155711],
+        RightFoot: [-0.43481250254054554, 0, 0, 0.9005210089911441],
+      },
+      modelPosition: [6.399781846210084e-19, -0.09223057644110243, 0.00288220551378442],
+    },
+  ],
+};
+const IDLE_LOOP_DURATION = IDLE_CLIP.keyframes[IDLE_CLIP.keyframes.length - 1].time;
+
+// 現在時刻(ミリ秒)から、アイドルループの再生時刻(0〜IDLE_LOOP_DURATION秒)
+// を求める。先頭と末尾の姿勢が一致しているため、単純に時刻を
+// IDLE_LOOP_DURATIONで割った余りを取るだけでシームレスにループする
+function computeIdleClipTime(nowMs) {
+  return (nowMs / 1000) % IDLE_LOOP_DURATION;
+}
+
 // 指定した時刻を挟む2つのキーフレーム(と補間係数alpha)を求める汎用ヘルパー。
 // humanoid-gltf-exporter側のfindBoundingKeyframesと同じ考え方で、POSEトラック
 // (pose!=nullのエントリ)とMOVEトラック(modelPosition!=nullのエントリ)を
@@ -401,18 +473,18 @@ resize();
 function render() {
   const now = performance.now();
   duckState = advanceDuck(duckState, now);
+  dodgeState = advanceDodge(dodgeState, now);
 
+  // しゃがみ込み(ダウン)・左右の回避(ドジ)・アイドルの構えループは、
+  // 常にどれか1つだけがボーン・モデル位置を完全に支配する(3状態の
+  // 完全な排他制御)。優先順位はダウン > ドジ > アイドルで、ドジも
+  // ダウンも行っていないときは常にアイドルの構えループが再生される
   if (duckState.phase) {
-    // しゃがみ込みクリップ再生中は、このクリップが19本全ボーンの姿勢と
-    // モデル全体の位置を毎フレーム丸ごと決めるため、通常の回避姿勢の
-    // 計算・適用は行わない(両者が同じボーン・位置を奪い合わないように
-    // 完全に排他にしている)
     const clipTime = computeDuckClipTime(duckState, now);
     const sample = sampleClip(DUCK_CLIP, clipTime);
     applyClipSample(sample);
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
-  } else {
-    dodgeState = advanceDodge(dodgeState, now);
+  } else if (dodgeState.phase) {
     const x = computeDodgeX(dodgeState, now);
     const progress = computeDodgeProgress(dodgeState, now);
     const posture = computeDodgePosture(progress);
@@ -423,9 +495,9 @@ function render() {
     shadowBlob.position.x = x + 0.05;
 
     if (bones.spine) {
-      // しゃがみ込みクリップだけが操作するボーン(Hips・LeftForearm)は、
-      // 回避姿勢には含まれないため、ここで明示的に直立姿勢へ戻しておく
-      // (しゃがみ込みの最終フレームの端数が残らないようにするため)
+      // しゃがみ込み・アイドルのクリップだけが操作するボーン(Hips・
+      // LeftForearm)は、回避姿勢には含まれないため、ここで明示的に
+      // 直立姿勢へ戻しておく(他のクリップの端数が残らないようにする)
       if (bones.hips) bones.hips.quaternion.identity();
       if (bones.leftForearm) bones.leftForearm.quaternion.identity();
       bones.spine.rotation.z = posture.leanZ;
@@ -435,6 +507,10 @@ function render() {
       bones.leftLowerLeg.rotation.x = posture.kneeBend;
       bones.rightLowerLeg.rotation.x = posture.kneeBend;
     }
+  } else {
+    const sample = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
+    applyClipSample(sample);
+    shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   }
 
   renderer.render(scene, camera);
@@ -466,4 +542,12 @@ window.__duck = {
   clipEndTime: DUCK_CLIP_END_TIME,
   getState: () => duckState,
   simulateDown: (now) => { duckState = triggerDuck(duckState, now); dodgeState = createDodgeState(); },
+};
+// アイドル状態(常時構え)のループ再生のテスト/デバッグ用
+window.__idle = {
+  clip: IDLE_CLIP,
+  loopDuration: IDLE_LOOP_DURATION,
+  computeIdleClipTime,
+  sampleClip,
+  isActive: () => !duckState.phase && !dodgeState.phase,
 };
