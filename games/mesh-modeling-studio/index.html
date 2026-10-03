@@ -152,6 +152,66 @@
     .toolBtn.active { background: #4c8dff; }
     #deleteBtn { background: #7a3030; }
     #undoBtn { background: #4a4e5c; }
+    #colorBtn { background: #5a4a7a; }
+
+    /* ---------- 面カラーパレット(モーダル) ---------- */
+    .colorPaletteOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      background: rgba(0, 0, 0, 0.55);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: manipulation;
+    }
+    .colorPaletteOverlay.hidden { display: none; }
+    .colorPaletteCard {
+      width: min(86vw, 340px);
+      background: #20232b;
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .colorPaletteTitle {
+      font-size: 13px;
+      font-weight: 700;
+      opacity: 0.9;
+      text-align: center;
+    }
+    .colorSwatchGrid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+    }
+    .swatchBtn {
+      width: 100%;
+      aspect-ratio: 1;
+      min-height: 44px;
+      border-radius: 10px;
+      border: 2px solid rgba(255, 255, 255, 0.15);
+      touch-action: manipulation;
+    }
+    .swatchBtn:active { transform: scale(0.92); }
+    .colorPaletteFreeRow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-size: 13px;
+      opacity: 0.9;
+    }
+    .colorPaletteFreeRow input[type="color"] {
+      width: 48px;
+      height: 36px;
+      border: none;
+      border-radius: 8px;
+      background: none;
+      padding: 0;
+    }
   </style>
 </head>
 <body>
@@ -188,6 +248,30 @@
       <div id="actionRow">
         <button id="deleteBtn" class="toolBtn" disabled>🗑 削除</button>
         <button id="undoBtn" class="toolBtn" disabled>↩ 元に戻す</button>
+        <button id="colorBtn" class="toolBtn" disabled>🎨 COLOR</button>
+      </div>
+    </div>
+
+    <div id="colorPaletteOverlay" class="colorPaletteOverlay hidden">
+      <div id="colorPaletteCard" class="colorPaletteCard">
+        <div class="colorPaletteTitle">面の色を選択</div>
+        <div class="colorSwatchGrid">
+          <button class="swatchBtn" data-color="#F2C4A1" title="肌色" style="background:#F2C4A1"></button>
+          <button class="swatchBtn" data-color="#FFFFFF" title="白" style="background:#FFFFFF"></button>
+          <button class="swatchBtn" data-color="#2B2B2B" title="黒" style="background:#2B2B2B"></button>
+          <button class="swatchBtn" data-color="#E0483E" title="赤" style="background:#E0483E"></button>
+          <button class="swatchBtn" data-color="#3E7FE0" title="青" style="background:#3E7FE0"></button>
+          <button class="swatchBtn" data-color="#4CAF50" title="緑" style="background:#4CAF50"></button>
+          <button class="swatchBtn" data-color="#F2C94C" title="黄" style="background:#F2C94C"></button>
+          <button class="swatchBtn" data-color="#F2994A" title="オレンジ" style="background:#F2994A"></button>
+          <button class="swatchBtn" data-color="#9B51E0" title="紫" style="background:#9B51E0"></button>
+          <button class="swatchBtn" data-color="#8C8C8C" title="グレー" style="background:#8C8C8C"></button>
+        </div>
+        <div class="colorPaletteFreeRow">
+          <label for="colorPickerInput">自由な色:</label>
+          <input id="colorPickerInput" type="color" value="#4c8dff" />
+        </div>
+        <button id="colorPaletteCloseBtn" class="toolBtn">閉じる</button>
       </div>
     </div>
   </div>
