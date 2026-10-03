@@ -88,6 +88,94 @@ function setFaceColor(id, color) {
   if (f) f.color = color;
 }
 
+// ---------- データモデル: joints(RIGGINGモードの関節=ボーン) ----------
+// BlenderのArmatureと同じ「ボーン=親子を結ぶ1本の線」という考え方を採用し、
+// 頂点/辺/面とは独立したデータとして持つ(メッシュへの自動ウェイト付けは
+// 今回のスコープ外のため、関節は今のところどの頂点とも結びついていない)。
+// 1つのjointは「自分の位置」と「親joint」を持つだけで、画面に見える
+// 「ボーン」は常に「親の位置→自分の位置」を結ぶ線として描画される
+// (親を持たない=Root)。これはhumanoid-gltf-exporter等、他プロジェクトの
+// `bone(name, x, y, z)`の考え方と同じだが、このプロジェクト用に独立して
+// 実装している。
+let joints = []; // [{id, name, parentId, x, y, z, rotationLimit: "free"|"hinge", side: "left"|"right"|"center", mirrorId}]
+
+function addJoint(name, x, y, z, parentId, side) {
+  const j = { id: genId(), name, parentId: parentId ?? null, x, y, z, rotationLimit: "free", side: side || "center", mirrorId: null };
+  joints.push(j);
+  return j;
+}
+function isDescendantJoint(ancestorId, nodeId) {
+  let cur = joints.find((j) => j.id === nodeId);
+  while (cur && cur.parentId != null) {
+    if (cur.parentId === ancestorId) return true;
+    cur = joints.find((j) => j.id === cur.parentId);
+  }
+  return false;
+}
+// 親を変更する(ボーン生成時の「2点目を1点目の子にする」にも、後からの
+// 付け替えにも同じ関数を使う)。自分の子孫を親にしようとする操作は、
+// 循環参照(無限ループ)になるため拒否する
+function reparentJoint(jointId, newParentId) {
+  if (jointId === newParentId) return false;
+  if (newParentId != null && isDescendantJoint(jointId, newParentId)) return false;
+  const j = joints.find((jj) => jj.id === jointId);
+  if (!j) return false;
+  j.parentId = newParentId;
+  return true;
+}
+// 頂点削除と同じ考え方で、削除したjointの子孫(=そこから先のボーン)も
+// 連鎖的に削除する(親を失ったボーンが宙に浮いて残ることを防ぐ)
+function deleteJointCascade(id) {
+  const toDelete = new Set([id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const j of joints) {
+      if (j.parentId != null && toDelete.has(j.parentId) && !toDelete.has(j.id)) { toDelete.add(j.id); changed = true; }
+    }
+  }
+  joints = joints.filter((j) => !toDelete.has(j.id));
+  for (const j of joints) if (j.mirrorId != null && toDelete.has(j.mirrorId)) j.mirrorId = null;
+}
+
+// ---------- 左右対称(SYMMETRY) ----------
+let symmetryEnabled = false;
+// X座標の符号で左右を判定する(このリポジトリの他プロジェクト(例:
+// humanoid-gltf-exporter)と同じく、X>0側を"left"としている)
+function sideOfX(x) {
+  const EPS = 0.02;
+  if (x > EPS) return "left";
+  if (x < -EPS) return "right";
+  return "center";
+}
+function mirrorBoneName(name) {
+  if (/right/i.test(name)) return name.replace(/Right/g, "Left").replace(/right/g, "left");
+  if (/left/i.test(name)) return name.replace(/Left/g, "Right").replace(/left/g, "right");
+  if (name.includes("右")) return name.replace(/右/g, "左");
+  if (name.includes("左")) return name.replace(/左/g, "右");
+  return `${name}_mirror`;
+}
+// ミラー側の親を解決する: 親が中心(center、mirrorIdなし)ならそのまま同じ親を
+// 共有し(例: 背骨の同じChestに左右の腕がそれぞれ繋がる)、親自身が左右の
+// どちらかで既にミラー済みなら、そのミラー先を親にする
+function resolveMirrorParentId(parentId) {
+  if (parentId == null) return null;
+  const p = joints.find((j) => j.id === parentId);
+  if (!p) return null;
+  return p.mirrorId != null ? p.mirrorId : p.id;
+}
+function createJointWithSymmetry(name, x, y, z, parentId) {
+  const side = sideOfX(x);
+  const j = addJoint(name, x, y, z, parentId, side);
+  if (symmetryEnabled && side !== "center") {
+    const mirrorParentId = resolveMirrorParentId(parentId);
+    const mj = addJoint(mirrorBoneName(name), -x, y, z, mirrorParentId, side === "left" ? "right" : "left");
+    j.mirrorId = mj.id;
+    mj.mirrorId = j.id;
+  }
+  return j;
+}
+
 // ---------- Undo(スナップショット方式) ----------
 // このプロトタイプの規模(頂点・辺・面とも数十〜数百程度を想定)では、
 // 変更の都度 vertices/edges/faces の全体を複製して積むだけの単純な方式で
@@ -106,6 +194,7 @@ function cloneState() {
     edges: edges.map((e) => ({ ...e })),
     faces: faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null })),
     modelScale,
+    joints: joints.map((j) => ({ ...j })),
   };
 }
 function restoreState(snap) {
@@ -113,6 +202,7 @@ function restoreState(snap) {
   edges = snap.edges.map((e) => ({ ...e }));
   faces = snap.faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null }));
   modelScale = snap.modelScale ?? 1;
+  joints = (snap.joints || []).map((j) => ({ ...j }));
 }
 function pushUndoSnapshot() {
   undoStack.push(cloneState());
@@ -127,7 +217,10 @@ function performUndo() {
   selectedEdgeId = null;
   selectedFaceId = null;
   pendingVerts = [];
+  selectedJointId = null;
+  if (testPoseActive) buildPoseBones(); // 構造が変わった可能性があるので作り直す(ポーズは単位回転にリセットされる)
   rebuildScene();
+  rebuildRigVisual();
   updateUndoBtnState();
   updateDeleteBtnState();
   updateColorBtnState();
@@ -547,9 +640,283 @@ function rebuildScene() {
     scene.add(faceMesh);
   }
 
+  // RIGGINGモード中は頂点/辺の編集用マーカーを消す(面=モデル本体の表示は
+  // 維持する)。関節/ボーンの描画は別のrebuildRigVisual()が担当する
+  vertexGroup.visible = appMode === "model";
+  edgeGroup.visible = appMode === "model";
+
   updateStats();
   updateObjectInfo();
 }
+
+// ============================================================
+// RIGGINGモード(手動ボーン配置)
+//
+// 「完成したモデルをAIが自動的に骨格を推測する」のではなく、ユーザーが
+// 関節位置をタップで指定し、アプリがその2点を結ぶボーンを生成する
+//半自動方式。実機での自動ウェイト計算・自動リギングは行わず、まずは
+// 「骨格を作る→階層を確認する→動かして確認する」という基本操作に
+// 絞って実装している。
+//
+// 設計のポイント: このアプリのjointは、BlenderのArmatureやこの
+// リポジトリの他プロジェクト(humanoid-gltf-exporter等)の`THREE.Bone`と
+// 同じく「1つの位置+親への参照」として持たせている。画面上の
+// 「ボーン」は常に「親jointの位置 → 自分の位置」を結ぶ1本の線として
+// 描画され、ユーザーが明示的に始点・終点の2頂点ペアを保持する必要は
+// ない(肩をタップ→肘をタップ、は「肘jointを肩jointの子として作る」
+// という1回の操作にそのまま対応する)。
+// ============================================================
+
+// ---------- RIGGINGモードの描画(常にモデルより手前に表示するX-Ray) ----------
+// 頂点(vertexPointsMaterial)と同じ`depthTest: false`+高い`renderOrder`の
+// 組み合わせで、モデルの内部・背面にある関節/ボーンも常に見えるようにする
+// (このプロジェクトが3Dカーソル・頂点描画で既に使っている手法を踏襲)
+const JOINT_POINT_SIZE = 13;
+const jointPointsMaterial = new THREE.PointsMaterial({
+  size: JOINT_POINT_SIZE,
+  sizeAttenuation: false,
+  vertexColors: true,
+  depthTest: false,
+});
+let jointPoints = null;
+const jointGroup = new THREE.Group();
+scene.add(jointGroup);
+let boneLines = null;
+const boneLineGroup = new THREE.Group();
+scene.add(boneLineGroup);
+
+// TEST POSE中は回転後の見た目の位置、それ以外はレストポーズの座標を返す
+function jointDisplayPosition(j) {
+  if (testPoseActive && poseBones) {
+    const b = poseBones.get(j.id);
+    if (b) return b.getWorldPosition(new THREE.Vector3());
+  }
+  return new THREE.Vector3(j.x, j.y, j.z);
+}
+
+function rebuildRigVisual() {
+  if (jointPoints) { jointPoints.geometry.dispose(); jointGroup.remove(jointPoints); jointPoints = null; }
+  if (boneLines) { boneLines.geometry.dispose(); boneLines.material.dispose(); boneLineGroup.remove(boneLines); boneLines = null; }
+
+  const visible = appMode === "rigging";
+  jointGroup.visible = visible;
+  boneLineGroup.visible = visible;
+  updateStats();
+  if (!visible || joints.length === 0) return;
+
+  const activeSelectedId = testPoseActive ? poseSelectedJointId : selectedJointId;
+  const positions = [];
+  const colors = [];
+  const selectColor = new THREE.Color(0xff5fd1);
+  const hingeColor = new THREE.Color(0xffb84c);
+  const freeColor = new THREE.Color(0x4cd6ff);
+  const displayPosById = new Map();
+  for (const j of joints) {
+    const p = jointDisplayPosition(j);
+    displayPosById.set(j.id, p);
+    positions.push(p.x, p.y, p.z);
+    const isSelected = j.id === activeSelectedId;
+    const c = isSelected ? selectColor : (j.rotationLimit === "hinge" ? hingeColor : freeColor);
+    colors.push(c.r, c.g, c.b);
+  }
+  const jGeo = new THREE.BufferGeometry();
+  jGeo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  jGeo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  jointPoints = new THREE.Points(jGeo, jointPointsMaterial);
+  jointPoints.renderOrder = 1001;
+  jointGroup.add(jointPoints);
+
+  const linePositions = [];
+  const lineColors = [];
+  const boneColor = new THREE.Color(0xd9d9e0);
+  for (const j of joints) {
+    if (j.parentId == null) continue;
+    const pp = displayPosById.get(j.parentId);
+    const cp = displayPosById.get(j.id);
+    if (!pp || !cp) continue;
+    linePositions.push(pp.x, pp.y, pp.z, cp.x, cp.y, cp.z);
+    lineColors.push(boneColor.r, boneColor.g, boneColor.b, boneColor.r, boneColor.g, boneColor.b);
+  }
+  if (linePositions.length > 0) {
+    const lGeo = new THREE.BufferGeometry();
+    lGeo.setAttribute("position", new THREE.Float32BufferAttribute(linePositions, 3));
+    lGeo.setAttribute("color", new THREE.Float32BufferAttribute(lineColors, 3));
+    const lMat = new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false });
+    boneLines = new THREE.LineSegments(lGeo, lMat);
+    boneLines.renderOrder = 1000;
+    boneLineGroup.add(boneLines);
+  }
+}
+
+// ---------- RIGGINGモードのタップ操作(関節の配置・選択・接続) ----------
+function findNearestJoint(clientX, clientY, key) {
+  let nearest = null, nearestDist = Infinity;
+  for (const j of joints) {
+    const s = worldToScreenInView(jointDisplayPosition(j), key);
+    const dist = Math.hypot(s.x - clientX, s.y - clientY);
+    if (dist <= VERTEX_HIT_PX && dist < nearestDist) { nearest = j; nearestDist = dist; }
+  }
+  return nearest;
+}
+
+function promptJointName() {
+  const suggestion = joints.length === 0 ? "Root" : `Joint${nextId}`;
+  let input = null;
+  try { input = window.prompt("関節(ボーン)の名前を入力してください", suggestion); } catch (e) { input = null; }
+  const name = (input || "").trim();
+  return name || suggestion;
+}
+
+// 既存のjointをタップしたときの共通処理。選択中のjointが無ければ単に選択、
+// 既に選択中のjointがあれば「そのjointの子として、今タップしたjointを
+// つなぎ直す」(=ボーンの接続・付け替え)、同じjointを再度タップしたら
+// 選択解除、という3パターンを1つにまとめている
+function handleJointTapOnExisting(hitJoint) {
+  if (selectedJointId === hitJoint.id) {
+    selectedJointId = null;
+  } else if (selectedJointId != null) {
+    pushUndoSnapshot();
+    if (!reparentJoint(hitJoint.id, selectedJointId)) { undoStack.pop(); updateUndoBtnState(); }
+    selectedJointId = hitJoint.id;
+  } else {
+    selectedJointId = hitJoint.id;
+  }
+}
+
+function handleRigEditTapAction(clientX, clientY, key) {
+  const hit = findNearestJoint(clientX, clientY, key);
+  if (hit) { handleJointTapOnExisting(hit); return; }
+  const raw = key === "free" ? pointOnFreeViewCursorPlane(clientX, clientY) : pointOnViewPlane(clientX, clientY, key);
+  if (!raw) return;
+  const p = snapPoint(raw);
+  const name = promptJointName();
+  pushUndoSnapshot();
+  const j = createJointWithSymmetry(name, p.x, p.y, p.z, selectedJointId);
+  selectedJointId = j.id; // 続けてタップすれば、今作った関節からチェーンを伸ばせる
+  setCursor(p.x, p.y, p.z);
+}
+
+// ---------- TEST POSE(関節の階層が正しく動くかを確認する簡易モード) ----------
+// 実際のスキニング(頂点への重み付け)はまだ実装しないため、ここでは
+// joints自体(関節点とそれを結ぶ線)をFK(Forward Kinematics)で動かして
+// 「親を回転すると子も正しく追従するか」を確認できればよい、という
+// 割り切った実装にしている。各jointにつき1つの`THREE.Bone`を作り、
+// 親子関係をそのままThree.jsのBone階層として構築することで、
+// 行列計算(ワールド座標の算出)をThree.js本体にまかせている。
+let testPoseActive = false;
+let poseBones = null; // Map<jointId, THREE.Bone>
+let poseRootGroup = null; // Boneを実際にシーングラフへ置くための入れ物(レンダリングはしない)
+let poseSelectedJointId = null;
+let poseDragLast = null; // { x, y } (TEST POSE中のドラッグ回転の基準点)
+
+function buildPoseBones() {
+  const byId = new Map();
+  for (const j of joints) {
+    const b = new THREE.Bone();
+    b.name = j.name;
+    byId.set(j.id, b);
+  }
+  const group = new THREE.Group();
+  for (const j of joints) {
+    const b = byId.get(j.id);
+    if (j.parentId != null && byId.has(j.parentId)) {
+      const pj = joints.find((jj) => jj.id === j.parentId);
+      b.position.set(j.x - pj.x, j.y - pj.y, j.z - pj.z);
+      byId.get(j.parentId).add(b);
+    } else {
+      b.position.set(j.x, j.y, j.z);
+      group.add(b);
+    }
+  }
+  group.updateMatrixWorld(true);
+  poseBones = byId;
+  poseRootGroup = group;
+}
+function setTestPoseActive(v) {
+  testPoseActive = v;
+  testPoseBtn.classList.toggle("active", v);
+  resetPoseBtn.disabled = !v;
+  poseSelectedJointId = null;
+  poseDragLast = null;
+  if (v) buildPoseBones();
+  else { poseBones = null; poseRootGroup = null; }
+  rebuildRigVisual();
+  updateStatus();
+}
+function resetPose() {
+  if (!poseBones) return;
+  for (const b of poseBones.values()) b.quaternion.identity();
+  poseRootGroup.updateMatrixWorld(true);
+  rebuildRigVisual();
+}
+
+// 肘・膝のような1軸(ヒンジ)関節は、常にワールドX軸(このリポジトリの
+// 他プロジェクトと同じ「左右軸」の慣例)まわりにのみ曲げる。肩・股関節
+// などの多軸(free)関節は、ドラッグ中のビュー(TOP/FRONT/LEFT)の奥行き軸
+// まわりに回転させることで、「どの軸で曲げたいか」をビューの切り替えで
+// 選べるようにしている(専用の3軸ギズモは今回のスコープ外)
+const HINGE_AXIS_WORLD = new THREE.Vector3(1, 0, 0);
+function viewDepthAxis(key) {
+  if (key === "top") return new THREE.Vector3(0, 1, 0);
+  if (key === "front") return new THREE.Vector3(0, 0, 1);
+  if (key === "left") return new THREE.Vector3(1, 0, 0);
+  return null; // FREEビューはオービット操作と競合するため、TEST POSEのドラッグ回転は対象外(タップでの選択のみ)
+}
+function handleRigPoseTap(clientX, clientY, key) {
+  const hit = findNearestJoint(clientX, clientY, key);
+  if (hit) poseSelectedJointId = hit.id; // 空振りタップでは選択状態を維持する
+}
+function applyPoseDrag(dx, key) {
+  if (!poseBones || poseSelectedJointId == null) return;
+  const joint = joints.find((j) => j.id === poseSelectedJointId);
+  const bone = poseBones.get(poseSelectedJointId);
+  if (!joint || !bone) return;
+  const SENS = 0.012;
+  const axis = joint.rotationLimit === "hinge" ? HINGE_AXIS_WORLD : viewDepthAxis(key);
+  if (!axis) return;
+  bone.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, dx * SENS));
+  poseRootGroup.updateMatrixWorld(true);
+  rebuildRigVisual();
+}
+
+// ---------- RIGGINGモードのリグ情報書き出し(JSON) ----------
+// 指示書の要件(ボーン名・ID・親ID・始点/終点座標・回転制限・左右情報・
+// Root情報)をすべて含める。「始点/終点」は、このアプリの内部データ
+// (joint1点+親への参照)から、親jointの位置を始点・自分の位置を終点として
+// 導出している。GLTF/GLBのSkeletonとして書き出す機能は将来の拡張とし、
+// 今回はまずJSONとして保存できることを優先する
+function exportRigJSON() {
+  const data = {
+    joints: joints.map((j) => {
+      const parent = j.parentId != null ? joints.find((jj) => jj.id === j.parentId) : null;
+      return {
+        id: j.id,
+        name: j.name,
+        parentId: j.parentId,
+        isRoot: j.parentId == null,
+        side: j.side,
+        rotationLimit: j.rotationLimit,
+        start: parent ? { x: parent.x, y: parent.y, z: parent.z } : { x: j.x, y: j.y, z: j.z },
+        end: { x: j.x, y: j.y, z: j.z },
+        mirrorId: j.mirrorId,
+      };
+    }),
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rig.json";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ---------- アプリ全体のモード(MODEL/RIGGING) ----------
+let appMode = "model"; // "model" | "rigging"
+let selectedJointId = null; // RIGGINGモード(EDIT中)で選択中/チェーンの親として使う関節
+let jointDragState = null; // { jointId, key, beforeSnapshot, startX, startY, startZ } (TOP/FRONT/LEFTでの関節ドラッグのみ)
 
 // ---------- モード(頂点/辺/面)・選択状態 ----------
 let mode = "vertex"; // "vertex" | "edge" | "face"。ビューを切り替えても維持する
@@ -566,6 +933,16 @@ const activePointers = new Map(); // pointerId -> { x, y, view }
 let gesture = null; // { view, lastDist, lastMid }
 let singlePointerInfo = null; // { x, y, t, key } (1本指のタップ/ドラッグ用)
 
+const appModeModelBtn = document.getElementById("appModeModelBtn");
+const appModeRiggingBtn = document.getElementById("appModeRiggingBtn");
+const modeRowEl = document.getElementById("modeRow");
+const rigRowEl = document.getElementById("rigRow");
+const scaleRowEl = document.getElementById("scaleRow");
+const symmetryBtn = document.getElementById("symmetryBtn");
+const testPoseBtn = document.getElementById("testPoseBtn");
+const resetPoseBtn = document.getElementById("resetPoseBtn");
+const jointHingeToggleBtn = document.getElementById("jointHingeToggleBtn");
+const rigExportBtn = document.getElementById("rigExportBtn");
 const modeVertexBtn = document.getElementById("modeVertexBtn");
 const modeEdgeBtn = document.getElementById("modeEdgeBtn");
 const modeFaceBtn = document.getElementById("modeFaceBtn");
@@ -610,7 +987,57 @@ modeFaceBtn.addEventListener("click", () => setMode("face"));
 gridBtn.addEventListener("click", () => setGridVisible(!gridVisible));
 magnetBtn.addEventListener("click", () => setMagnetEnabled(!magnetEnabled));
 
+// appMode(MODEL/RIGGING)の切り替え。頂点/辺/面の編集状態とRIGGINGの選択
+// 状態は互いに無関係なデータなので、切り替え時にそれぞれの選択だけを
+// リセットし、データ自体(vertices/edges/faces/joints)は一切変更しない
+function setAppMode(newAppMode) {
+  appMode = newAppMode;
+  appModeModelBtn.classList.toggle("active", appMode === "model");
+  appModeRiggingBtn.classList.toggle("active", appMode === "rigging");
+  modeRowEl.style.display = appMode === "model" ? "" : "none";
+  scaleRowEl.style.display = appMode === "model" ? "" : "none";
+  colorBtn.style.display = appMode === "model" ? "" : "none";
+  rigRowEl.style.display = appMode === "rigging" ? "" : "none";
+  if (appMode !== "rigging" && testPoseActive) setTestPoseActive(false);
+  selectedVertexId = null;
+  selectedEdgeId = null;
+  selectedFaceId = null;
+  pendingVerts = [];
+  selectedJointId = null;
+  rebuildScene();
+  rebuildRigVisual();
+  updateDeleteBtnState();
+  updateColorBtnState();
+  updateStatus();
+}
+appModeModelBtn.addEventListener("click", () => setAppMode("model"));
+appModeRiggingBtn.addEventListener("click", () => setAppMode("rigging"));
+symmetryBtn.addEventListener("click", () => {
+  symmetryEnabled = !symmetryEnabled;
+  symmetryBtn.classList.toggle("active", symmetryEnabled);
+});
+testPoseBtn.addEventListener("click", () => setTestPoseActive(!testPoseActive));
+resetPoseBtn.addEventListener("click", () => resetPose());
+jointHingeToggleBtn.addEventListener("click", () => {
+  if (selectedJointId == null) return;
+  const j = joints.find((jj) => jj.id === selectedJointId);
+  if (!j) return;
+  pushUndoSnapshot();
+  j.rotationLimit = j.rotationLimit === "hinge" ? "free" : "hinge";
+  rebuildRigVisual();
+  updateStatus();
+});
+rigExportBtn.addEventListener("click", () => {
+  if (joints.length === 0) { statusEl.textContent = "書き出せる関節がありません"; return; }
+  exportRigJSON();
+  statusEl.textContent = "rig.jsonを書き出しました";
+});
+
 function updateDeleteBtnState() {
+  if (appMode === "rigging") {
+    deleteBtn.disabled = testPoseActive || selectedJointId == null;
+    return;
+  }
   const enabled =
     (mode === "vertex" && selectedVertexId != null) ||
     (mode === "edge" && selectedEdgeId != null) ||
@@ -618,15 +1045,27 @@ function updateDeleteBtnState() {
   deleteBtn.disabled = !enabled;
 }
 function updateColorBtnState() {
-  const enabled = mode === "face" && selectedFaceId != null;
+  const enabled = appMode === "model" && mode === "face" && selectedFaceId != null;
   colorBtn.disabled = !enabled;
   if (!enabled) closeColorPalette(); // 選択が外れたら、開いていたパレットも閉じる
+}
+function updateJointHingeBtnState() {
+  if (appMode !== "rigging" || testPoseActive || selectedJointId == null) {
+    jointHingeToggleBtn.disabled = true;
+    jointHingeToggleBtn.textContent = "回転: FREE";
+    return;
+  }
+  const j = joints.find((jj) => jj.id === selectedJointId);
+  jointHingeToggleBtn.disabled = !j;
+  jointHingeToggleBtn.textContent = j && j.rotationLimit === "hinge" ? "回転: HINGE" : "回転: FREE";
 }
 function updateUndoBtnState() {
   undoBtn.disabled = undoStack.length === 0;
 }
 function updateStats() {
-  statsEl.textContent = `頂点: ${vertices.length}  辺: ${edges.length}  面: ${faces.length}`;
+  statsEl.textContent = appMode === "rigging"
+    ? `関節: ${joints.length}`
+    : `頂点: ${vertices.length}  辺: ${edges.length}  面: ${faces.length}`;
 }
 
 // 1ワールド単位 = 1m という前提で、見やすい単位(m/cm/mm)に自動変換する
@@ -670,6 +1109,20 @@ scaleDownBtn.addEventListener("click", () => {
   rebuildScene();
 });
 function updateStatus() {
+  updateJointHingeBtnState();
+  if (appMode === "rigging") {
+    if (testPoseActive) {
+      statusEl.textContent = poseSelectedJointId != null
+        ? "TEST POSE: TOP/FRONT/LEFTビューでドラッグして回転(FREEビューはタップでの選択のみ)"
+        : "TEST POSE: 関節をタップして選択してください";
+    } else if (selectedJointId != null) {
+      const j = joints.find((jj) => jj.id === selectedJointId);
+      statusEl.textContent = `「${j ? j.name : ""}」を選択中: 別の関節をタップで接続・空いた場所をタップで次のボーンを追加・ドラッグで位置調整`;
+    } else {
+      statusEl.textContent = "RIGGINGモード: 関節位置をタップして配置(最初の関節がRootになります)";
+    }
+    return;
+  }
   if (mode === "vertex") {
     if (selectedVertexId != null) {
       statusEl.textContent = "頂点を選択中(ドラッグで移動・🗑で削除)";
@@ -690,6 +1143,17 @@ function updateStatus() {
 }
 
 deleteBtn.addEventListener("click", () => {
+  if (appMode === "rigging") {
+    if (selectedJointId != null) {
+      pushUndoSnapshot();
+      deleteJointCascade(selectedJointId);
+      selectedJointId = null;
+    }
+    rebuildRigVisual();
+    updateDeleteBtnState();
+    updateStatus();
+    return;
+  }
   if (mode === "vertex" && selectedVertexId != null) {
     pushUndoSnapshot();
     deleteVertex(selectedVertexId);
@@ -1110,6 +1574,26 @@ function onPointerDown(evt) {
   }
 
   singlePointerInfo = { x: evt.clientX, y: evt.clientY, t: performance.now(), key };
+  if (appMode === "rigging") {
+    if (!testPoseActive) {
+      let hit = findNearestJoint(evt.clientX, evt.clientY, key);
+      if (!hit && selectedJointId != null) {
+        // 既に選択中の関節は、多少タップ位置がずれていても掴めるようにする(頂点と同じ考え方)
+        const sj = joints.find((j) => j.id === selectedJointId);
+        if (sj) {
+          const s = worldToScreenInView(jointDisplayPosition(sj), key);
+          if (Math.hypot(s.x - evt.clientX, s.y - evt.clientY) <= VERTEX_GRAB_PX) hit = sj;
+        }
+      }
+      if (hit) {
+        jointDragState = { jointId: hit.id, key, beforeSnapshot: cloneState(), startX: hit.x, startY: hit.y, startZ: hit.z };
+      }
+    } else {
+      // TEST POSE: 既に選択中の関節があれば、この後のドラッグを回転として扱う基準点を記録する
+      poseDragLast = { x: evt.clientX, y: evt.clientY };
+    }
+    return;
+  }
   if (mode === "vertex") {
     let hit = findNearestVertex(evt.clientX, evt.clientY, key);
     if (!hit && selectedVertexId != null) {
@@ -1146,6 +1630,29 @@ function onPointerMove(evt) {
   }
 
   if (!singlePointerInfo || singlePointerInfo.key === "free") return;
+  if (appMode === "rigging") {
+    if (!testPoseActive && jointDragState) {
+      const raw = pointOnViewPlane(evt.clientX, evt.clientY, jointDragState.key);
+      if (raw) {
+        const p = snapPoint(raw);
+        const j = joints.find((jj) => jj.id === jointDragState.jointId);
+        if (j) {
+          if (jointDragState.key === "top") { j.x = p.x; j.z = p.z; }
+          else if (jointDragState.key === "front") { j.x = p.x; j.y = p.y; }
+          else if (jointDragState.key === "left") { j.y = p.y; j.z = p.z; }
+          setCursor(j.x, j.y, j.z);
+          rebuildRigVisual();
+        }
+      }
+    } else if (testPoseActive && poseSelectedJointId != null && poseDragLast) {
+      const dx = evt.clientX - poseDragLast.x;
+      if (dx !== 0) {
+        applyPoseDrag(dx, singlePointerInfo.key);
+        poseDragLast = { x: evt.clientX, y: evt.clientY };
+      }
+    }
+    return;
+  }
   if (mode === "vertex" && dragState) {
     const raw = pointOnViewPlane(evt.clientX, evt.clientY, dragState.key);
     if (raw) {
@@ -1176,6 +1683,8 @@ function onPointerUp(evt) {
       // 新しい指down(0本から始まる一連の操作)が来るまで待つ
       singlePointerInfo = null;
       dragState = null;
+      jointDragState = null;
+      poseDragLast = null;
     }
     return;
   }
@@ -1187,7 +1696,31 @@ function onPointerUp(evt) {
   const key = singlePointerInfo.key;
 
   if (key === "free") {
-    if (isTap) handleTapAction(evt.clientX, evt.clientY, "free");
+    if (isTap) {
+      if (appMode === "rigging") {
+        if (testPoseActive) handleRigPoseTap(evt.clientX, evt.clientY, "free");
+        else handleRigEditTapAction(evt.clientX, evt.clientY, "free");
+      } else {
+        handleTapAction(evt.clientX, evt.clientY, "free");
+      }
+    }
+  } else if (appMode === "rigging") {
+    if (!testPoseActive && jointDragState) {
+      const j = joints.find((jj) => jj.id === jointDragState.jointId);
+      const moved = j && (j.x !== jointDragState.startX || j.y !== jointDragState.startY || j.z !== jointDragState.startZ);
+      if (moved) {
+        undoStack.push(jointDragState.beforeSnapshot);
+        if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+        updateUndoBtnState();
+      } else if (isTap && j) {
+        handleJointTapOnExisting(j);
+      }
+      jointDragState = null;
+    } else if (isTap) {
+      if (testPoseActive) handleRigPoseTap(evt.clientX, evt.clientY, key);
+      else handleRigEditTapAction(evt.clientX, evt.clientY, key);
+    }
+    poseDragLast = null;
   } else if (mode === "vertex" && dragState) {
     const v = vertices.find((vv) => vv.id === dragState.vertexId);
     const moved = v && (v.x !== dragState.startX || v.y !== dragState.startY || v.z !== dragState.startZ);
@@ -1209,6 +1742,7 @@ function onPointerUp(evt) {
 
   singlePointerInfo = null;
   rebuildScene();
+  rebuildRigVisual();
   updateDeleteBtnState();
   updateColorBtnState();
   updateStatus();
@@ -1218,6 +1752,8 @@ canvas.addEventListener("pointercancel", (evt) => {
   activePointers.delete(evt.pointerId);
   if (gesture && Array.from(activePointers.values()).filter((p) => p.view === gesture.view).length < 2) gesture = null;
   dragState = null;
+  jointDragState = null;
+  poseDragLast = null;
   singlePointerInfo = null;
 });
 
@@ -1247,6 +1783,7 @@ updateDeleteBtnState();
 updateObjectInfo();
 setGridVisible(true);
 setMagnetEnabled(false);
+rebuildRigVisual();
 
 // ---------- テスト/デバッグ用に主要オブジェクトを公開 ----------
 window.__scene = { scene, camerasByKey, renderer, topGrid, frontGrid, leftGrid };
@@ -1343,4 +1880,83 @@ window.__model = {
   getObjectInfoText: () => ({
     x: objSizeXEl.textContent, y: objSizeYEl.textContent, z: objSizeZEl.textContent, scale: objScaleEl.textContent,
   }),
+};
+
+// ---------- RIGGINGモードのテスト/デバッグ用フック ----------
+window.__rig = {
+  getAppMode: () => appMode,
+  setAppMode,
+  getJoints: () => joints.map((j) => ({ ...j })),
+  getSelectedJointId: () => selectedJointId,
+  isSymmetryEnabled: () => symmetryEnabled,
+  setSymmetryEnabled: (v) => { symmetryEnabled = v; symmetryBtn.classList.toggle("active", v); },
+  toggleSymmetry: () => symmetryBtn.click(),
+  // タップ操作を介さない決定論的な経路(自動テスト用)
+  addJointDirect: (name, x, y, z, parentId) => {
+    pushUndoSnapshot();
+    const j = createJointWithSymmetry(name, x, y, z, parentId ?? null);
+    selectedJointId = j.id;
+    rebuildRigVisual();
+    updateDeleteBtnState();
+    updateStatus();
+    return j.id;
+  },
+  selectJoint: (id) => { selectedJointId = id; rebuildRigVisual(); updateDeleteBtnState(); updateStatus(); },
+  reparentJointDirect: (jointId, newParentId) => {
+    pushUndoSnapshot();
+    const ok = reparentJoint(jointId, newParentId);
+    if (!ok) { undoStack.pop(); updateUndoBtnState(); }
+    rebuildRigVisual();
+    return ok;
+  },
+  moveJointDirect: (id, x, y, z) => {
+    pushUndoSnapshot();
+    const j = joints.find((jj) => jj.id === id);
+    if (j) { j.x = x; j.y = y; j.z = z; }
+    rebuildRigVisual();
+    return !!j;
+  },
+  deleteJoint: () => deleteBtn.click(),
+  isDeleteBtnDisabled: () => deleteBtn.disabled,
+  undo: () => undoBtn.click(),
+  getUndoStackSize: () => undoStack.length,
+  // タップ経路のテスト用(実際のpointerup経路と同じ関数を呼ぶ)
+  simulateTap: (clientX, clientY, key) => {
+    if (testPoseActive) handleRigPoseTap(clientX, clientY, key);
+    else handleRigEditTapAction(clientX, clientY, key);
+    rebuildRigVisual();
+    updateStatus();
+  },
+  findNearestJointAt: (clientX, clientY, key) => {
+    const j = findNearestJoint(clientX, clientY, key);
+    return j ? j.id : null;
+  },
+  getJointScreenPosition: (id, key) => {
+    const j = joints.find((jj) => jj.id === id);
+    if (!j) return null;
+    return worldToScreenInView(jointDisplayPosition(j), key);
+  },
+  // TEST POSEのテスト/デバッグ用
+  isTestPoseActive: () => testPoseActive,
+  setTestPoseActive,
+  toggleTestPose: () => testPoseBtn.click(),
+  selectPoseJoint: (id) => { poseSelectedJointId = id; rebuildRigVisual(); },
+  getPoseSelectedJointId: () => poseSelectedJointId,
+  rotateSelectedPoseJointBy: (dx, key) => applyPoseDrag(dx, key),
+  resetPose: () => resetPoseBtn.click(),
+  isResetPoseBtnDisabled: () => resetPoseBtn.disabled,
+  getJointWorldPosition: (id) => {
+    const j = joints.find((jj) => jj.id === id);
+    if (!j) return null;
+    return jointDisplayPosition(j).toArray();
+  },
+  getHingeAxisWorld: () => HINGE_AXIS_WORLD.toArray(),
+  isHingeJoint: (id) => {
+    const j = joints.find((jj) => jj.id === id);
+    return j ? j.rotationLimit === "hinge" : null;
+  },
+  toggleJointHinge: () => jointHingeToggleBtn.click(),
+  isJointHingeToggleBtnDisabled: () => jointHingeToggleBtn.disabled,
+  exportRigJSON,
+  isRigExportBtnDisabled: () => rigExportBtn.disabled,
 };
