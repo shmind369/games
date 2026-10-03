@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Mesh Modeling Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100svh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #1a1d22;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      -webkit-text-size-adjust: 100%;
+    }
+    canvas { display: block; touch-action: none; }
+
+    /* スマートフォンでのドラッグ操作中に、ブラウザ標準のテキスト選択/
+       コンテキストメニューが出ないようにする(humanoid-gltf-exporterの
+       同種の対策と同じ考え方だが、このプロジェクト用に独立して記述) */
+    #appRoot, #appRoot * {
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    #appRoot {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      height: 100svh;
+    }
+    #viewportArea {
+      position: relative;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #viewportArea canvas#game {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* 4分割ビューのラベル・枠線(Three.jsのシザーテスト矩形と同じ位置に
+       CSS Gridで重ねて表示するだけの、見た目専用のオーバーレイ) */
+    #viewGrid {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      pointer-events: none;
+    }
+    .viewCell {
+      border: 1px solid rgba(255,255,255,0.14);
+      box-sizing: border-box;
+      position: relative;
+    }
+    .viewCell.active { border-color: rgba(255,210,76,0.9); }
+    .viewLabel {
+      position: absolute;
+      top: 4px;
+      left: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      opacity: 0.75;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+    }
+    .viewCell.active .viewLabel { opacity: 0.95; color: #ffd24c; }
+
+    #hud {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      left: 10px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      pointer-events: none;
+    }
+    #title {
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0.8;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      padding-top: 6px;
+    }
+    #stats {
+      font-size: 11px;
+      opacity: 0.85;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      text-align: right;
+      padding-top: 6px;
+      white-space: pre;
+    }
+
+    #status {
+      position: absolute;
+      left: 10px;
+      bottom: 8px;
+      z-index: 10;
+      font-size: 11px;
+      opacity: 0.8;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+
+    /* ---------- 下部ツールバー ---------- */
+    #toolbar {
+      flex: 0 0 auto;
+      box-sizing: border-box;
+      background: #14161b;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding: 8px 10px max(8px, env(safe-area-inset-bottom)) 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      touch-action: manipulation;
+    }
+    #modeRow, #actionRow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .toolBtn {
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      min-width: 56px;
+      min-height: 40px;
+      padding: 6px 12px;
+      border-radius: 10px;
+      border: none;
+      background: #2a2e38;
+      color: #eee;
+      touch-action: manipulation;
+      line-height: 1.1;
+    }
+    .toolBtn:active { transform: scale(0.95); }
+    .toolBtn:disabled { opacity: 0.35; }
+    .toolBtn.active { background: #4c8dff; }
+    #deleteBtn { background: #7a3030; }
+    #undoBtn { background: #4a4e5c; }
+  </style>
+</head>
+<body>
+  <div id="appRoot">
+    <div id="viewportArea">
+      <canvas id="game"></canvas>
+
+      <div id="viewGrid">
+        <div class="viewCell" data-view="top"><span class="viewLabel">TOP</span></div>
+        <div class="viewCell" data-view="front"><span class="viewLabel">FRONT</span></div>
+        <div class="viewCell" data-view="left"><span class="viewLabel">LEFT</span></div>
+        <div class="viewCell" data-view="free"><span class="viewLabel">FREE</span></div>
+      </div>
+
+      <div id="hud">
+        <div id="title">Mesh Modeling Studio</div>
+        <div id="stats"></div>
+      </div>
+      <div id="status">頂点モード: 空いている場所をタップして頂点を追加</div>
+    </div>
+
+    <div id="toolbar">
+      <div id="modeRow">
+        <button id="modeVertexBtn" class="toolBtn active">頂点</button>
+        <button id="modeEdgeBtn" class="toolBtn">辺</button>
+        <button id="modeFaceBtn" class="toolBtn">面</button>
+      </div>
+      <div id="actionRow">
+        <button id="deleteBtn" class="toolBtn" disabled>🗑 削除</button>
+        <button id="undoBtn" class="toolBtn" disabled>↩ 元に戻す</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
