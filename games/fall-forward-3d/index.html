@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>FALL FORWARD</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100svh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0d1117;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      -webkit-text-size-adjust: 100%;
+    }
+    canvas { display: block; touch-action: none; }
+
+    /* タップ連打中にブラウザ標準のテキスト選択/コンテキストメニューが
+       出ないようにする(このプロジェクト用に独立して記述) */
+    #appRoot, #appRoot * {
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    #appRoot {
+      position: relative;
+      height: 100%;
+      height: 100svh;
+    }
+
+    /* ---------- 上部HUD: タイマー・距離バー ---------- */
+    #hud {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      left: 10px;
+      right: 10px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+    #hudTopRow {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    #title {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      opacity: 0.8;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+    #timer {
+      font-size: 22px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+    }
+    #bestTime {
+      font-size: 11px;
+      opacity: 0.7;
+      text-align: right;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+
+    #progressTrack {
+      position: relative;
+      height: 8px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.15);
+      overflow: hidden;
+    }
+    #progressFill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      background: linear-gradient(90deg, #4c8dff, #6fe3ff);
+      border-radius: 4px;
+      transition: width 80ms linear;
+    }
+
+    /* ---------- 傾き(転倒)メーター ---------- */
+    #leanMeterWrap {
+      position: absolute;
+      left: 10px;
+      bottom: max(14px, env(safe-area-inset-bottom));
+      z-index: 10;
+      width: 54px;
+      pointer-events: none;
+    }
+    #leanMeterLabel {
+      font-size: 10px;
+      opacity: 0.75;
+      text-align: center;
+      margin-bottom: 4px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+    #leanMeterTrack {
+      height: 140px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.12);
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.18);
+    }
+    #leanMeterFill {
+      position: absolute;
+      left: 0; right: 0; bottom: 0;
+      height: 0%;
+      background: linear-gradient(0deg, #3ddc5a, #ffd23d 60%, #ff4d4d 90%);
+      transition: height 60ms linear;
+    }
+
+    /* ---------- 中央の案内/結果オーバーレイ ---------- */
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(5, 7, 12, 0.72);
+      text-align: center;
+      touch-action: manipulation;
+    }
+    .overlay.hidden { display: none; }
+    .overlayCard {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 24px 28px;
+    }
+    .overlayTitle {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .overlaySub {
+      font-size: 13px;
+      opacity: 0.85;
+      line-height: 1.6;
+      max-width: 280px;
+    }
+    .overlayTime {
+      font-size: 34px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      margin: 4px 0;
+    }
+    .overlayBest {
+      font-size: 12px;
+      opacity: 0.7;
+    }
+    .bigBtn {
+      margin-top: 10px;
+      font: inherit;
+      font-size: 16px;
+      font-weight: 700;
+      padding: 14px 32px;
+      border-radius: 999px;
+      border: none;
+      background: #4c8dff;
+      color: #fff;
+      touch-action: manipulation;
+    }
+    .bigBtn:active { transform: scale(0.96); }
+    #gameOverOverlay .overlayTitle { color: #ff6b6b; }
+    #clearOverlay .overlayTitle { color: #6fe3ff; }
+
+    #hint {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      z-index: 5;
+      text-align: center;
+      font-size: 12px;
+      opacity: 0.55;
+      pointer-events: none;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+  </style>
+</head>
+<body>
+  <div id="appRoot">
+    <canvas id="game"></canvas>
+
+    <div id="hud">
+      <div id="hudTopRow">
+        <div>
+          <div id="title">FALL FORWARD</div>
+          <div id="timer">0.00s</div>
+        </div>
+        <div id="bestTime">BEST --</div>
+      </div>
+      <div id="progressTrack"><div id="progressFill"></div></div>
+    </div>
+
+    <div id="leanMeterWrap">
+      <div id="leanMeterLabel">傾き</div>
+      <div id="leanMeterTrack"><div id="leanMeterFill"></div></div>
+    </div>
+
+    <div id="hint">画面をタップ: 足を出す</div>
+
+    <div id="startOverlay" class="overlay">
+      <div class="overlayCard">
+        <div class="overlayTitle">FALL FORWARD</div>
+        <div class="overlaySub">
+          前に倒れる → ギリギリで足を出す → 着地で前進。<br />
+          早すぎても遅すぎてもダメ。<br />
+          倒れ切る直前に足を出すほど大きく進む。
+        </div>
+        <button id="startBtn" class="bigBtn">タップでスタート</button>
+      </div>
+    </div>
+
+    <div id="gameOverOverlay" class="overlay hidden">
+      <div class="overlayCard">
+        <div class="overlayTitle">転倒…</div>
+        <div class="overlayTime" id="gameOverTime">0.00s</div>
+        <div class="overlayBest" id="gameOverBest">BEST --</div>
+        <button id="retryFromGameOverBtn" class="bigBtn">もう一度</button>
+      </div>
+    </div>
+
+    <div id="clearOverlay" class="overlay hidden">
+      <div class="overlayCard">
+        <div class="overlayTitle">ゴール！</div>
+        <div class="overlayTime" id="clearTime">0.00s</div>
+        <div class="overlayBest" id="clearBest">BEST --</div>
+        <button id="retryFromClearBtn" class="bigBtn">もう一度</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
