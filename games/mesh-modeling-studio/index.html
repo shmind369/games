@@ -274,10 +274,21 @@
     </div>
 
     <div id="toolbar">
+      <div id="appModeRow">
+        <button id="appModeModelBtn" class="toolBtn active">MODEL</button>
+        <button id="appModeRiggingBtn" class="toolBtn">RIGGING</button>
+      </div>
       <div id="modeRow">
         <button id="modeVertexBtn" class="toolBtn active">頂点</button>
         <button id="modeEdgeBtn" class="toolBtn">辺</button>
         <button id="modeFaceBtn" class="toolBtn">面</button>
+      </div>
+      <div id="rigRow" style="display:none">
+        <button id="symmetryBtn" class="toolBtn">SYMMETRY</button>
+        <button id="testPoseBtn" class="toolBtn">TEST POSE</button>
+        <button id="resetPoseBtn" class="toolBtn" disabled>↺ POSEリセット</button>
+        <button id="jointHingeToggleBtn" class="toolBtn" disabled>回転: FREE</button>
+        <button id="rigExportBtn" class="toolBtn">💾 RIG書出</button>
       </div>
       <div id="viewRow">
         <button id="gridBtn" class="toolBtn">GRID</button>
