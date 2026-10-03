@@ -227,9 +227,6 @@ const boneIndex = (b) => allBones.indexOf(b);
 // 各頂点を単一のボーンへ100%の重みで結びつける(見た目は剛体パーツの
 // 集まりだが、データとしては正式なスキニング済みメッシュ・アニメーションとして
 // 書き出せる)
-const skinMat = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.6 });
-const clothMat = new THREE.MeshStandardMaterial({ color: 0x3a6ea5, roughness: 0.7 });
-const shoeMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 });
 
 function bindToSingleBone(geometry, bone) {
   const count = geometry.attributes.position.count;
@@ -245,60 +242,60 @@ function bindToSingleBone(geometry, bone) {
   return geometry;
 }
 
-function worldPosOf(b) {
-  const v = new THREE.Vector3();
-  b.getWorldPosition(v);
-  return v;
-}
-
 const allMeshes = []; // タップ選択のレイキャスト対象(ポーズエディタ用)
-function addPart(geometry, material, bone, offset = new THREE.Vector3()) {
-  const p = worldPosOf(bone).add(offset);
-  geometry.translate(p.x, p.y, p.z);
+
+// ---------- ボクサーキャラクターの各部位メッシュ(ボーンごとに分離済み) ----------
+// 以前はプリミティブ形状(カプセル・球・円柱)を各ボーンに割り当てていたが、
+// 「複雑な自動ウェイト計算・スキニングに依存せず、ローポリのゲーム
+// キャラクターを簡単かつ安定して動かせるようにしてほしい(身体パーツを
+// 独立したメッシュとして扱い、各パーツを対応するボーンに直接追従させる)」
+// という依頼を受け、Tripo製ボクサーモデル(third-person-boxer-3dで使用した
+// ものと同じ.glb)を一度だけオフラインで処理し、ボーンと同じ名前の16個の
+// メッシュ片(assets/boxer_parts.json、頂点座標はこのスケルトンのレスト
+// ポーズに合わせて事前に配置・回転済み)として書き出したものを読み込む。
+// 1頂点=1ボーンの100%ウェイトで結びつける点は、以前のプリミティブ版と
+// 完全に同じ仕組みであり、ポーズエディタ・ギズモ・キーフレーム・Undo・
+// glTF書き出しは一切変更していない(それらはすべてボーン側だけを操作
+// しており、メッシュの形状やパーツ分割の詳細には関知しないため)。詳細な
+// 経緯・セグメンテーション手法は後述「ボクサーモデルのパーツ分割リギング」
+// を参照。
+function addWorldPart(geometry, material, bone) {
+  // boxer_parts.jsonの頂点座標はすでにこのスケルトンのレストポーズに
+  // おける実際のワールド座標で焼き込み済みのため、以前のプリミティブ版
+  // (原点中心のジオメトリをボーン位置へ平行移動していた)とは異なり、
+  // 平行移動は行わない
   bindToSingleBone(geometry, bone);
   const mesh = new THREE.SkinnedMesh(geometry, material);
   mesh.bind(skeleton);
-  mesh.userData.bone = bone; // タップ時に「どのボーンに属するメッシュか」を即座に判定するため
-  root.add(mesh); // GLTFExporterはrootを起点に書き出すため、メッシュもrootの配下に置く
+  mesh.userData.bone = bone;
+  root.add(mesh);
   allMeshes.push(mesh);
   return mesh;
 }
 
-// 胴体: 円柱(上下で半径を変える)で「胸部から腰にかけて細くなる」
-// 逆台形型のシルエットにする(上端=胸・肩側を太く、下端=ウエスト側を細く)
-addPart(new THREE.CylinderGeometry(0.16, 0.115, 0.3, 12), skinMat, chest, new THREE.Vector3(0, -0.08, 0));
-// 骨盤: ウエストから骨盤にかけて下側がやや広がる自然な形にする
-addPart(new THREE.CylinderGeometry(0.115, 0.14, 0.18, 12), skinMat, hips, new THREE.Vector3(0, -0.02, 0));
-// 頭を一回り大きくし、首は細く伸ばして頭から肩へ自然につながるようにする
-addPart(new THREE.SphereGeometry(0.108, 20, 16), skinMat, head, new THREE.Vector3(0, 0.07, 0));
-addPart(new THREE.CylinderGeometry(0.046, 0.057, 0.21, 10), skinMat, neck, new THREE.Vector3(0, 0, 0));
+const boxerTexture = new THREE.TextureLoader().load("./assets/boxer_texture.jpg");
+boxerTexture.colorSpace = THREE.SRGBColorSpace;
+// 抽出元のglTFはUVがflipYなし前提のため、通常のTextureLoader(デフォルト
+// flipY=true)のままだとテクスチャが上下逆かつ左右の対応もずれて表示される
+boxerTexture.flipY = false;
+const boxerMat = new THREE.MeshStandardMaterial({ map: boxerTexture, roughness: 0.7 });
 
-for (const [shoulder, upperArm, forearm, hand] of [
-  [leftShoulder, leftUpperArm, leftForearm, leftHand],
-  [rightShoulder, rightUpperArm, rightForearm, rightHand],
-]) {
-  // 肩関節が分かるように肩の位置に球を置く
-  addPart(new THREE.SphereGeometry(0.062, 14, 12), skinMat, shoulder);
-  addPart(new THREE.CapsuleGeometry(0.052, 0.186, 4, 8), skinMat, upperArm, new THREE.Vector3(0, -0.145, 0));
-  // 肘関節が分かるように、前腕ボーンの位置(=肘の位置)に小さな球を置く
-  addPart(new THREE.SphereGeometry(0.04, 12, 10), skinMat, forearm);
-  addPart(new THREE.CapsuleGeometry(0.044, 0.182, 4, 8), skinMat, forearm, new THREE.Vector3(0, -0.135, 0));
-  addPart(new THREE.SphereGeometry(0.046, 12, 10), skinMat, hand, new THREE.Vector3(0, -0.02, 0));
-}
-
-// 脚は腕より太く、腿からふくらはぎにかけて自然に先細りさせる
-for (const [upperLeg, lowerLeg, foot] of [
-  [leftUpperLeg, leftLowerLeg, leftFoot],
-  [rightUpperLeg, rightLowerLeg, rightFoot],
-]) {
-  // 股関節が分かるように、腿ボーンの位置(=股関節の位置)に小さな球を置く
-  addPart(new THREE.SphereGeometry(0.052, 12, 10), skinMat, upperLeg);
-  addPart(new THREE.CapsuleGeometry(0.095, 0.28, 4, 10), clothMat, upperLeg, new THREE.Vector3(0, -0.14, 0));
-  // 膝関節が分かるように、すねボーンの位置(=膝の位置)に小さな球を置く
-  addPart(new THREE.SphereGeometry(0.05, 12, 10), skinMat, lowerLeg);
-  addPart(new THREE.CapsuleGeometry(0.072, 0.28, 4, 10), skinMat, lowerLeg, new THREE.Vector3(0, -0.14, 0));
-  addPart(new THREE.BoxGeometry(0.085, 0.055, 0.19), shoeMat, foot, new THREE.Vector3(0, -0.015, 0.045));
-}
+const boneByNameForParts = Object.fromEntries(allBones.map((b) => [b.name, b]));
+fetch("./assets/boxer_parts.json")
+  .then((res) => res.json())
+  .then((parts) => {
+    for (const [boneName, data] of Object.entries(parts)) {
+      if (!data.positions || data.positions.length === 0) continue;
+      const bone = boneByNameForParts[boneName];
+      if (!bone) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(data.positions, 3));
+      geometry.setAttribute("normal", new THREE.Float32BufferAttribute(data.normals, 3));
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(data.uvs, 2));
+      addWorldPart(geometry, boxerMat, bone);
+    }
+  })
+  .catch((err) => console.error("boxer_parts.json の読み込みに失敗しました", err));
 
 // ---------- ポーズエディタ(FKによるボーン選択・回転・キーフレーム記録) ----------
 const boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
