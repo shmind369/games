@@ -95,17 +95,24 @@ function setFaceColor(id, color) {
 const UNDO_LIMIT = 50;
 let undoStack = [];
 
+// モデル全体の拡大縮小倍率(1 = 読み込み/作成時点の原寸)。頂点座標自体に
+// スケールを直接焼き込む方式のため、この値はカメラズームとは完全に別の
+// 「今のモデルが原寸の何倍か」を示すUI表示用の値で、Undoの対象にもなる
+let modelScale = 1;
+
 function cloneState() {
   return {
     vertices: vertices.map((v) => ({ ...v })),
     edges: edges.map((e) => ({ ...e })),
     faces: faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null })),
+    modelScale,
   };
 }
 function restoreState(snap) {
   vertices = snap.vertices.map((v) => ({ ...v }));
   edges = snap.edges.map((e) => ({ ...e }));
   faces = snap.faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null }));
+  modelScale = snap.modelScale ?? 1;
 }
 function pushUndoSnapshot() {
   undoStack.push(cloneState());
@@ -126,6 +133,29 @@ function performUndo() {
   updateColorBtnState();
   updateStatus();
   return true;
+}
+
+// ---------- モデル全体の拡大縮小(カメラズームとは別物) ----------
+// ビューのズーム(viewTransform)はカメラの画角を変えるだけで、モデルの
+// 頂点座標(=将来GLB/glTFへ書き出す実際のジオメトリ)は一切変化しない。
+// それとは別に、ここではモデルの頂点座標そのものをスケーリングする。
+// モデル全体のバウンディングボックスの中心を基準に、X/Y/Zへ常に同じ
+// 倍率をかけることで、中心位置と縦横比(形状)を保ったまま拡大縮小する。
+// 頂点の「相対的な位置関係」は単純な線形スケールなのでそのまま保たれ、
+// 当たり判定・ドラッグ編集・GLB書き出しなど他の機能は頂点座標を
+// そのまま参照しているだけなので、変更なしでそのまま正しく動作する。
+const MODEL_SCALE_STEP = 1.2;
+
+function scaleModel(factor) {
+  if (vertices.length === 0) return;
+  const box = computeVerticesBounds(vertices.map((v) => v.id));
+  const center = box.getCenter(new THREE.Vector3());
+  for (const v of vertices) {
+    v.x = center.x + (v.x - center.x) * factor;
+    v.y = center.y + (v.y - center.y) * factor;
+    v.z = center.z + (v.z - center.z) * factor;
+  }
+  modelScale *= factor;
 }
 
 // ---------- Renderer / Scene ----------
@@ -518,6 +548,7 @@ function rebuildScene() {
   }
 
   updateStats();
+  updateObjectInfo();
 }
 
 // ---------- モード(頂点/辺/面)・選択状態 ----------
@@ -549,6 +580,13 @@ const colorBtn = document.getElementById("colorBtn");
 const colorPaletteOverlay = document.getElementById("colorPaletteOverlay");
 const colorPickerInput = document.getElementById("colorPickerInput");
 const colorPaletteCloseBtn = document.getElementById("colorPaletteCloseBtn");
+const scaleUpBtn = document.getElementById("scaleUpBtn");
+const scaleDownBtn = document.getElementById("scaleDownBtn");
+const objectInfoEl = document.getElementById("objectInfo");
+const objSizeXEl = document.getElementById("objSizeX");
+const objSizeYEl = document.getElementById("objSizeY");
+const objSizeZEl = document.getElementById("objSizeZ");
+const objScaleEl = document.getElementById("objScale");
 const statsEl = document.getElementById("stats");
 const statusEl = document.getElementById("status");
 
@@ -590,6 +628,47 @@ function updateUndoBtnState() {
 function updateStats() {
   statsEl.textContent = `頂点: ${vertices.length}  辺: ${edges.length}  面: ${faces.length}`;
 }
+
+// 1ワールド単位 = 1m という前提で、見やすい単位(m/cm/mm)に自動変換する
+function formatLength(meters) {
+  const abs = Math.abs(meters);
+  if (abs === 0) return "0.00 m";
+  if (abs >= 1) return `${meters.toFixed(2)} m`;
+  if (abs >= 0.01) return `${(meters * 100).toFixed(1)} cm`;
+  return `${(meters * 1000).toFixed(1)} mm`;
+}
+
+// 現在のモデル全体のバウンディングボックス実寸(X/Y/Z)と、モデル
+// スケール倍率を画面に表示する。カメラのズーム倍率とは無関係に、
+// 頂点座標そのものから計算した「実際のオブジェクトサイズ」を示す
+function updateObjectInfo() {
+  scaleUpBtn.disabled = vertices.length === 0;
+  scaleDownBtn.disabled = vertices.length === 0;
+  if (vertices.length === 0) {
+    objectInfoEl.style.display = "none";
+    return;
+  }
+  objectInfoEl.style.display = "";
+  const box = computeVerticesBounds(vertices.map((v) => v.id));
+  const size = box.getSize(new THREE.Vector3());
+  objSizeXEl.textContent = formatLength(size.x);
+  objSizeYEl.textContent = formatLength(size.y);
+  objSizeZEl.textContent = formatLength(size.z);
+  objScaleEl.textContent = modelScale.toFixed(2);
+}
+
+scaleUpBtn.addEventListener("click", () => {
+  if (vertices.length === 0) return;
+  pushUndoSnapshot();
+  scaleModel(MODEL_SCALE_STEP);
+  rebuildScene();
+});
+scaleDownBtn.addEventListener("click", () => {
+  if (vertices.length === 0) return;
+  pushUndoSnapshot();
+  scaleModel(1 / MODEL_SCALE_STEP);
+  rebuildScene();
+});
 function updateStatus() {
   if (mode === "vertex") {
     if (selectedVertexId != null) {
@@ -795,17 +874,27 @@ function fitViewsToBounds(box) {
   box.getSize(size);
   const center = new THREE.Vector3();
   box.getCenter(center);
-  const fitZoom = (halfExtent) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, VIEW_SIZE / (Math.max(halfExtent, 0.25) * 1.3)));
 
-  viewTransform.top.zoom = fitZoom(Math.max(size.x, size.z) / 2);
+  // 各ビューの矩形は正方形とは限らない(スマートフォンでは特に縦長/横長に
+  // なりやすい)。横方向に必要な半幅・縦方向に必要な半高さをそれぞれ
+  // 独立に求め、矩形のアスペクト比で正しく割り戻してから大きい方を
+  // 採用する(片方の軸だけで決めると、もう片方の軸がはみ出すことがある)
+  function fitZoom(key, halfWidthWorld, halfHeightWorld) {
+    const rect = viewLayout[key];
+    const aspect = rect && rect.h > 0 ? rect.w / rect.h : 1;
+    const neededHalfH = Math.max(halfHeightWorld, aspect > 0 ? halfWidthWorld / aspect : halfWidthWorld, 0.25);
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, VIEW_SIZE / (neededHalfH * 1.3)));
+  }
+
+  viewTransform.top.zoom = fitZoom("top", size.x / 2, size.z / 2);
   viewTransform.top.panX = center.x;
   viewTransform.top.panZ = center.z;
 
-  viewTransform.front.zoom = fitZoom(Math.max(size.x, size.y) / 2);
+  viewTransform.front.zoom = fitZoom("front", size.x / 2, size.y / 2);
   viewTransform.front.panX = center.x;
   viewTransform.front.panY = center.y;
 
-  viewTransform.left.zoom = fitZoom(Math.max(size.z, size.y) / 2);
+  viewTransform.left.zoom = fitZoom("left", size.z / 2, size.y / 2);
   viewTransform.left.panY = center.y;
   viewTransform.left.panZ = center.z;
 
@@ -1155,6 +1244,7 @@ updateStats();
 updateStatus();
 updateUndoBtnState();
 updateDeleteBtnState();
+updateObjectInfo();
 setGridVisible(true);
 setMagnetEnabled(false);
 
@@ -1232,4 +1322,25 @@ window.__model = {
   },
   exportGLB,
   fitViewsToCurrentBounds: () => fitViewsToBounds(computeVerticesBounds(vertices.map((v) => v.id))),
+  scaleUp: () => scaleUpBtn.click(),
+  scaleDown: () => scaleDownBtn.click(),
+  isScaleUpBtnDisabled: () => scaleUpBtn.disabled,
+  isScaleDownBtnDisabled: () => scaleDownBtn.disabled,
+  getModelScale: () => modelScale,
+  getObjectSize: () => {
+    if (vertices.length === 0) return null;
+    const box = computeVerticesBounds(vertices.map((v) => v.id));
+    const size = box.getSize(new THREE.Vector3());
+    return { x: size.x, y: size.y, z: size.z };
+  },
+  getObjectCenter: () => {
+    if (vertices.length === 0) return null;
+    const box = computeVerticesBounds(vertices.map((v) => v.id));
+    return box.getCenter(new THREE.Vector3()).toArray();
+  },
+  formatLength,
+  isObjectInfoVisible: () => objectInfoEl.style.display !== "none",
+  getObjectInfoText: () => ({
+    x: objSizeXEl.textContent, y: objSizeYEl.textContent, z: objSizeZEl.textContent, scale: objScaleEl.textContent,
+  }),
 };
