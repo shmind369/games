@@ -96,7 +96,7 @@
       text-align: right;
       padding-top: 6px;
     }
-    #exportBtn, #animMenuBtn {
+    #exportBtn, #animMenuBtn, #importModelBtn, #resetModelBtn {
       flex: 0 0 auto;
       width: 40px;
       height: 40px;
@@ -113,7 +113,9 @@
     }
     #exportBtn { background: #4c8dff; }
     #animMenuBtn { background: #8a5cf5; }
-    #exportBtn:active, #animMenuBtn:active { transform: scale(0.94); }
+    #importModelBtn { background: #2f8f5f; }
+    #resetModelBtn { background: #555b6a; }
+    #exportBtn:active, #animMenuBtn:active, #importModelBtn:active, #resetModelBtn:active { transform: scale(0.94); }
     #animMenuBtn.active { box-shadow: 0 0 0 2px #ffd24c, 0 3px 10px rgba(0,0,0,0.4); }
 
     /* アニメーション管理パネル: 3Dモデル(メッシュ・マテリアル・ボーン構造)と
@@ -379,6 +381,9 @@
         <div id="title">Humanoid glTF Exporter</div>
         <div id="hudRight">
           <div id="boneInfo">選択中のボーン<br /><span id="selectedBoneLabel">なし</span></div>
+          <button id="importModelBtn" title="GLB/glTFモデルを読み込む(現在のモデルと差し替え。ボーン名・本数は問わない)">📥</button>
+          <button id="resetModelBtn" title="ボクサーモデルに戻す">🥊</button>
+          <input type="file" id="importModelFile" accept=".glb,.gltf,model/gltf-binary" style="display:none" />
           <button id="animMenuBtn" title="アニメーション管理(モデルとは別データとして保存・書き出し)">🎞</button>
           <button id="exportBtn" title="3Dモデルを書き出す(.glb / メッシュ・マテリアル・ボーン構造のみ)">⇩</button>
         </div>

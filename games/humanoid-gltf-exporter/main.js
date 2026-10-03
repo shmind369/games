@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "./vendor/controls/OrbitControls.js";
 import { GLTFExporter } from "./vendor/exporters/GLTFExporter.js";
+import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 
 // ---------- モバイルでのテキスト選択/コンテキストメニュー抑制 ----------
 // スマートフォンのSafari/Chromeでタイムラインや3Dビューをドラッグしている
@@ -48,9 +49,12 @@ controls.update();
 // FREE CAMERAは既存のPerspectiveCamera+OrbitControlsをそのまま使い、
 // 挙動を変更していない。TOP/FRONT/LEFTは固定の正投影カメラ(パン・ズーム等の
 // 操作は今回のスコープ外のため実装しない)
-const VIEW_TARGET_Y = 1.0; // OrbitControlsのtargetと揃えた、キャラクターの中心あたりの高さ
-const SIDE_HALF_HEIGHT = 1.15; // FRONT/LEFTでの縦方向(頭上〜足元)の表示範囲
-const TOP_HALF_SIZE = 0.9; // TOPでの横方向(ワールドX/Z)の表示範囲
+// GLBインポートで読み込んだモデルの大きさに合わせて後から再計算する
+// (applyViewFraming参照)ため、const ではなく let にしている。初期値は
+// ボクサーモデル用に手調整した元の値のまま
+let VIEW_TARGET_Y = 1.0; // OrbitControlsのtargetと揃えた、キャラクターの中心あたりの高さ
+let SIDE_HALF_HEIGHT = 1.15; // FRONT/LEFTでの縦方向(頭上〜足元)の表示範囲
+let TOP_HALF_SIZE = 0.9; // TOPでの横方向(ワールドX/Z)の表示範囲
 
 function makeOrthoCamera() {
   return new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
@@ -114,6 +118,45 @@ function updateOrthoFrustum(cam, halfHeight, aspect) {
   cam.updateProjectionMatrix();
 }
 
+// GLBインポートで読み込むモデルは、ボクサーモデルと身長・プロポーションが
+// 異なる場合があるため、4ビューの基準の高さ(VIEW_TARGET_Y)・表示範囲
+// (SIDE_HALF_HEIGHT/TOP_HALF_SIZE)をモデルに合わせて作り直せるようにする。
+// ボーン操作・ギズモ・キーフレーム等、他のロジックは一切変更しない
+// (カメラ・ビューの見た目だけを調整する)
+function applyViewFraming(targetY, sideHalfHeight, topHalfSize) {
+  VIEW_TARGET_Y = targetY;
+  SIDE_HALF_HEIGHT = sideHalfHeight;
+  TOP_HALF_SIZE = topHalfSize;
+
+  topCamera.position.set(0, VIEW_TARGET_Y + 3, 0);
+  topCamera.lookAt(0, VIEW_TARGET_Y, 0);
+  frontCamera.position.set(0, VIEW_TARGET_Y, 3);
+  frontCamera.lookAt(0, VIEW_TARGET_Y, 0);
+  leftCamera.position.set(-3, VIEW_TARGET_Y, 0);
+  leftCamera.lookAt(0, VIEW_TARGET_Y, 0);
+
+  controls.target.set(0, VIEW_TARGET_Y, 0);
+  const freeDistance = Math.max(sideHalfHeight, topHalfSize) * 1.8 + 1.0;
+  camera.position.set(0, VIEW_TARGET_Y + sideHalfHeight * 0.15, freeDistance);
+  controls.update();
+
+  layoutViews();
+}
+
+// 読み込んだモデル(root配下のメッシュ全体)のバウンディングボックスから、
+// 4ビューがちょうど収まる表示範囲を計算する(mesh-modeling-studioの
+// fitViewsToBoundsと考え方は同じだが、このプロジェクト用に独立して実装)
+function fitViewToCurrentModel() {
+  const box = new THREE.Box3().setFromObject(root);
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const halfHeight = Math.max(size.y, size.x, size.z) / 2 * 1.3 + 0.1;
+  applyViewFraming(center.y, halfHeight, halfHeight);
+}
+
 // クライアント座標(clientX/clientY)から、どのビュー(象限)かを判定する
 function viewAt(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
@@ -154,49 +197,56 @@ function bone(name, x, y, z) {
 
 // プロポーション調整(第2段): 頭を少し拡大、首を細く伸ばして肩への
 // つながりを自然にし、肩幅をさらに拡張、腕を少し伸ばして人体比率に
-// 近づけた(ボーンの名前・階層・本数は変更していない)
-const hips = bone("Hips", 0, 0.92, 0);
-const spine = bone("Spine", 0, 0.13, 0);
-const chest = bone("Chest", 0, 0.17, 0);
-const neck = bone("Neck", 0, 0.19, 0);
-const head = bone("Head", 0, 0.15, 0);
+// 近づけた(ボーンの名前・階層・本数は変更していない)。
+// GLBインポート機能の追加により、「読み込んだモデルに差し替え」→
+// 「🥊でボクサーに戻す」を何度でも行えるようにするため、以前は
+// モジュール最上位で1回だけ実行していたボーン構築を関数化した
+// (ルートボーンを1つ返すだけで、rootへの追加はしない)
+function buildBoxerBoneHierarchy() {
+  const hips = bone("Hips", 0, 0.92, 0);
+  const spine = bone("Spine", 0, 0.13, 0);
+  const chest = bone("Chest", 0, 0.17, 0);
+  const neck = bone("Neck", 0, 0.19, 0);
+  const head = bone("Head", 0, 0.15, 0);
 
-const leftShoulder = bone("LeftShoulder", 0.195, 0.13, 0);
-const leftUpperArm = bone("LeftUpperArm", 0.07, 0, 0);
-const leftForearm = bone("LeftForearm", 0, -0.29, 0);
-const leftHand = bone("LeftHand", 0, -0.27, 0);
+  const leftShoulder = bone("LeftShoulder", 0.195, 0.13, 0);
+  const leftUpperArm = bone("LeftUpperArm", 0.07, 0, 0);
+  const leftForearm = bone("LeftForearm", 0, -0.29, 0);
+  const leftHand = bone("LeftHand", 0, -0.27, 0);
 
-const rightShoulder = bone("RightShoulder", -0.195, 0.13, 0);
-const rightUpperArm = bone("RightUpperArm", -0.07, 0, 0);
-const rightForearm = bone("RightForearm", 0, -0.29, 0);
-const rightHand = bone("RightHand", 0, -0.27, 0);
+  const rightShoulder = bone("RightShoulder", -0.195, 0.13, 0);
+  const rightUpperArm = bone("RightUpperArm", -0.07, 0, 0);
+  const rightForearm = bone("RightForearm", 0, -0.29, 0);
+  const rightHand = bone("RightHand", 0, -0.27, 0);
 
-const leftUpperLeg = bone("LeftUpperLeg", 0.10, -0.02, 0);
-const leftLowerLeg = bone("LeftLowerLeg", 0, -0.43, 0);
-const leftFoot = bone("LeftFoot", 0, -0.43, 0.045);
+  const leftUpperLeg = bone("LeftUpperLeg", 0.10, -0.02, 0);
+  const leftLowerLeg = bone("LeftLowerLeg", 0, -0.43, 0);
+  const leftFoot = bone("LeftFoot", 0, -0.43, 0.045);
 
-const rightUpperLeg = bone("RightUpperLeg", -0.10, -0.02, 0);
-const rightLowerLeg = bone("RightLowerLeg", 0, -0.43, 0);
-const rightFoot = bone("RightFoot", 0, -0.43, 0.045);
+  const rightUpperLeg = bone("RightUpperLeg", -0.10, -0.02, 0);
+  const rightLowerLeg = bone("RightLowerLeg", 0, -0.43, 0);
+  const rightFoot = bone("RightFoot", 0, -0.43, 0.045);
 
-hips.add(spine, leftUpperLeg, rightUpperLeg);
-spine.add(chest);
-chest.add(neck, leftShoulder, rightShoulder);
-neck.add(head);
-leftShoulder.add(leftUpperArm);
-leftUpperArm.add(leftForearm);
-leftForearm.add(leftHand);
-rightShoulder.add(rightUpperArm);
-rightUpperArm.add(rightForearm);
-rightForearm.add(rightHand);
-leftUpperLeg.add(leftLowerLeg);
-leftLowerLeg.add(leftFoot);
-rightUpperLeg.add(rightLowerLeg);
-rightLowerLeg.add(rightFoot);
+  hips.add(spine, leftUpperLeg, rightUpperLeg);
+  spine.add(chest);
+  chest.add(neck, leftShoulder, rightShoulder);
+  neck.add(head);
+  leftShoulder.add(leftUpperArm);
+  leftUpperArm.add(leftForearm);
+  leftForearm.add(leftHand);
+  rightShoulder.add(rightUpperArm);
+  rightUpperArm.add(rightForearm);
+  rightForearm.add(rightHand);
+  leftUpperLeg.add(leftLowerLeg);
+  leftLowerLeg.add(leftFoot);
+  rightUpperLeg.add(rightLowerLeg);
+  rightLowerLeg.add(rightFoot);
+
+  return hips;
+}
 
 const root = new THREE.Group();
 root.name = "Humanoid";
-root.add(hips);
 
 // ---------- モデル全体のトランスフォーム(Root) ----------
 // 「ポーズ」(各ボーンの回転)と「モデル全体の位置」を別々のデータとして
@@ -210,29 +260,28 @@ const modelTransform = new THREE.Group();
 modelTransform.name = "ModelTransform";
 modelTransform.add(root);
 scene.add(modelTransform);
-root.updateMatrixWorld(true); // レストポーズのワールド行列を確定させる(バインド行列の計算に必要)
 
-const allBones = [
-  hips, spine, chest, neck, head,
-  leftShoulder, leftUpperArm, leftForearm, leftHand,
-  rightShoulder, rightUpperArm, rightForearm, rightHand,
-  leftUpperLeg, leftLowerLeg, leftFoot,
-  rightUpperLeg, rightLowerLeg, rightFoot,
-];
-const skeleton = new THREE.Skeleton(allBones);
-const boneIndex = (b) => allBones.indexOf(b);
+// GLBインポート機能の追加により、root配下のボーン・メッシュは
+// ボクサーモデル固定ではなく「現在読み込んでいるモデル」によって入れ替わる
+// ため、const ではなく let にしている(それぞれ rebuildSkeletonAndUI /
+// loadBoxerModel / loadModelFromGLTFScene が更新する)
+let allBones = [];
+let skeleton = null;
+let boneNameToBone = {};
+let allMeshes = []; // タップ選択のレイキャスト対象(ポーズエディタ用。現状は後方互換のため保持)
 
 // ---------- 各部位メッシュをSkinnedMeshとして構築 ----------
 // ジオメトリの頂点はワールド座標(レストポーズでの実際の位置)で直接配置し、
 // 各頂点を単一のボーンへ100%の重みで結びつける(見た目は剛体パーツの
 // 集まりだが、データとしては正式なスキニング済みメッシュ・アニメーションとして
-// 書き出せる)
-
-function bindToSingleBone(geometry, bone) {
+// 書き出せる)。ボーン一覧(skel.bones)を引数で受け取るようにし、
+// 読み込むたびに作り直される現在のスケルトンに対して正しいインデックスで
+// 結びつけられるようにしている
+function bindToSingleBone(geometry, bone, skel) {
   const count = geometry.attributes.position.count;
   const skinIndices = new Uint16Array(count * 4);
   const skinWeights = new Float32Array(count * 4);
-  const idx = boneIndex(bone);
+  const idx = skel.bones.indexOf(bone);
   for (let i = 0; i < count; i++) {
     skinIndices[i * 4] = idx;
     skinWeights[i * 4] = 1;
@@ -241,8 +290,6 @@ function bindToSingleBone(geometry, bone) {
   geometry.setAttribute("skinWeight", new THREE.Float32BufferAttribute(skinWeights, 4));
   return geometry;
 }
-
-const allMeshes = []; // タップ選択のレイキャスト対象(ポーズエディタ用)
 
 // ---------- ボクサーキャラクターの各部位メッシュ(ボーンごとに分離済み) ----------
 // 以前はプリミティブ形状(カプセル・球・円柱)を各ボーンに割り当てていたが、
@@ -259,14 +306,14 @@ const allMeshes = []; // タップ選択のレイキャスト対象(ポーズエ
 // しており、メッシュの形状やパーツ分割の詳細には関知しないため)。詳細な
 // 経緯・セグメンテーション手法は後述「ボクサーモデルのパーツ分割リギング」
 // を参照。
-function addWorldPart(geometry, material, bone) {
+function addWorldPart(geometry, material, bone, skel) {
   // boxer_parts.jsonの頂点座標はすでにこのスケルトンのレストポーズに
   // おける実際のワールド座標で焼き込み済みのため、以前のプリミティブ版
   // (原点中心のジオメトリをボーン位置へ平行移動していた)とは異なり、
   // 平行移動は行わない
-  bindToSingleBone(geometry, bone);
+  bindToSingleBone(geometry, bone, skel);
   const mesh = new THREE.SkinnedMesh(geometry, material);
-  mesh.bind(skeleton);
+  mesh.bind(skel);
   mesh.userData.bone = bone;
   root.add(mesh);
   allMeshes.push(mesh);
@@ -278,51 +325,158 @@ boxerTexture.colorSpace = THREE.SRGBColorSpace;
 // 抽出元のglTFはUVがflipYなし前提のため、通常のTextureLoader(デフォルト
 // flipY=true)のままだとテクスチャが上下逆かつ左右の対応もずれて表示される
 boxerTexture.flipY = false;
+// ボクサー用のマテリアルはモジュール最上位で1回だけ作る持続的なオブジェクト
+// (🥊で何度ボクサーへ戻しても、同じマテリアル・テクスチャを使い回す。
+// clearCurrentModelはこの2つだけを明示的にdispose対象から除外している)
 const boxerMat = new THREE.MeshStandardMaterial({ map: boxerTexture, roughness: 0.7 });
-
-const boneByNameForParts = Object.fromEntries(allBones.map((b) => [b.name, b]));
-fetch("./assets/boxer_parts.json")
-  .then((res) => res.json())
-  .then((parts) => {
-    for (const [boneName, data] of Object.entries(parts)) {
-      if (!data.positions || data.positions.length === 0) continue;
-      const bone = boneByNameForParts[boneName];
-      if (!bone) continue;
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(data.positions, 3));
-      geometry.setAttribute("normal", new THREE.Float32BufferAttribute(data.normals, 3));
-      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(data.uvs, 2));
-      addWorldPart(geometry, boxerMat, bone);
-    }
-  })
-  .catch((err) => console.error("boxer_parts.json の読み込みに失敗しました", err));
-
-// ---------- 関節カバー球(肩・肘・股関節・膝) ----------
-// パーツを完全に独立したメッシュへ分割したことで、関節を大きく曲げると
-// 境界が開いて隙間が見えてしまう問題があったため、各関節のちょうど
-// ボーン位置に小さな球を置いて隙間を隠す(以前のプリミティブ版で
-// 「肩関節・肘関節・股関節・膝関節が分かるように」置いていた球と同じ
-// 仕組み)。球は「回転先(末端側)のボーン自身の原点」に、オフセット
-// 0で配置する。そのボーン自身の回転は球の位置を一切動かさない
-// (原点にあるため、回転してもその場で自転するだけ)ので、親ボーン側の
-// 回転だけで正しく追従しつつ、曲げ角度に関わらず常にその関節の真上に
-// 留まり続ける。詳細は後述「ボクサーモデルのパーツ分割リギング」を参照。
 const jointMat = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.6 });
-fetch("./assets/boxer_joints.json")
-  .then((res) => res.json())
-  .then(({ joints }) => {
-    for (const { bone: boneName, radius, center } of Object.values(joints)) {
-      const bone = boneByNameForParts[boneName];
-      if (!bone) continue;
-      const geometry = new THREE.SphereGeometry(radius, 14, 12);
-      geometry.translate(center[0], center[1], center[2]);
-      addWorldPart(geometry, jointMat, bone);
+
+// ---------- 現在のモデルの破棄(GLBインポート/ボクサーへの差し替え共通) ----------
+// 「読み込んだモデルに差し替え」という方針のため、新しいモデルをrootへ
+// 追加する前に、現在表示中のモデル(ボーン・メッシュ・当たり判定プロキシ)を
+// 完全に取り除く。ギズモのリング類はroot(=GLTF書き出し対象)には含めず
+// scene直下にあるため、ここでは一切触れない
+function clearCurrentModel() {
+  for (const proxy of boneHitProxies) {
+    if (proxy.parent) proxy.parent.remove(proxy);
+    proxy.geometry.dispose();
+  }
+  boneHitProxies = [];
+  while (root.children.length > 0) {
+    const child = root.children[0];
+    root.remove(child);
+    child.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      if (o.isMesh && o.material) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of mats) {
+          if (m === boxerMat || m === jointMat) continue; // ボクサー用の永続マテリアルは使い回すため破棄しない
+          m.dispose();
+        }
+      }
+    });
+  }
+  allMeshes = [];
+  poseKeyframes = [];
+  currentTime = 0;
+  rebuildSkeletonAndUI([]);
+}
+
+// ---------- ボクサーモデルの(再)読み込み ----------
+// GLBインポート後に🥊ボタンを押すと、元のボクサーモデルへいつでも戻せる
+function loadBoxerModel() {
+  clearCurrentModel();
+  const hipsBone = buildBoxerBoneHierarchy();
+  root.add(hipsBone);
+  root.updateMatrixWorld(true); // レストポーズのワールド行列を確定させる(バインド行列の計算に必要)
+
+  const bones = [];
+  hipsBone.traverse((o) => { if (o.isBone) bones.push(o); });
+  rebuildSkeletonAndUI(bones);
+
+  const skel = skeleton;
+  const boneByName = boneNameToBone;
+
+  fetch("./assets/boxer_parts.json")
+    .then((res) => res.json())
+    .then((parts) => {
+      for (const [boneName, data] of Object.entries(parts)) {
+        if (!data.positions || data.positions.length === 0) continue;
+        const b = boneByName[boneName];
+        if (!b) continue;
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(data.positions, 3));
+        geometry.setAttribute("normal", new THREE.Float32BufferAttribute(data.normals, 3));
+        geometry.setAttribute("uv", new THREE.Float32BufferAttribute(data.uvs, 2));
+        addWorldPart(geometry, boxerMat, b, skel);
+      }
+    })
+    .catch((err) => console.error("boxer_parts.json の読み込みに失敗しました", err));
+
+  // ---------- 関節カバー球(肩・肘・股関節・膝) ----------
+  // パーツを完全に独立したメッシュへ分割したことで、関節を大きく曲げると
+  // 境界が開いて隙間が見えてしまう問題があったため、各関節のちょうど
+  // ボーン位置に小さな球を置いて隙間を隠す。球は「回転先(末端側)の
+  // ボーン自身の原点」に、オフセット0で配置する。そのボーン自身の回転は
+  // 球の位置を一切動かさない(原点にあるため、回転してもその場で自転
+  // するだけ)ので、親ボーン側の回転だけで正しく追従しつつ、曲げ角度に
+  // 関わらず常にその関節の真上に留まり続ける
+  fetch("./assets/boxer_joints.json")
+    .then((res) => res.json())
+    .then(({ joints }) => {
+      for (const { bone: boneName, radius, center } of Object.values(joints)) {
+        const b = boneByName[boneName];
+        if (!b) continue;
+        const geometry = new THREE.SphereGeometry(radius, 14, 12);
+        geometry.translate(center[0], center[1], center[2]);
+        addWorldPart(geometry, jointMat, b, skel);
+      }
+    })
+    .catch((err) => console.error("boxer_joints.json の読み込みに失敗しました", err));
+
+  applyViewFraming(1.0, 1.15, 0.9); // ボクサー用に手調整した元のカメラ・ビュー範囲に戻す
+  statusEl.textContent = "ボクサーモデルを読み込みました";
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
+}
+
+// ---------- GLBインポート(任意のボーン構成のモデルに差し替え) ----------
+// 「別のアプリ(mesh-modeling-studio)で作った、ボーンとスキンがペアリング
+// された状態のGLBをこのアプリで読み込んで、ポーズ編集・アニメーション
+// 作成に使いたい」という依頼を受けて追加した。ボクサーの19本の固定ボーン
+// 構成に依存せず、読み込んだGLBが実際に持っているボーン(本数・名前・
+// 階層とも任意)をそのまま使ってポーズエディタ・ギズモ・キーフレーム・
+// glTF書き出しを動かす(詳細は後述「GLBインポート」を参照)
+function extractSkinnedContent(gltfScene) {
+  const bonesSet = new Set();
+  const meshes = [];
+  gltfScene.traverse((obj) => {
+    if (obj.isSkinnedMesh) {
+      meshes.push(obj);
+      for (const b of obj.skeleton.bones) bonesSet.add(b);
+    } else if (obj.isMesh) {
+      meshes.push(obj);
     }
-  })
-  .catch((err) => console.error("boxer_joints.json の読み込みに失敗しました", err));
+  });
+  const bones = Array.from(bonesSet);
+  const boneSet = new Set(bones);
+  const rootBones = bones.filter((b) => !b.parent || !boneSet.has(b.parent));
+  return { bones, meshes, rootBones };
+}
+
+// オブジェクトを新しい親の子にしつつ、見た目のワールド変形(位置・回転・
+// 拡大率)が変わらないよう、ローカルTransformを再計算する。読み込んだGLBの
+// 中間ノード(Armature等)が単位行列でない変形を持っていた場合でも、
+// モデルの見た目がズレないようにするための処理
+function reparentPreservingWorldTransform(obj, newParent) {
+  const worldMatrix = obj.matrixWorld.clone();
+  newParent.add(obj);
+  newParent.updateMatrixWorld(true);
+  const parentWorldInverse = new THREE.Matrix4().copy(newParent.matrixWorld).invert();
+  const localMatrix = new THREE.Matrix4().multiplyMatrices(parentWorldInverse, worldMatrix);
+  localMatrix.decompose(obj.position, obj.quaternion, obj.scale);
+}
+
+function loadModelFromGLTFScene(gltfScene) {
+  gltfScene.updateMatrixWorld(true);
+  const { bones, meshes, rootBones } = extractSkinnedContent(gltfScene);
+  if (meshes.length === 0) throw new Error("メッシュが見つかりませんでした");
+
+  clearCurrentModel();
+
+  for (const rb of rootBones) reparentPreservingWorldTransform(rb, root);
+  for (const m of meshes) {
+    reparentPreservingWorldTransform(m, root);
+    allMeshes.push(m);
+  }
+  root.updateMatrixWorld(true);
+
+  rebuildSkeletonAndUI(bones);
+  fitViewToCurrentModel();
+}
 
 // ---------- ポーズエディタ(FKによるボーン選択・回転・キーフレーム記録) ----------
-const boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
+// boneNameToBoneはモデル読み込み時にrebuildSkeletonAndUIが更新する
+// (このファイルの先頭付近、root/allBones宣言のそばで let 宣言済み)
 
 let selectedBone = null;
 
@@ -343,18 +497,31 @@ let editMode = "pose";
 // 身体の左右軸まわりにしか曲がらないため、この「身体の左右軸」が
 // そのままヒンジ軸になる。
 // (レストポーズの時点で1度だけ計算する。ポーズを変えた後も同じ軸を使う)
-function computeSideAxisWorld() {
-  const ls = new THREE.Vector3(), rs = new THREE.Vector3();
-  const lh = new THREE.Vector3(), rh = new THREE.Vector3();
-  leftShoulder.getWorldPosition(ls);
-  rightShoulder.getWorldPosition(rs);
-  leftUpperLeg.getWorldPosition(lh);
-  rightUpperLeg.getWorldPosition(rh);
-  const fromShoulders = ls.clone().sub(rs);
-  const fromHips = lh.clone().sub(rh);
-  return fromShoulders.add(fromHips).normalize();
+//
+// GLBインポートで任意のボーン構成を受け入れられるよう、以前の
+// leftShoulder/rightShoulder等への直接参照ではなく、ボーン名に
+// "left"/"right"を含むペアを探して左右軸を推定する汎用版にしている
+// (mesh-modeling-studio等このリポジトリの他プロジェクトと同じ、
+// Left/Right命名規則を前提とする)。対になる名前が1つも見つからない
+// 場合はワールドX軸をフォールバックとして使う
+function computeSideAxisWorldGeneric(bonesList) {
+  const byLowerName = new Map(bonesList.map((b) => [b.name.toLowerCase(), b]));
+  const sum = new THREE.Vector3();
+  let found = 0;
+  for (const b of bonesList) {
+    const lname = b.name.toLowerCase();
+    if (!lname.includes("left")) continue;
+    const rb = byLowerName.get(lname.replace("left", "right"));
+    if (!rb) continue;
+    const lp = new THREE.Vector3(), rp = new THREE.Vector3();
+    b.getWorldPosition(lp);
+    rb.getWorldPosition(rp);
+    sum.add(lp.sub(rp));
+    found++;
+  }
+  if (found === 0) return new THREE.Vector3(1, 0, 0);
+  return sum.normalize();
 }
-const SIDE_AXIS_WORLD = computeSideAxisWorld();
 
 function snapToNearestAxis(v) {
   const abs = [Math.abs(v.x), Math.abs(v.y), Math.abs(v.z)];
@@ -372,11 +539,29 @@ function computeHingeAxisLocal(jointBone) {
   return snapToNearestAxis(localSide);
 }
 
-// 肘(前腕ボーン)・膝(すねボーン)のみ1軸(ヒンジ)関節として扱う。
-// それ以外(肩・股関節・首など)は基本関節として3軸すべてを有効にする
-const HINGE_BONES = [leftForearm, rightForearm, leftLowerLeg, rightLowerLeg];
-const hingeAxisByBoneName = {};
-for (const b of HINGE_BONES) hingeAxisByBoneName[b.name] = computeHingeAxisLocal(b);
+// 肘(前腕)・膝(すね)に相当するボーンだけを1軸(ヒンジ)関節として扱う。
+// ボクサーの固定ボーン名(leftForearm等)への直接参照ではなく、ボーン名に
+// よくある単語(forearm/lowerLeg/shin/calf/elbow/knee)が含まれるかで
+// 判定する汎用版にしている(大文字小文字は区別しない)。該当するボーンが
+// 1つもない構成(例: 腕しかないロボット)でも、単にヒンジ関節が0個になる
+// だけでエラーにはならない
+const HINGE_NAME_PATTERNS = ["forearm", "lowerleg", "lower_leg", "shin", "calf", "elbow", "knee"];
+function detectHingeBones(bonesList) {
+  return bonesList.filter((b) => HINGE_NAME_PATTERNS.some((p) => b.name.toLowerCase().includes(p)));
+}
+
+// SIDE_AXIS_WORLD/HINGE_BONES/hingeAxisByBoneNameは、モデルを読み込む
+// (rebuildSkeletonAndUIを呼ぶ)たびに作り直されるため let にしている
+let SIDE_AXIS_WORLD = new THREE.Vector3(1, 0, 0);
+let HINGE_BONES = [];
+let hingeAxisByBoneName = {};
+
+function recomputeHingeAndSideAxis(bonesList) {
+  SIDE_AXIS_WORLD = computeSideAxisWorldGeneric(bonesList);
+  HINGE_BONES = detectHingeBones(bonesList);
+  hingeAxisByBoneName = {};
+  for (const b of HINGE_BONES) hingeAxisByBoneName[b.name] = computeHingeAxisLocal(b);
+}
 
 // ---------- 選択中のボーンを操作する3軸回転ギズモ(スマートフォン向け) ----------
 // 球体をドラッグして自由回転させる方式は廃止し、X/Y/Z軸ごとのリングを
@@ -555,12 +740,6 @@ function setRingHighlight(activeKey, on) {
 }
 
 const boneSelectEl = document.getElementById("boneSelect");
-for (const b of allBones) {
-  const opt = document.createElement("option");
-  opt.value = b.name;
-  opt.textContent = b.name;
-  boneSelectEl.appendChild(opt);
-}
 const selectedBoneLabelEl = document.getElementById("selectedBoneLabel");
 
 function setSelectedBone(b) {
@@ -604,13 +783,46 @@ modeMoveBtn.addEventListener("click", () => setEditMode("move"));
 // 子として追従する非表示の当たり判定用プロキシ球を用意し、そちらを
 // レイキャスト対象にする(ボーンの現在のワールド変形に正しく追従する)
 const PROXY_RADIUS = 0.075;
-const boneHitProxies = [];
-for (const b of allBones) {
-  const proxy = new THREE.Mesh(new THREE.SphereGeometry(PROXY_RADIUS, 8, 6));
-  proxy.visible = false;
-  proxy.userData.bone = b;
-  b.add(proxy);
-  boneHitProxies.push(proxy);
+let boneHitProxies = [];
+
+// ---------- モデル読み込み後のUI再構築(ドロップダウン・当たり判定・
+// ヒンジ軸) ----------
+// GLBインポート/ボクサーへの差し替えのたびに、現在のボーン一覧
+// (allBones)に合わせてボーン選択ドロップダウン・タップ選択用の当たり
+// 判定プロキシ・ヒンジ軸を作り直す。以前はこれらをモジュール最上位で
+// 1回だけ実行していたが、モデルを差し替え可能にしたことで関数化した
+function rebuildSkeletonAndUI(bonesList) {
+  allBones = bonesList;
+  skeleton = allBones.length > 0 ? new THREE.Skeleton(allBones) : null;
+  boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
+
+  boneSelectEl.innerHTML = "";
+  const emptyOpt = document.createElement("option");
+  emptyOpt.value = "";
+  emptyOpt.textContent = "(ボーン未選択)";
+  boneSelectEl.appendChild(emptyOpt);
+  for (const b of allBones) {
+    const opt = document.createElement("option");
+    opt.value = b.name;
+    opt.textContent = b.name;
+    boneSelectEl.appendChild(opt);
+  }
+
+  for (const proxy of boneHitProxies) {
+    if (proxy.parent) proxy.parent.remove(proxy);
+    proxy.geometry.dispose();
+  }
+  boneHitProxies = [];
+  for (const b of allBones) {
+    const proxy = new THREE.Mesh(new THREE.SphereGeometry(PROXY_RADIUS, 8, 6));
+    proxy.visible = false;
+    proxy.userData.bone = b;
+    b.add(proxy);
+    boneHitProxies.push(proxy);
+  }
+
+  recomputeHingeAndSideAxis(allBones);
+  setSelectedBone(null);
 }
 
 const raycaster = new THREE.Raycaster();
@@ -1603,6 +1815,40 @@ animImportFileEl.addEventListener("change", async () => {
 
 refreshAnimSelect();
 
+// ---------- GLBインポート(モデルの差し替え) ----------
+// 読み込んだGLBのボーン名・本数が今のモデルと一致していなくても、
+// applyPoseObject等が存在するボーン名だけを安全に適用する既存の仕組み
+// (「別モデルへの再利用を見据えた設計」を参照)があるため、ここでは
+// 特にボーン構成の互換性チェックは行わない。読み込みに成功したら
+// 現在のモデル(ボクサー、または以前に読み込んだ別のモデル)を完全に
+// 差し替える
+const importModelBtn = document.getElementById("importModelBtn");
+const importModelFileEl = document.getElementById("importModelFile");
+const resetModelBtn = document.getElementById("resetModelBtn");
+const gltfLoader = new GLTFLoader();
+
+importModelBtn.addEventListener("click", () => importModelFileEl.click());
+importModelFileEl.addEventListener("change", async () => {
+  const file = importModelFileEl.files && importModelFileEl.files[0];
+  importModelFileEl.value = "";
+  if (!file) return;
+  statusEl.textContent = `「${file.name}」を読み込み中...`;
+  try {
+    const buffer = await file.arrayBuffer();
+    const gltf = await new Promise((resolve, reject) => {
+      gltfLoader.parse(buffer, "", resolve, reject);
+    });
+    loadModelFromGLTFScene(gltf.scene);
+    statusEl.textContent = `「${file.name}」を読み込みました(ボーン${allBones.length}本)`;
+  } catch (err) {
+    console.error("GLBモデルの読み込みに失敗しました", err);
+    statusEl.textContent = "GLBモデルの読み込みに失敗しました";
+  }
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
+});
+
+resetModelBtn.addEventListener("click", () => loadBoxerModel());
+
 // ---------- リサイズ ----------
 // レンダラーのサイズは、ウィンドウ全体ではなく#viewportArea(3Dビュー専用領域、
 // タイムラインドックを除いた残り全体)の実サイズに合わせる。これにより
@@ -1618,6 +1864,7 @@ resize();
 setCurrentTime(0); // 初期状態のフレーム表示・目盛を描画しておく
 updateUndoBtnState(); // 初期状態ではUndo履歴が空のためボタンを無効化しておく
 updateDeleteKeyframeBtnState(); // 初期状態ではキーフレーム未選択のためボタンを無効化しておく
+loadBoxerModel(); // 初期表示は従来通りボクサーモデル
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
 const VIEW_ORDER = ["top", "front", "left", "free"];
@@ -1653,16 +1900,47 @@ function render() {
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, root, skeleton, allBones, modelTransform, cursorMarker };
+// skeleton/allBonesはGLBインポート/ボクサーへの差し替えのたびに作り
+// 直される(let)ため、スナップショットではなくgetterで常に最新の値を返す
+window.__scene = {
+  scene, camera, root, modelTransform, cursorMarker,
+  get skeleton() { return skeleton; },
+  get allBones() { return allBones; },
+};
 // モデル書き出し(メッシュ・マテリアル・ボーン構造のみ。アニメーションは含まない)
 window.__exportGLTF = () => new Promise((resolve, reject) => {
   const exporter = new GLTFExporter();
   exporter.parse(root, resolve, reject, { binary: true });
 });
 
+// ---------- GLBインポート/モデル差し替えのテスト/デバッグ用フック ----------
+window.__model = {
+  getBoneNames: () => allBones.map((b) => b.name),
+  getBoneCount: () => allBones.length,
+  isHingeBoneName: (name) => !!hingeAxisByBoneName[name],
+  getSideAxisWorld: () => SIDE_AXIS_WORLD.toArray(),
+  resetToBoxer: () => loadBoxerModel(),
+  // ポインタ操作(ファイル選択ダイアログ)を介さず、ArrayBufferを直接
+  // 渡してGLBを読み込む決定論的なテスト用の経路
+  loadGLBArrayBuffer: (buffer) => new Promise((resolve, reject) => {
+    gltfLoader.parse(buffer, "", (gltf) => {
+      try {
+        loadModelFromGLTFScene(gltf.scene);
+        resolve({ boneNames: allBones.map((b) => b.name), meshCount: allMeshes.length });
+      } catch (err) {
+        reject(err);
+      }
+    }, reject);
+  }),
+  isImportBtnPresent: () => !!importModelBtn,
+  isResetBtnPresent: () => !!resetModelBtn,
+};
+
 // ---------- ポーズエディタのテスト/デバッグ用フック ----------
 window.__fk = {
-  boneNameToBone,
+  // boneNameToBoneはモデル読み込みのたびに作り直される(let)ため、
+  // スナップショットではなくgetterで常に最新の値を返す
+  get boneNameToBone() { return boneNameToBone; },
   pickBoneAt,
   selectBoneByName: (name) => setSelectedBone(name ? boneNameToBone[name] || null : null),
   getSelectedBoneName: () => (selectedBone ? selectedBone.name : null),
