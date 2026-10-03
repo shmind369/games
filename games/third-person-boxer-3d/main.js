@@ -373,7 +373,7 @@ const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerL
 // 流用できる汎用的な仕組みにしている)
 let allBonesByName = {};
 new GLTFLoader().load(
-  "./assets/humanoid.glb",
+  "./assets/boxer.glb",
   (gltf) => {
     const model = gltf.scene;
     // 書き出し元(humanoid-gltf-exporter)はアニメーション再生中にエクスポート
@@ -392,7 +392,7 @@ new GLTFLoader().load(
     bones.leftForearm = model.getObjectByName("LeftForearm");
   },
   undefined,
-  (err) => console.error("humanoid.glb の読み込みに失敗しました", err)
+  (err) => console.error("boxer.glb の読み込みに失敗しました", err)
 );
 
 // クリップのサンプル結果(pose: ボーン名→Quaternion、modelPosition)を、
