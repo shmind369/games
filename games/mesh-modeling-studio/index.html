@@ -126,7 +126,7 @@
       gap: 8px;
       touch-action: manipulation;
     }
-    #modeRow, #actionRow {
+    #modeRow, #viewRow, #actionRow {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -178,6 +178,10 @@
         <button id="modeVertexBtn" class="toolBtn active">頂点</button>
         <button id="modeEdgeBtn" class="toolBtn">辺</button>
         <button id="modeFaceBtn" class="toolBtn">面</button>
+      </div>
+      <div id="viewRow">
+        <button id="gridBtn" class="toolBtn">GRID</button>
+        <button id="magnetBtn" class="toolBtn">MAGNET</button>
       </div>
       <div id="actionRow">
         <button id="deleteBtn" class="toolBtn" disabled>🗑 削除</button>
