@@ -581,7 +581,8 @@ function rebuildScene() {
     const normalColor = new THREE.Color(0x4c8dff);
     for (const v of vertices) {
       const isHighlighted = pendingVerts.includes(v.id) || v.id === selectedVertexId;
-      positions.push(v.x, v.y, v.z);
+      const p = skinnedVertexPosition(v);
+      positions.push(p.x, p.y, p.z);
       const c = isHighlighted ? selectColor : normalColor;
       colors.push(c.r, c.g, c.b);
     }
@@ -601,7 +602,9 @@ function rebuildScene() {
       const va = vertices.find((v) => v.id === e.a);
       const vb = vertices.find((v) => v.id === e.b);
       if (!va || !vb) continue;
-      positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+      const pa = skinnedVertexPosition(va);
+      const pb = skinnedVertexPosition(vb);
+      positions.push(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z);
       const isSelected = e.id === selectedEdgeId;
       const c = isSelected ? new THREE.Color(0xff8a3d) : new THREE.Color(0x8fa3c8);
       colors.push(c.r, c.g, c.b, c.r, c.g, c.b);
@@ -627,7 +630,8 @@ function rebuildScene() {
       for (const vid of f.verts) {
         const v = vertices.find((vv) => vv.id === vid);
         if (!v) continue;
-        positions.push(v.x, v.y, v.z);
+        const p = skinnedVertexPosition(v);
+        positions.push(p.x, p.y, p.z);
         colors.push(c.r, c.g, c.b);
       }
     }
@@ -748,6 +752,113 @@ function rebuildRigVisual() {
   }
 }
 
+// ---------- Phase 3: メッシュのボーン追従(Rigid Skinning) ----------
+// 「完成したモデルをAIが自動解析する」のではなく、これまでと同じ
+// 半自動路線で、1頂点が属する「かたまり(連結成分)」ごとに、最も近い
+// ボーンへ100%の重みで丸ごと結びつける。頂点/辺/面は元々どの面がどの
+// ボックスに属するかという情報を持っていないが、面(`faces`)が共有する
+// 頂点をたどって連結成分を求めれば、頂点を1つも共有しない独立した
+// ボックス(今回の箱人間のような構成)は自然と1ボックス=1かたまりに
+// 分かれる。将来、1頂点が複数ボーンにまたがる重み付きスキニングへ
+// 拡張することを見据え、データ構造自体は最初から「頂点ID→(ボーンID・
+// 重み)の配列」という複数エントリを持てる形にしてある(今回は常に
+// 1エントリ・重み1.0のみを入れる)。
+let meshBindings = null; // Map<vertexId, Array<{ boneId, weight }>>
+let boneRestMatrixWorld = null; // Map<jointId, THREE.Matrix4>(TEST POSE開始時点の基準姿勢)
+
+function closestPointOnSegment3D(p, a, b) {
+  const ab = new THREE.Vector3().subVectors(b, a);
+  const lenSq = ab.lengthSq();
+  let t = lenSq > 1e-9 ? new THREE.Vector3().subVectors(p, a).dot(ab) / lenSq : 0;
+  t = Math.max(0, Math.min(1, t));
+  return a.clone().add(ab.multiplyScalar(t));
+}
+
+// 面(三角形)が共有する頂点をUnion-Findでたどり、「互いに頂点を共有する
+// 頂点の集合」ごとにグループ化する。面を持たない孤立した頂点は1頂点=
+// 1グループになる
+function buildVertexAdjacencyComponents() {
+  const parent = new Map();
+  function find(x) {
+    while (parent.get(x) !== x) {
+      parent.set(x, parent.get(parent.get(x)));
+      x = parent.get(x);
+    }
+    return x;
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  }
+  for (const v of vertices) parent.set(v.id, v.id);
+  for (const f of faces) {
+    const [a, b, c] = f.verts;
+    union(a, b);
+    union(b, c);
+  }
+  const groups = new Map();
+  for (const v of vertices) {
+    const r = find(v.id);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(v.id);
+  }
+  return Array.from(groups.values());
+}
+
+// 各ボーンを「親jointの位置→自分の位置を結ぶ線分」(親が無いRootは
+// 自分の位置だけの点)として扱い、各かたまりの重心に最も近いボーンへ、
+// そのかたまり全体を割り当てる
+function computeMeshBindings() {
+  meshBindings = new Map();
+  if (joints.length === 0 || vertices.length === 0) return;
+  const boneSegments = joints.map((j) => {
+    const parent = j.parentId != null ? joints.find((jj) => jj.id === j.parentId) : null;
+    const a = parent ? new THREE.Vector3(parent.x, parent.y, parent.z) : new THREE.Vector3(j.x, j.y, j.z);
+    const b = new THREE.Vector3(j.x, j.y, j.z);
+    return { jointId: j.id, a, b };
+  });
+  const components = buildVertexAdjacencyComponents();
+  for (const comp of components) {
+    const centroid = new THREE.Vector3();
+    for (const vid of comp) {
+      const v = vertices.find((vv) => vv.id === vid);
+      if (v) centroid.add(new THREE.Vector3(v.x, v.y, v.z));
+    }
+    centroid.divideScalar(comp.length);
+    let bestJointId = null;
+    let bestDist = Infinity;
+    for (const seg of boneSegments) {
+      const d = centroid.distanceTo(closestPointOnSegment3D(centroid, seg.a, seg.b));
+      if (d < bestDist) { bestDist = d; bestJointId = seg.jointId; }
+    }
+    if (bestJointId == null) continue;
+    for (const vid of comp) meshBindings.set(vid, [{ boneId: bestJointId, weight: 1 }]);
+  }
+}
+
+// TEST POSE中はボーンのワールド行列の変化分(現在/レスト)を頂点へ
+// そのまま適用する標準的なリニアブレンドスキニングの式(今回はボーン
+// 1本・重み1.0のみ)。TEST POSEでない、またはバインド未計算の場合は
+// レスト座標をそのまま返すため、MODELモード・RIGGING(EDIT中)の見た目は
+// 一切変化しない
+function skinnedVertexPosition(v) {
+  if (!testPoseActive || !poseBones || !meshBindings || !boneRestMatrixWorld) return new THREE.Vector3(v.x, v.y, v.z);
+  const binding = meshBindings.get(v.id);
+  if (!binding || binding.length === 0) return new THREE.Vector3(v.x, v.y, v.z);
+  const result = new THREE.Vector3();
+  let totalWeight = 0;
+  for (const { boneId, weight } of binding) {
+    const bone = poseBones.get(boneId);
+    const restMatrix = boneRestMatrixWorld.get(boneId);
+    if (!bone || !restMatrix) continue;
+    const delta = bone.matrixWorld.clone().multiply(new THREE.Matrix4().copy(restMatrix).invert());
+    result.addScaledVector(new THREE.Vector3(v.x, v.y, v.z).applyMatrix4(delta), weight);
+    totalWeight += weight;
+  }
+  if (totalWeight <= 0) return new THREE.Vector3(v.x, v.y, v.z);
+  return result.divideScalar(totalWeight);
+}
+
 // ---------- RIGGINGモードのタップ操作(関節の配置・選択・接続) ----------
 function findNearestJoint(clientX, clientY, key) {
   let nearest = null, nearestDist = Infinity;
@@ -831,6 +942,10 @@ function buildPoseBones() {
   group.updateMatrixWorld(true);
   poseBones = byId;
   poseRootGroup = group;
+  // スキニングの基準となる「レスト姿勢でのワールド行列」をここで確定する
+  // (この直後はまだ全ボーンが単位回転のため、ここが正しいレスト値になる)
+  boneRestMatrixWorld = new Map();
+  for (const [id, b] of byId) boneRestMatrixWorld.set(id, b.matrixWorld.clone());
 }
 function setTestPoseActive(v) {
   testPoseActive = v;
@@ -838,9 +953,16 @@ function setTestPoseActive(v) {
   resetPoseBtn.disabled = !v;
   poseSelectedJointId = null;
   poseDragLast = null;
-  if (v) buildPoseBones();
-  else { poseBones = null; poseRootGroup = null; }
+  if (v) {
+    buildPoseBones();
+    computeMeshBindings(); // 毎回TEST POSEに入るたびに作り直すため、その時点のボーン構成と常に一致する
+  } else {
+    poseBones = null;
+    poseRootGroup = null;
+    boneRestMatrixWorld = null;
+  }
   rebuildRigVisual();
+  rebuildScene(); // メッシュの表示をレスト/スキニング後の姿勢に合わせて更新する
   updateStatus();
 }
 function resetPose() {
@@ -848,6 +970,7 @@ function resetPose() {
   for (const b of poseBones.values()) b.quaternion.identity();
   poseRootGroup.updateMatrixWorld(true);
   rebuildRigVisual();
+  rebuildScene();
 }
 
 // 肘・膝のような1軸(ヒンジ)関節は、常にワールドX軸(このリポジトリの
@@ -877,6 +1000,7 @@ function applyPoseDrag(dx, key) {
   bone.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, dx * SENS));
   poseRootGroup.updateMatrixWorld(true);
   rebuildRigVisual();
+  rebuildScene();
 }
 
 // ---------- RIGGINGモードのリグ情報書き出し(JSON) ----------
@@ -1959,4 +2083,15 @@ window.__rig = {
   isJointHingeToggleBtnDisabled: () => jointHingeToggleBtn.disabled,
   exportRigJSON,
   isRigExportBtnDisabled: () => rigExportBtn.disabled,
+  // Phase 3(メッシュスキニング)のテスト/デバッグ用
+  getMeshBindings: () => {
+    if (!meshBindings) return null;
+    return Array.from(meshBindings.entries()).map(([vertexId, binding]) => ({ vertexId, binding: binding.map((b) => ({ ...b })) }));
+  },
+  computeMeshBindingsNow: () => { computeMeshBindings(); return window.__rig.getMeshBindings(); },
+  getSkinnedVertexPosition: (vertexId) => {
+    const v = vertices.find((vv) => vv.id === vertexId);
+    if (!v) return null;
+    return skinnedVertexPosition(v).toArray();
+  },
 };
