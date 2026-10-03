@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "./vendor/controls/OrbitControls.js";
+import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 
 // ============================================================
 // Mesh Modeling Studio — Phase 1(モデリングの基本構造)
@@ -16,6 +17,12 @@ import { OrbitControls } from "./vendor/controls/OrbitControls.js";
 // - FREEビューでの直接モデリング(タップのみ。ドラッグは既存の
 //   オービット操作のために空けておく)
 // - グリッド表示・グリッドへのスナップ(マグネット)
+//
+// さらに、Tripoで生成したGLBモデル(ボーンなし)を編集可能な頂点/辺/面
+// データとして取り込みたいという依頼を受け、GLBインポート機能を追加した。
+// 取り込んだ頂点・三角形は、通常のタップ操作で作った頂点・辺・面と完全に
+// 同じデータとして扱われ、その場で移動・削除・リギング(将来のPhase 2/3)
+// の対象にできる。
 // ============================================================
 
 // ---------- データモデル(Three.jsに依存しない、純粋なデータ) ----------
@@ -407,7 +414,17 @@ function findFaceAt(clientX, clientY, key) {
 }
 
 // ---------- シーン描画(データモデルが変化するたびに再構築する) ----------
-const vertexGeometry = new THREE.SphereGeometry(0.05, 10, 8);
+// 頂点はGLBインポートで数百〜千個規模になり得るため、1頂点1Meshではなく
+// 単一のTHREE.Points(1回の描画呼び出しで済む)で描画する。選択中/選択
+// 途中の頂点は色と点サイズの両方を変えて見分けやすくする。
+const VERTEX_POINT_SIZE = 9;
+const vertexPointsMaterial = new THREE.PointsMaterial({
+  size: VERTEX_POINT_SIZE,
+  sizeAttenuation: false, // ズーム・距離に関わらず常に一定のピクセルサイズで表示する
+  vertexColors: true,
+  depthTest: false,
+});
+let vertexPoints = null;
 const vertexGroup = new THREE.Group();
 scene.add(vertexGroup);
 let edgeLines = null;
@@ -416,17 +433,24 @@ scene.add(edgeGroup);
 let faceMesh = null;
 
 function rebuildScene() {
-  vertexGroup.clear();
-  for (const v of vertices) {
-    const isPending = pendingVerts.includes(v.id);
-    const isSelected = v.id === selectedVertexId;
-    const color = isSelected || isPending ? 0xffd24c : 0x4c8dff;
-    const mat = new THREE.MeshBasicMaterial({ color, depthTest: false });
-    const mesh = new THREE.Mesh(vertexGeometry, mat);
-    mesh.position.set(v.x, v.y, v.z);
-    mesh.renderOrder = 999;
-    if (isSelected || isPending) mesh.scale.setScalar(1.6); // 選択中/選択途中は少し大きく表示して触りやすくする
-    vertexGroup.add(mesh);
+  if (vertexPoints) { vertexPoints.geometry.dispose(); vertexGroup.remove(vertexPoints); vertexPoints = null; }
+  if (vertices.length > 0) {
+    const positions = [];
+    const colors = [];
+    const selectColor = new THREE.Color(0xffd24c);
+    const normalColor = new THREE.Color(0x4c8dff);
+    for (const v of vertices) {
+      const isHighlighted = pendingVerts.includes(v.id) || v.id === selectedVertexId;
+      positions.push(v.x, v.y, v.z);
+      const c = isHighlighted ? selectColor : normalColor;
+      colors.push(c.r, c.g, c.b);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    vertexPoints = new THREE.Points(geo, vertexPointsMaterial);
+    vertexPoints.renderOrder = 999;
+    vertexGroup.add(vertexPoints);
   }
 
   if (edgeLines) { edgeLines.geometry.dispose(); edgeLines.material.dispose(); edgeGroup.remove(edgeLines); edgeLines = null; }
@@ -499,6 +523,8 @@ const deleteBtn = document.getElementById("deleteBtn");
 const undoBtn = document.getElementById("undoBtn");
 const gridBtn = document.getElementById("gridBtn");
 const magnetBtn = document.getElementById("magnetBtn");
+const importBtn = document.getElementById("importBtn");
+const importFileInput = document.getElementById("importFileInput");
 const statsEl = document.getElementById("stats");
 const statusEl = document.getElementById("status");
 
@@ -653,6 +679,140 @@ function applyPinchPan(key, oldDist, newDist, oldMid, newMid) {
     updateOrthoCameraTransform(key);
   }
 }
+
+// ---------- GLBインポート(編集可能な頂点/辺/面としての取り込み) ----------
+// Tripo等の外部サービスで生成したGLBモデル(ボーンなし)を、手でタップして
+// 作るのと完全に同じ頂点/辺/面データとして取り込む。GLTFLoader自体は
+// Three.js本家の第三者ライブラリ(他プロジェクトと同じrevision)をそのまま
+// コピーしたものであり、取り込み後のロジック(頂点の溶接・辺の生成・
+// ビューのフィット)はこのプロジェクト用に新規実装している。
+const IMPORT_WELD_EPSILON = 1e-4; // ほぼ同じ座標の頂点は同一頂点として溶接する
+
+// GLTFのインデックス付き頂点バッファは、法線/UVが異なるだけで同じ位置に
+// 複数の頂点エントリを持つことが多い。座標を量子化したキーで同一頂点を
+// 束ねることで、隣接する三角形が正しく頂点を共有する「編集可能な」
+// トポロジーに変換する(そうしないと、頂点を動かしても隣の面が追従しない)。
+function importGeometryAsEditableMesh(geometry, matrixWorld) {
+  const posAttr = geometry.getAttribute("position");
+  if (!posAttr) return { addedFaces: 0 };
+
+  const indexAttr = geometry.getIndex();
+  const vertexIdByKey = new Map(); // 量子化した"x,y,z" -> このアプリでの頂点id
+  const localToModelId = new Array(posAttr.count).fill(-1);
+  const tmp = new THREE.Vector3();
+
+  function weldedVertexId(localIndex) {
+    if (localToModelId[localIndex] !== -1) return localToModelId[localIndex];
+    tmp.fromBufferAttribute(posAttr, localIndex).applyMatrix4(matrixWorld);
+    const key = [tmp.x, tmp.y, tmp.z].map((n) => Math.round(n / IMPORT_WELD_EPSILON)).join(",");
+    let id = vertexIdByKey.get(key);
+    if (id == null) {
+      id = addVertex(tmp.x, tmp.y, tmp.z).id;
+      vertexIdByKey.set(key, id);
+    }
+    localToModelId[localIndex] = id;
+    return id;
+  }
+
+  const triCount = Math.floor((indexAttr ? indexAttr.count : posAttr.count) / 3);
+  let addedFaces = 0;
+  for (let i = 0; i < triCount; i++) {
+    const i0 = indexAttr ? indexAttr.getX(i * 3) : i * 3;
+    const i1 = indexAttr ? indexAttr.getX(i * 3 + 1) : i * 3 + 1;
+    const i2 = indexAttr ? indexAttr.getX(i * 3 + 2) : i * 3 + 2;
+    const a = weldedVertexId(i0), b = weldedVertexId(i1), c = weldedVertexId(i2);
+    if (a === b || b === c || a === c) continue; // 溶接の結果つぶれた退化三角形は読み飛ばす
+    addEdge(a, b);
+    addEdge(b, c);
+    addEdge(c, a);
+    if (addFace(a, b, c)) addedFaces++;
+  }
+  return { addedFaces };
+}
+
+function computeVerticesBounds(ids) {
+  const box = new THREE.Box3();
+  for (const id of ids) {
+    const v = vertices.find((vv) => vv.id === id);
+    if (v) box.expandByPoint(new THREE.Vector3(v.x, v.y, v.z));
+  }
+  return box;
+}
+
+// インポートしたモデル全体が最初から各ビューに収まるよう、ズーム・パンと
+// FREEビューのオービット距離を自動調整する(手作業でズーム/パンし直す
+// 手間を省く)
+function fitViewsToBounds(box) {
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const fitZoom = (halfExtent) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, VIEW_SIZE / (Math.max(halfExtent, 0.25) * 1.3)));
+
+  viewTransform.top.zoom = fitZoom(Math.max(size.x, size.z) / 2);
+  viewTransform.top.panX = center.x;
+  viewTransform.top.panZ = center.z;
+
+  viewTransform.front.zoom = fitZoom(Math.max(size.x, size.y) / 2);
+  viewTransform.front.panX = center.x;
+  viewTransform.front.panY = center.y;
+
+  viewTransform.left.zoom = fitZoom(Math.max(size.z, size.y) / 2);
+  viewTransform.left.panY = center.y;
+  viewTransform.left.panZ = center.z;
+
+  for (const key of ["top", "front", "left"]) updateOrthoCameraTransform(key);
+
+  const maxExtent = Math.max(size.x, size.y, size.z, 0.5);
+  controls.target.copy(center);
+  const dir = freeCamera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(1, 0.7, 1);
+  dir.normalize().multiplyScalar(maxExtent * 2.2);
+  freeCamera.position.copy(center).add(dir);
+  controls.update();
+
+  setCursor(center.x, center.y, center.z);
+}
+
+function importGLTFArrayBuffer(arrayBuffer) {
+  return new Promise((resolve, reject) => {
+    const loader = new GLTFLoader();
+    loader.parse(arrayBuffer, "", (gltf) => {
+      pushUndoSnapshot();
+      const beforeVertexCount = vertices.length;
+      let addedFaces = 0;
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse((obj) => {
+        if (obj.isMesh && obj.geometry) {
+          addedFaces += importGeometryAsEditableMesh(obj.geometry, obj.matrixWorld).addedFaces;
+        }
+      });
+      const box = computeVerticesBounds(vertices.map((v) => v.id));
+      fitViewsToBounds(box);
+      rebuildScene();
+      updateDeleteBtnState();
+      updateStatus();
+      resolve({ addedVertices: vertices.length - beforeVertexCount, addedFaces });
+    }, (err) => reject(err));
+  });
+}
+
+importBtn.addEventListener("click", () => importFileInput.click());
+importFileInput.addEventListener("change", async () => {
+  const file = importFileInput.files && importFileInput.files[0];
+  importFileInput.value = ""; // 同じファイルを連続で選び直せるようにリセットしておく
+  if (!file) return;
+  statusEl.textContent = `「${file.name}」を読み込み中...`;
+  try {
+    const buf = await file.arrayBuffer();
+    const result = await importGLTFArrayBuffer(buf);
+    statusEl.textContent = `インポート完了: 頂点+${result.addedVertices} 面+${result.addedFaces}`;
+  } catch (err) {
+    console.error("GLB import failed:", err);
+    statusEl.textContent = "GLBの読み込みに失敗しました";
+  }
+});
 
 // ---------- 入力(ポインターイベント) ----------
 function setActiveView(key) {
@@ -880,4 +1040,5 @@ window.__model = {
   addVertexDirect: (x, y, z) => { pushUndoSnapshot(); const v = addVertex(x, y, z); rebuildScene(); updateStats(); return v.id; },
   addEdgeDirect: (a, b) => { pushUndoSnapshot(); const e = addEdge(a, b); rebuildScene(); updateStats(); return e ? e.id : null; },
   addFaceDirect: (a, b, c) => { pushUndoSnapshot(); const f = addFace(a, b, c); rebuildScene(); updateStats(); return f ? f.id : null; },
+  importGLTFArrayBuffer,
 };
