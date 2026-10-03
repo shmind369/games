@@ -9,6 +9,13 @@ import { OrbitControls } from "./vendor/controls/OrbitControls.js";
 // 「頂点を作る→辺を作る→面を作る」という順序で3Dモデルを組み立てる。
 // 既存のhumanoid-gltf-exporter等、他プロジェクトのコードは一切
 // 参照・流用していない(完全に独立したプロジェクト)。
+//
+// 実機でのスマートフォン操作テストを受け、以下を追加している。
+// - 頂点の選択→ドラッグ移動(全ビュー同期)
+// - TOP/FRONT/LEFTそれぞれ独立したピンチズーム・2本指パン
+// - FREEビューでの直接モデリング(タップのみ。ドラッグは既存の
+//   オービット操作のために空けておく)
+// - グリッド表示・グリッドへのスナップ(マグネット)
 // ============================================================
 
 // ---------- データモデル(Three.jsに依存しない、純粋なデータ) ----------
@@ -111,33 +118,88 @@ const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
 keyLight.position.set(3, 5, 4);
 scene.add(keyLight);
 
-// 床面の目安になるグリッド(データモデルとは無関係な、見た目専用の補助線)
-const grid = new THREE.GridHelper(6, 12, 0x555c6b, 0x33373f);
-scene.add(grid);
+// ---------- グリッド(3D空間上の実座標系に対応した3枚の平面) ----------
+// TOP編集面(Y=0)用にXZ平面、FRONT編集面(Z=0)用にXY平面、LEFT編集面(X=0)用に
+// ZY平面の3枚を用意する。GridHelperは標準でXZ平面(Y=0)に配置されるため、
+// 残り2枚はX軸・Z軸周りに90度回転させて作る。3枚とも実体のある3D
+// オブジェクトなので、FREEビューではどの角度から見ても立体的な
+// 「360度グリッド」として、直交ビューではそれぞれの基準面に対応した
+// 2D格子として正しく見える。
+const GRID_SIZE = 6;
+const GRID_DIVISIONS = 12;
+const SNAP_UNIT = GRID_SIZE / GRID_DIVISIONS; // グリッドの格子間隔とスナップ単位を一致させる(最重要要件)
+
+function makeGrid() { return new THREE.GridHelper(GRID_SIZE, GRID_DIVISIONS, 0x555c6b, 0x33373f); }
+const topGrid = makeGrid(); // XZ平面(Y=0) そのまま
+scene.add(topGrid);
+const frontGrid = makeGrid();
+frontGrid.rotation.x = Math.PI / 2; // XZ平面 → XY平面(Z=0)
+scene.add(frontGrid);
+const leftGrid = makeGrid();
+leftGrid.rotation.z = Math.PI / 2; // XZ平面 → ZY平面(X=0)
+scene.add(leftGrid);
+
+let gridVisible = true;
+function setGridVisible(v) {
+  gridVisible = v;
+  topGrid.visible = v;
+  frontGrid.visible = v;
+  leftGrid.visible = v;
+  gridBtn.classList.toggle("active", v);
+}
+
+// ---------- マグネット(グリッドスナップ) ----------
+let magnetEnabled = false;
+function snapPoint(p) {
+  if (!magnetEnabled) return p;
+  return {
+    x: Math.round(p.x / SNAP_UNIT) * SNAP_UNIT,
+    y: Math.round(p.y / SNAP_UNIT) * SNAP_UNIT,
+    z: Math.round(p.z / SNAP_UNIT) * SNAP_UNIT,
+  };
+}
+function setMagnetEnabled(v) {
+  magnetEnabled = v;
+  magnetBtn.classList.toggle("active", v);
+}
+
+// ---------- 3Dカーソル ----------
+// FREEビューでのタップは2D画面上の1点しか与えないため、奥行き(厳密には
+// 3軸のうちタップだけでは決まらない1軸)を決める基準が必要になる。
+// 「最後に作成・選択・移動した頂点の位置」を3Dカーソルとして保持し、
+// FREEビューでの新規頂点追加はこのカーソルのY座標を通る水平面との
+// 交点として配置する。TOP/FRONT/LEFTでの操作と矛盾しないよう、
+// どのビューで頂点を触ってもカーソルは追従して更新される。
+const cursorGeometry = new THREE.OctahedronGeometry(0.07, 0);
+const cursorMaterial = new THREE.MeshBasicMaterial({ color: 0xff5fd1, depthTest: false, transparent: true, opacity: 0.9 });
+const cursorMesh = new THREE.Mesh(cursorGeometry, cursorMaterial);
+cursorMesh.renderOrder = 1000;
+scene.add(cursorMesh);
+let cursor = { x: 0, y: 0, z: 0 };
+function setCursor(x, y, z) {
+  cursor = { x, y, z };
+  cursorMesh.position.set(x, y, z);
+}
 
 // ---------- 4分割ビュー用のカメラ ----------
 // TOP: X/Z平面(Y軸方向から見下ろす) / FRONT: X/Y平面(Z軸方向から見る) /
-// LEFT: Z/Y平面(X軸方向から見る) / FREE: 自由視点(確認用。編集はここでは行わない)
-const VIEW_SIZE = 3; // 正投影カメラがカバーするワールド空間の半径の目安
+// LEFT: Z/Y平面(X軸方向から見る) / FREE: 自由視点
+const VIEW_SIZE = 3; // ズーム1倍のときに正投影カメラがカバーするワールド空間の半径の目安
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 8;
 
 function makeOrthoCamera() {
   return new THREE.OrthographicCamera(-VIEW_SIZE, VIEW_SIZE, VIEW_SIZE, -VIEW_SIZE, 0.01, 100);
 }
 
 const topCamera = makeOrthoCamera();
-topCamera.position.set(0, 10, 0);
 topCamera.up.set(0, 0, -1);
-topCamera.lookAt(0, 0, 0);
 
 const frontCamera = makeOrthoCamera();
-frontCamera.position.set(0, 0, 10);
 frontCamera.up.set(0, 1, 0);
-frontCamera.lookAt(0, 0, 0);
 
 const leftCamera = makeOrthoCamera();
-leftCamera.position.set(-10, 0, 0);
 leftCamera.up.set(0, 1, 0);
-leftCamera.lookAt(0, 0, 0);
 
 const freeCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
 freeCamera.position.set(3.2, 2.6, 4.2);
@@ -149,6 +211,40 @@ const controls = new OrbitControls(freeCamera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.12;
 controls.target.set(0, 0, 0);
+
+// 各直交ビューが独立して持つズーム・パン状態(ビューごとに編集する
+// 2軸分のパンのみ保持する。もう1軸は常に0で、そのビューの基準面
+// そのものは動かない)
+const viewTransform = {
+  top: { zoom: 1, panX: 0, panZ: 0 },
+  front: { zoom: 1, panX: 0, panY: 0 },
+  left: { zoom: 1, panY: 0, panZ: 0 },
+};
+
+function updateOrthoCameraTransform(key) {
+  const t = viewTransform[key];
+  const rect = viewLayout[key];
+  if (!rect || rect.w === 0 || rect.h === 0) return;
+  const aspect = rect.w / rect.h;
+  const halfH = VIEW_SIZE / t.zoom;
+  const halfW = halfH * aspect;
+  const cam = camerasByKey[key];
+  cam.left = -halfW;
+  cam.right = halfW;
+  cam.top = halfH;
+  cam.bottom = -halfH;
+  if (key === "top") {
+    cam.position.set(t.panX, 10, t.panZ);
+    cam.lookAt(t.panX, 0, t.panZ);
+  } else if (key === "front") {
+    cam.position.set(t.panX, t.panY, 10);
+    cam.lookAt(t.panX, t.panY, 0);
+  } else if (key === "left") {
+    cam.position.set(-10, t.panY, t.panZ);
+    cam.lookAt(0, t.panY, t.panZ);
+  }
+  cam.updateProjectionMatrix();
+}
 
 // ---------- 4分割ビューのレイアウト計算(ピクセル矩形) ----------
 const viewportArea = document.getElementById("game").parentElement;
@@ -164,15 +260,7 @@ function layoutViews() {
     free: { x: halfW, y: halfH, w: w - halfW, h: h - halfH },
   };
   for (const key of ["top", "front", "left"]) {
-    const rect = viewLayout[key];
-    if (rect.w === 0 || rect.h === 0) continue;
-    const aspect = rect.w / rect.h;
-    const cam = camerasByKey[key];
-    cam.left = -VIEW_SIZE * aspect;
-    cam.right = VIEW_SIZE * aspect;
-    cam.top = VIEW_SIZE;
-    cam.bottom = -VIEW_SIZE;
-    cam.updateProjectionMatrix();
+    updateOrthoCameraTransform(key);
   }
   if (viewLayout.free.h > 0) {
     freeCamera.aspect = viewLayout.free.w / viewLayout.free.h;
@@ -225,7 +313,8 @@ function setRaycasterFromClient(clientX, clientY, key) {
 
 // 各直交ビューには、奥行き方向の軸をちょうど0に固定した平面との交点として
 // タップ位置を3D座標に変換する(humanoid-gltf-exporterの3Dカーソル配置と
-// 同じ考え方だが、このプロジェクト用に独立して実装している)
+// 同じ考え方だが、このプロジェクト用に独立して実装している)。パン・ズーム
+// はカメラの位置/画角を変えるだけなので、この平面自体は動かさなくてよい。
 const PLANE_NORMAL_BY_VIEW = {
   top: new THREE.Vector3(0, 1, 0),
   front: new THREE.Vector3(0, 0, 1),
@@ -233,7 +322,7 @@ const PLANE_NORMAL_BY_VIEW = {
 };
 function pointOnViewPlane(clientX, clientY, key) {
   const normal = PLANE_NORMAL_BY_VIEW[key];
-  if (!normal) return null; // FREEビューでは編集を行わないため対象外
+  if (!normal) return null; // FREEビューはここでは対象外(pointOnFreeViewCursorPlaneを使う)
   setRaycasterFromClient(clientX, clientY, key);
   const plane = new THREE.Plane(normal, 0);
   const hit = new THREE.Vector3();
@@ -244,11 +333,24 @@ function pointOnViewPlane(clientX, clientY, key) {
   return hit;
 }
 
+// FREEビュー用: 2D画面上のタップだけでは奥行きが決まらないため、
+// 3Dカーソルの高さ(Y)を通る水平面との交点として配置する
+function pointOnFreeViewCursorPlane(clientX, clientY) {
+  setRaycasterFromClient(clientX, clientY, "free");
+  const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -cursor.y);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(plane, hit)) return null;
+  hit.y = cursor.y;
+  return hit;
+}
+
 // ---------- 当たり判定(頂点・辺・面。いずれもスクリーン座標距離ベース) ----------
 // 見た目のマーカーより十分広いタップ許容範囲を確保する(指での操作を想定)
-const VERTEX_HIT_PX = 22;
-const EDGE_HIT_PX = 14;
-const DRAG_THRESHOLD_PX = 6;
+const VERTEX_HIT_PX = 24;
+const VERTEX_GRAB_PX = 38; // 既に選択中の頂点を再度つかむ場合は、さらに広い許容範囲にする
+const EDGE_HIT_PX = 16;
+const DRAG_THRESHOLD_PX = 8;
+const TAP_MAX_MS = 500;
 
 function findNearestVertex(clientX, clientY, key) {
   let nearest = null, nearestDist = Infinity;
@@ -323,6 +425,7 @@ function rebuildScene() {
     const mesh = new THREE.Mesh(vertexGeometry, mat);
     mesh.position.set(v.x, v.y, v.z);
     mesh.renderOrder = 999;
+    if (isSelected || isPending) mesh.scale.setScalar(1.6); // 選択中/選択途中は少し大きく表示して触りやすくする
     vertexGroup.add(mesh);
   }
 
@@ -375,20 +478,27 @@ function rebuildScene() {
 }
 
 // ---------- モード(頂点/辺/面)・選択状態 ----------
-let mode = "vertex"; // "vertex" | "edge" | "face"
+let mode = "vertex"; // "vertex" | "edge" | "face"。ビューを切り替えても維持する
 let selectedVertexId = null;
-let pendingVerts = []; // 辺/面モードで、作成途中に選んでいる頂点id
+let pendingVerts = []; // 辺/面モードで、作成途中に選んでいる頂点id(ビューをまたいで選択してよい)
 let selectedEdgeId = null;
 let selectedFaceId = null;
-let dragState = null; // { vertexId, key, beforeSnapshot }
-let pointerDownInfo = null; // { x, y, key }
+let dragState = null; // { vertexId, key, beforeSnapshot, startX, startY, startZ } (TOP/FRONT/LEFTでの頂点ドラッグのみ)
 let activeView = "free";
+
+// 複数ポインター(マルチタッチ)の追跡。2本指がそろったビューで
+// ピンチズーム・2本指パンのジェスチャーを開始する
+const activePointers = new Map(); // pointerId -> { x, y, view }
+let gesture = null; // { view, lastDist, lastMid }
+let singlePointerInfo = null; // { x, y, t, key } (1本指のタップ/ドラッグ用)
 
 const modeVertexBtn = document.getElementById("modeVertexBtn");
 const modeEdgeBtn = document.getElementById("modeEdgeBtn");
 const modeFaceBtn = document.getElementById("modeFaceBtn");
 const deleteBtn = document.getElementById("deleteBtn");
 const undoBtn = document.getElementById("undoBtn");
+const gridBtn = document.getElementById("gridBtn");
+const magnetBtn = document.getElementById("magnetBtn");
 const statsEl = document.getElementById("stats");
 const statusEl = document.getElementById("status");
 
@@ -408,6 +518,8 @@ function setMode(newMode) {
 modeVertexBtn.addEventListener("click", () => setMode("vertex"));
 modeEdgeBtn.addEventListener("click", () => setMode("edge"));
 modeFaceBtn.addEventListener("click", () => setMode("face"));
+gridBtn.addEventListener("click", () => setGridVisible(!gridVisible));
+magnetBtn.addEventListener("click", () => setMagnetEnabled(!magnetEnabled));
 
 function updateDeleteBtnState() {
   const enabled =
@@ -424,9 +536,13 @@ function updateStats() {
 }
 function updateStatus() {
   if (mode === "vertex") {
-    statusEl.textContent = selectedVertexId != null
-      ? "頂点を選択中(ドラッグで移動・🗑で削除)"
-      : "頂点モード: 空いている場所をタップして頂点を追加";
+    if (selectedVertexId != null) {
+      statusEl.textContent = "頂点を選択中(ドラッグで移動・🗑で削除)";
+    } else if (activeView === "free") {
+      statusEl.textContent = `頂点モード(FREE): タップで3Dカーソルの高さ(Y=${cursor.y.toFixed(2)})に頂点を追加`;
+    } else {
+      statusEl.textContent = "頂点モード: 空いている場所をタップして頂点を追加";
+    }
   } else if (mode === "edge") {
     statusEl.textContent = pendingVerts.length === 1
       ? "もう1つ頂点をタップして辺を作成"
@@ -458,75 +574,28 @@ deleteBtn.addEventListener("click", () => {
 });
 undoBtn.addEventListener("click", () => { performUndo(); });
 
-// ---------- 入力(タップ・ドラッグ) ----------
-function setActiveView(key) {
-  activeView = key;
-  for (const cell of document.querySelectorAll(".viewCell")) {
-    cell.classList.toggle("active", cell.dataset.view === key);
-  }
-}
-
-function onPointerDownGate(evt) {
-  const key = viewAt(evt.clientX, evt.clientY);
-  setActiveView(key);
-  // FREEビュー以外をドラッグしている間はOrbitControlsが反応しないようにする
-  controls.enabled = key === "free";
-}
-canvas.addEventListener("pointerdown", onPointerDownGate, { capture: true });
-
-function onPointerDown(evt) {
-  const key = viewAt(evt.clientX, evt.clientY);
-  if (key === "free") return; // FREEビューは確認用。ここでは編集しない
-  pointerDownInfo = { x: evt.clientX, y: evt.clientY, key };
+// ---------- タップ/選択の共通処理(TOP/FRONT/LEFT/FREEのすべてで使う) ----------
+// 頂点モードでの「既存頂点がない場所をタップ」=新規頂点追加、辺/面モードでの
+// 頂点選択の蓄積・既存の辺/面の選択は、直交ビューとFREEビューとで完全に
+// 同じロジックで扱える(当たり判定がどのカメラのkeyに対しても汎用的に
+// 書かれているため)。FREEビューでの新規頂点の奥行きだけ、3Dカーソルの
+// 高さを通る平面を使う点が異なる。
+function handleTapAction(clientX, clientY, key) {
   if (mode === "vertex") {
-    const hit = findNearestVertex(evt.clientX, evt.clientY, key);
-    if (hit) {
-      dragState = { vertexId: hit.id, key, beforeSnapshot: cloneState(), startX: hit.x, startY: hit.y, startZ: hit.z };
+    const hitV = findNearestVertex(clientX, clientY, key);
+    if (hitV) {
+      selectedVertexId = selectedVertexId === hitV.id ? null : hitV.id;
+      if (selectedVertexId != null) setCursor(hitV.x, hitV.y, hitV.z);
+      return;
     }
-  }
-}
-function onPointerMove(evt) {
-  if (!pointerDownInfo) return;
-  if (mode === "vertex" && dragState) {
-    const p = pointOnViewPlane(evt.clientX, evt.clientY, dragState.key);
-    if (p) {
-      const v = vertices.find((vv) => vv.id === dragState.vertexId);
-      if (v) {
-        if (dragState.key === "top") { v.x = p.x; v.z = p.z; }
-        else if (dragState.key === "front") { v.x = p.x; v.y = p.y; }
-        else if (dragState.key === "left") { v.y = p.y; v.z = p.z; }
-        rebuildScene();
-      }
-    }
-  }
-}
-function onPointerUp(evt) {
-  if (!pointerDownInfo) return;
-  const dx = evt.clientX - pointerDownInfo.x, dy = evt.clientY - pointerDownInfo.y;
-  const isTap = Math.hypot(dx, dy) < DRAG_THRESHOLD_PX;
-  const key = pointerDownInfo.key;
-
-  if (mode === "vertex") {
-    if (dragState) {
-      const v = vertices.find((vv) => vv.id === dragState.vertexId);
-      const moved = v && (v.x !== dragState.startX || v.y !== dragState.startY || v.z !== dragState.startZ);
-      if (moved) {
-        undoStack.push(dragState.beforeSnapshot);
-        if (undoStack.length > UNDO_LIMIT) undoStack.shift();
-        updateUndoBtnState();
-      } else if (isTap) {
-        selectedVertexId = selectedVertexId === dragState.vertexId ? null : dragState.vertexId;
-      }
-      dragState = null;
-    } else if (isTap) {
-      const p = pointOnViewPlane(evt.clientX, evt.clientY, key);
-      if (p) {
-        pushUndoSnapshot();
-        addVertex(p.x, p.y, p.z);
-      }
-    }
-  } else if (isTap && mode === "edge") {
-    const hitV = findNearestVertex(evt.clientX, evt.clientY, key);
+    const raw = key === "free" ? pointOnFreeViewCursorPlane(clientX, clientY) : pointOnViewPlane(clientX, clientY, key);
+    if (!raw) return;
+    const p = snapPoint(raw);
+    pushUndoSnapshot();
+    const v = addVertex(p.x, p.y, p.z);
+    setCursor(v.x, v.y, v.z);
+  } else if (mode === "edge") {
+    const hitV = findNearestVertex(clientX, clientY, key);
     if (hitV) {
       if (pendingVerts.includes(hitV.id)) {
         pendingVerts = pendingVerts.filter((id) => id !== hitV.id);
@@ -539,11 +608,11 @@ function onPointerUp(evt) {
         }
       }
     } else {
-      const hitE = findNearestEdge(evt.clientX, evt.clientY, key);
+      const hitE = findNearestEdge(clientX, clientY, key);
       selectedEdgeId = hitE ? hitE.id : null;
     }
-  } else if (isTap && mode === "face") {
-    const hitV = findNearestVertex(evt.clientX, evt.clientY, key);
+  } else if (mode === "face") {
+    const hitV = findNearestVertex(clientX, clientY, key);
     if (hitV) {
       if (pendingVerts.includes(hitV.id)) {
         pendingVerts = pendingVerts.filter((id) => id !== hitV.id);
@@ -556,20 +625,191 @@ function onPointerUp(evt) {
         }
       }
     } else {
-      const hitF = findFaceAt(evt.clientX, evt.clientY, key);
+      const hitF = findFaceAt(clientX, clientY, key);
       selectedFaceId = hitF ? hitF.id : null;
     }
   }
+}
 
-  pointerDownInfo = null;
+// ---------- ピンチズーム・2本指パン(TOP/FRONT/LEFTそれぞれ独立) ----------
+function dist2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function mid2(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+
+// 「ピンチ中心の下にある3D空間上の点が、指の動きに合わせて画面上の
+// 同じ位置に留まり続ける」ように、ズームとパンを1つの処理として適用する。
+// これによりピンチズーム(中心を軸にした拡大縮小)と2本指ドラッグ(平行移動)
+// の両方が、同じコードで自然に扱える。
+function applyPinchPan(key, oldDist, newDist, oldMid, newMid) {
+  const t = viewTransform[key];
+  const zoomFactor = oldDist > 1e-3 ? newDist / oldDist : 1;
+  const before = pointOnViewPlane(oldMid.x, oldMid.y, key);
+  t.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, t.zoom * zoomFactor));
+  updateOrthoCameraTransform(key);
+  const after = pointOnViewPlane(newMid.x, newMid.y, key);
+  if (before && after) {
+    if (key === "top") { t.panX += before.x - after.x; t.panZ += before.z - after.z; }
+    else if (key === "front") { t.panX += before.x - after.x; t.panY += before.y - after.y; }
+    else if (key === "left") { t.panY += before.y - after.y; t.panZ += before.z - after.z; }
+    updateOrthoCameraTransform(key);
+  }
+}
+
+// ---------- 入力(ポインターイベント) ----------
+function setActiveView(key) {
+  activeView = key;
+  for (const cell of document.querySelectorAll(".viewCell")) {
+    cell.classList.toggle("active", cell.dataset.view === key);
+  }
+  updateStatus();
+}
+
+// 新しいジェスチャー列の最初の指が触れた瞬間だけビュー判定・オービット
+// 有効/無効を切り替える(2本目以降の指が別のビューに触れても、進行中の
+// ジェスチャーの対象ビューは変えない)
+function onPointerDownGate(evt) {
+  if (activePointers.size === 0) {
+    const key = viewAt(evt.clientX, evt.clientY);
+    setActiveView(key);
+    controls.enabled = key === "free";
+  }
+}
+canvas.addEventListener("pointerdown", onPointerDownGate, { capture: true });
+
+function onPointerDown(evt) {
+  try { canvas.setPointerCapture(evt.pointerId); } catch (e) { /* 一部環境では失敗することがあるが無視してよい */ }
+  const key = viewAt(evt.clientX, evt.clientY);
+  activePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY, view: key });
+
+  if (activePointers.size === 2 && !gesture) {
+    const pts = Array.from(activePointers.values());
+    if (pts[0].view === pts[1].view && pts[0].view !== "free") {
+      // 2本指そろってTOP/FRONT/LEFTのいずれかに入った → ピンチ/パン開始。
+      // 進行中だった1本指の操作(頂点ドラッグなど)は打ち切る
+      dragState = null;
+      singlePointerInfo = null;
+      gesture = { view: pts[0].view, lastDist: dist2(pts[0], pts[1]), lastMid: mid2(pts[0], pts[1]) };
+    }
+    return;
+  }
+  if (activePointers.size > 2 || gesture) return; // 3本目以降の指は無視する
+
+  if (key === "free") {
+    // FREEビューの1本指ドラッグは既存のオービット操作のために空けておき、
+    // タップ(ごく小さい移動量・短時間)のときだけモデリング操作を行う
+    singlePointerInfo = { x: evt.clientX, y: evt.clientY, t: performance.now(), key };
+    return;
+  }
+
+  singlePointerInfo = { x: evt.clientX, y: evt.clientY, t: performance.now(), key };
+  if (mode === "vertex") {
+    let hit = findNearestVertex(evt.clientX, evt.clientY, key);
+    if (!hit && selectedVertexId != null) {
+      // 既に選択中の頂点は、多少タップ位置がずれていても掴めるようにする
+      const sv = vertices.find((v) => v.id === selectedVertexId);
+      if (sv) {
+        const s = worldToScreenInView(new THREE.Vector3(sv.x, sv.y, sv.z), key);
+        if (Math.hypot(s.x - evt.clientX, s.y - evt.clientY) <= VERTEX_GRAB_PX) hit = sv;
+      }
+    }
+    if (hit) {
+      dragState = { vertexId: hit.id, key, beforeSnapshot: cloneState(), startX: hit.x, startY: hit.y, startZ: hit.z };
+    }
+  }
+}
+canvas.addEventListener("pointerdown", onPointerDown);
+
+function onPointerMove(evt) {
+  if (activePointers.has(evt.pointerId)) {
+    const prev = activePointers.get(evt.pointerId);
+    activePointers.set(evt.pointerId, { ...prev, x: evt.clientX, y: evt.clientY });
+  }
+
+  if (gesture) {
+    const entries = Array.from(activePointers.values()).filter((p) => p.view === gesture.view);
+    if (entries.length < 2) return;
+    const [a, b] = entries;
+    const newDist = dist2(a, b);
+    const newMid = mid2(a, b);
+    applyPinchPan(gesture.view, gesture.lastDist, newDist, gesture.lastMid, newMid);
+    gesture.lastDist = newDist;
+    gesture.lastMid = newMid;
+    return;
+  }
+
+  if (!singlePointerInfo || singlePointerInfo.key === "free") return;
+  if (mode === "vertex" && dragState) {
+    const raw = pointOnViewPlane(evt.clientX, evt.clientY, dragState.key);
+    if (raw) {
+      const p = snapPoint(raw);
+      const v = vertices.find((vv) => vv.id === dragState.vertexId);
+      if (v) {
+        if (dragState.key === "top") { v.x = p.x; v.z = p.z; }
+        else if (dragState.key === "front") { v.x = p.x; v.y = p.y; }
+        else if (dragState.key === "left") { v.y = p.y; v.z = p.z; }
+        setCursor(v.x, v.y, v.z);
+        rebuildScene();
+      }
+    }
+  }
+}
+canvas.addEventListener("pointermove", onPointerMove);
+
+function onPointerUp(evt) {
+  const wasTracked = activePointers.has(evt.pointerId);
+  activePointers.delete(evt.pointerId);
+  try { canvas.releasePointerCapture(evt.pointerId); } catch (e) { /* 無視してよい */ }
+
+  if (gesture) {
+    const remaining = Array.from(activePointers.values()).filter((p) => p.view === gesture.view);
+    if (remaining.length < 2) {
+      gesture = null;
+      // ピンチ/パン終了直後に残った指で誤って頂点操作が始まらないよう、
+      // 新しい指down(0本から始まる一連の操作)が来るまで待つ
+      singlePointerInfo = null;
+      dragState = null;
+    }
+    return;
+  }
+
+  if (!wasTracked || !singlePointerInfo) return;
+  const dx = evt.clientX - singlePointerInfo.x, dy = evt.clientY - singlePointerInfo.y;
+  const dt = performance.now() - singlePointerInfo.t;
+  const isTap = Math.hypot(dx, dy) < DRAG_THRESHOLD_PX && dt < TAP_MAX_MS;
+  const key = singlePointerInfo.key;
+
+  if (key === "free") {
+    if (isTap) handleTapAction(evt.clientX, evt.clientY, "free");
+  } else if (mode === "vertex" && dragState) {
+    const v = vertices.find((vv) => vv.id === dragState.vertexId);
+    const moved = v && (v.x !== dragState.startX || v.y !== dragState.startY || v.z !== dragState.startZ);
+    if (moved) {
+      undoStack.push(dragState.beforeSnapshot);
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+      updateUndoBtnState();
+    } else if (isTap) {
+      selectedVertexId = selectedVertexId === dragState.vertexId ? null : dragState.vertexId;
+      if (selectedVertexId != null) {
+        const sv = vertices.find((vv) => vv.id === selectedVertexId);
+        if (sv) setCursor(sv.x, sv.y, sv.z);
+      }
+    }
+    dragState = null;
+  } else if (isTap) {
+    handleTapAction(evt.clientX, evt.clientY, key);
+  }
+
+  singlePointerInfo = null;
   rebuildScene();
   updateDeleteBtnState();
   updateStatus();
 }
-canvas.addEventListener("pointerdown", onPointerDown);
-canvas.addEventListener("pointermove", onPointerMove);
 canvas.addEventListener("pointerup", onPointerUp);
-canvas.addEventListener("pointercancel", () => { dragState = null; pointerDownInfo = null; });
+canvas.addEventListener("pointercancel", (evt) => {
+  activePointers.delete(evt.pointerId);
+  if (gesture && Array.from(activePointers.values()).filter((p) => p.view === gesture.view).length < 2) gesture = null;
+  dragState = null;
+  singlePointerInfo = null;
+});
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
 const VIEW_ORDER = ["top", "front", "left", "free"];
@@ -594,9 +834,11 @@ updateStats();
 updateStatus();
 updateUndoBtnState();
 updateDeleteBtnState();
+setGridVisible(true);
+setMagnetEnabled(false);
 
 // ---------- テスト/デバッグ用に主要オブジェクトを公開 ----------
-window.__scene = { scene, camerasByKey, renderer, grid };
+window.__scene = { scene, camerasByKey, renderer, topGrid, frontGrid, leftGrid };
 window.__model = {
   getVertices: () => vertices.map((v) => ({ ...v })),
   getEdges: () => edges.map((e) => ({ ...e })),
@@ -620,6 +862,20 @@ window.__model = {
     const p = pointOnViewPlane(clientX, clientY, key);
     return p ? p.toArray() : null;
   },
+  pointOnFreeViewCursorPlane: (clientX, clientY) => {
+    const p = pointOnFreeViewCursorPlane(clientX, clientY);
+    return p ? p.toArray() : null;
+  },
+  getViewTransform: (key) => ({ ...viewTransform[key] }),
+  isGridVisible: () => gridVisible,
+  setGridVisible,
+  toggleGrid: () => gridBtn.click(),
+  isMagnetEnabled: () => magnetEnabled,
+  setMagnetEnabled,
+  toggleMagnet: () => magnetBtn.click(),
+  getCursor: () => ({ ...cursor }),
+  snapPoint: (x, y, z) => snapPoint({ x, y, z }),
+  getSnapUnit: () => SNAP_UNIT,
   // 直接データを操作してテストしたい場合用(タップ操作を介さない決定論的な経路)
   addVertexDirect: (x, y, z) => { pushUndoSnapshot(); const v = addVertex(x, y, z); rebuildScene(); updateStats(); return v.id; },
   addEdgeDirect: (a, b) => { pushUndoSnapshot(); const e = addEdge(a, b); rebuildScene(); updateStats(); return e ? e.id : null; },
