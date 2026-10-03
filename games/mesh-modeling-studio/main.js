@@ -23,6 +23,11 @@ import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 // 取り込んだ頂点・三角形は、通常のタップ操作で作った頂点・辺・面と完全に
 // 同じデータとして扱われ、その場で移動・削除・リギング(将来のPhase 2/3)
 // の対象にできる。
+//
+// 続けて、ローポリゲームモデルに簡易な色を付けたいという依頼を受け、
+// 各面(Face)が単純なHexカラー文字列を保持できる面カラー機能を追加した。
+// テクスチャペイント・PBR・UV編集などは範囲外で、「面を選択→COLORボタン→
+// パレットから色を選ぶ→その面がその色になる」という最小限の操作のみ。
 // ============================================================
 
 // ---------- データモデル(Three.jsに依存しない、純粋なデータ) ----------
@@ -31,7 +36,7 @@ function genId() { return nextId++; }
 
 let vertices = []; // [{ id, x, y, z }]
 let edges = [];    // [{ id, a, b }] (a, bは頂点id)
-let faces = [];    // [{ id, verts: [a, b, c] }] (三角形のみ。頂点idの配列)
+let faces = [];    // [{ id, verts: [a, b, c], color }] (三角形のみ。colorは未設定ならnull)
 
 function addVertex(x, y, z) {
   const v = { id: genId(), x, y, z };
@@ -64,13 +69,22 @@ function addFace(a, b, c) {
   const key = [a, b, c].slice().sort((x, y) => x - y).join(",");
   const exists = faces.some((f) => f.verts.slice().sort((x, y) => x - y).join(",") === key);
   if (exists) return null; // 同じ3頂点の組み合わせの面の重複作成を防ぐ
-  const f = { id: genId(), verts: [a, b, c] };
+  const f = { id: genId(), verts: [a, b, c], color: null };
   faces.push(f);
   return f;
 }
 
 function deleteFace(id) {
   faces = faces.filter((f) => f.id !== id);
+}
+
+// 面の色を設定する(将来のGLTF/GLB書き出しを見据え、Faceが直接色を
+// 持つ単純な構造にしている。未設定(null)の面はデフォルトの表示色になる。
+// 同じ色を持つ面をまとめて1つのMaterialにする、という将来の拡張は
+// このデータ構造のままで対応できる)
+function setFaceColor(id, color) {
+  const f = faces.find((ff) => ff.id === id);
+  if (f) f.color = color;
 }
 
 // ---------- Undo(スナップショット方式) ----------
@@ -84,13 +98,13 @@ function cloneState() {
   return {
     vertices: vertices.map((v) => ({ ...v })),
     edges: edges.map((e) => ({ ...e })),
-    faces: faces.map((f) => ({ id: f.id, verts: f.verts.slice() })),
+    faces: faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null })),
   };
 }
 function restoreState(snap) {
   vertices = snap.vertices.map((v) => ({ ...v }));
   edges = snap.edges.map((e) => ({ ...e }));
-  faces = snap.faces.map((f) => ({ id: f.id, verts: f.verts.slice() }));
+  faces = snap.faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null }));
 }
 function pushUndoSnapshot() {
   undoStack.push(cloneState());
@@ -108,6 +122,7 @@ function performUndo() {
   rebuildScene();
   updateUndoBtnState();
   updateDeleteBtnState();
+  updateColorBtnState();
   updateStatus();
   return true;
 }
@@ -481,7 +496,9 @@ function rebuildScene() {
     const colors = [];
     for (const f of faces) {
       const isSelected = f.id === selectedFaceId;
-      const c = isSelected ? new THREE.Color(0xffd24c) : new THREE.Color(0x6fae6f);
+      // 選択中は既存の選択ハイライト(黄)を優先して見せ、選択を解除すると
+      // 実際に設定した色(未設定ならデフォルトの緑)が見える
+      const c = isSelected ? new THREE.Color(0xffd24c) : new THREE.Color(f.color || 0x6fae6f);
       for (const vid of f.verts) {
         const v = vertices.find((vv) => vv.id === vid);
         if (!v) continue;
@@ -525,6 +542,10 @@ const gridBtn = document.getElementById("gridBtn");
 const magnetBtn = document.getElementById("magnetBtn");
 const importBtn = document.getElementById("importBtn");
 const importFileInput = document.getElementById("importFileInput");
+const colorBtn = document.getElementById("colorBtn");
+const colorPaletteOverlay = document.getElementById("colorPaletteOverlay");
+const colorPickerInput = document.getElementById("colorPickerInput");
+const colorPaletteCloseBtn = document.getElementById("colorPaletteCloseBtn");
 const statsEl = document.getElementById("stats");
 const statusEl = document.getElementById("status");
 
@@ -539,6 +560,7 @@ function setMode(newMode) {
   modeFaceBtn.classList.toggle("active", mode === "face");
   rebuildScene();
   updateDeleteBtnState();
+  updateColorBtnState();
   updateStatus();
 }
 modeVertexBtn.addEventListener("click", () => setMode("vertex"));
@@ -553,6 +575,11 @@ function updateDeleteBtnState() {
     (mode === "edge" && selectedEdgeId != null) ||
     (mode === "face" && selectedFaceId != null);
   deleteBtn.disabled = !enabled;
+}
+function updateColorBtnState() {
+  const enabled = mode === "face" && selectedFaceId != null;
+  colorBtn.disabled = !enabled;
+  if (!enabled) closeColorPalette(); // 選択が外れたら、開いていたパレットも閉じる
 }
 function updateUndoBtnState() {
   undoBtn.disabled = undoStack.length === 0;
@@ -596,6 +623,7 @@ deleteBtn.addEventListener("click", () => {
   }
   rebuildScene();
   updateDeleteBtnState();
+  updateColorBtnState();
   updateStatus();
 });
 undoBtn.addEventListener("click", () => { performUndo(); });
@@ -814,6 +842,47 @@ importFileInput.addEventListener("change", async () => {
   }
 });
 
+// ---------- 面カラー(簡易カラーリング) ----------
+// テクスチャペイントやPBRマテリアルではなく、「面を選択→COLOR→色を選択→
+// その面がその色になる」という最小限の機能。選択中は既存の選択ハイライト
+// (黄)が優先表示されるため、パレットから色を選ぶと内部的には即座に
+// face.colorへ反映されるが、見た目の変化は選択を解除した時に確認できる
+// (選択状態がどの面かを常に分かりやすくするため、選択ハイライトを
+// 色で上書きしない方針。既存の選択表示の仕組みをそのまま使っている)。
+function openColorPalette() {
+  if (colorBtn.disabled) return;
+  colorPaletteOverlay.classList.remove("hidden");
+}
+function closeColorPalette() {
+  colorPaletteOverlay.classList.add("hidden");
+}
+function isColorPaletteOpen() {
+  return !colorPaletteOverlay.classList.contains("hidden");
+}
+function applyColorToSelectedFace(color) {
+  if (mode !== "face" || selectedFaceId == null) return;
+  pushUndoSnapshot();
+  setFaceColor(selectedFaceId, color);
+  rebuildScene();
+  closeColorPalette();
+  updateStatus();
+}
+
+colorBtn.addEventListener("click", () => {
+  if (isColorPaletteOpen()) closeColorPalette();
+  else openColorPalette();
+});
+colorPaletteOverlay.addEventListener("click", (evt) => {
+  if (evt.target === colorPaletteOverlay) closeColorPalette(); // 背景タップで閉じる
+});
+colorPaletteCloseBtn.addEventListener("click", closeColorPalette);
+for (const swatch of document.querySelectorAll(".swatchBtn")) {
+  swatch.addEventListener("click", () => applyColorToSelectedFace(swatch.dataset.color));
+}
+// 自由な色はドラッグ中(input)には適用せず、確定(change)時に1回だけ
+// Undoスナップショットを積む
+colorPickerInput.addEventListener("change", () => applyColorToSelectedFace(colorPickerInput.value));
+
 // ---------- 入力(ポインターイベント) ----------
 function setActiveView(key) {
   activeView = key;
@@ -961,6 +1030,7 @@ function onPointerUp(evt) {
   singlePointerInfo = null;
   rebuildScene();
   updateDeleteBtnState();
+  updateColorBtnState();
   updateStatus();
 }
 canvas.addEventListener("pointerup", onPointerUp);
@@ -1002,7 +1072,7 @@ window.__scene = { scene, camerasByKey, renderer, topGrid, frontGrid, leftGrid }
 window.__model = {
   getVertices: () => vertices.map((v) => ({ ...v })),
   getEdges: () => edges.map((e) => ({ ...e })),
-  getFaces: () => faces.map((f) => ({ id: f.id, verts: f.verts.slice() })),
+  getFaces: () => faces.map((f) => ({ id: f.id, verts: f.verts.slice(), color: f.color ?? null })),
   getMode: () => mode,
   setMode,
   getSelectedVertexId: () => selectedVertexId,
@@ -1041,4 +1111,11 @@ window.__model = {
   addEdgeDirect: (a, b) => { pushUndoSnapshot(); const e = addEdge(a, b); rebuildScene(); updateStats(); return e ? e.id : null; },
   addFaceDirect: (a, b, c) => { pushUndoSnapshot(); const f = addFace(a, b, c); rebuildScene(); updateStats(); return f ? f.id : null; },
   importGLTFArrayBuffer,
+  isColorBtnDisabled: () => colorBtn.disabled,
+  isColorPaletteOpen,
+  openColorPalette,
+  closeColorPalette,
+  pickColor: (color) => applyColorToSelectedFace(color),
+  getPaletteSwatchColors: () => Array.from(document.querySelectorAll(".swatchBtn")).map((b) => b.dataset.color),
+  setFaceColorDirect: (id, color) => { pushUndoSnapshot(); setFaceColor(id, color); rebuildScene(); },
 };
