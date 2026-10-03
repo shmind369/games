@@ -1546,8 +1546,39 @@ importFileInput.addEventListener("change", async () => {
 // 実現している。GLTFExporter自体はThree.js本家(他プロジェクトの
 // humanoid-gltf-exporterと同じr160)の第三者ライブラリをそのまま
 // コピーしたもの。
+//
+// RIGGINGでjointを作っている場合は、THREE.Bone階層+THREE.Skeletonを
+// 同じシーンに含め、各Mesh→SkinnedMeshに切り替えてJOINTS_0/WEIGHTS_0
+// (今回はRigid Skinningのため常に1ボーン・重み1.0)を書き込むことで、
+// 「モデルとボーンがペアリングされた状態」の1つのGLBファイルとして
+// 書き出す。joint未作成のモデルは、従来通り骨なしの静的Meshのままになる
+// (既存のMODEL専用プロジェクトの書き出しに影響を与えないための分岐)。
+function buildExportBoneHierarchy() {
+  const byId = new Map();
+  for (const j of joints) {
+    const b = new THREE.Bone();
+    b.name = j.name;
+    byId.set(j.id, b);
+  }
+  const armature = new THREE.Group();
+  armature.name = "Armature";
+  for (const j of joints) {
+    const b = byId.get(j.id);
+    if (j.parentId != null && byId.has(j.parentId)) {
+      const pj = joints.find((jj) => jj.id === j.parentId);
+      b.position.set(j.x - pj.x, j.y - pj.y, j.z - pj.z);
+      byId.get(j.parentId).add(b);
+    } else {
+      b.position.set(j.x, j.y, j.z);
+      armature.add(b);
+    }
+  }
+  armature.updateMatrixWorld(true);
+  return { armature, byId };
+}
+
 function buildExportScene() {
-  const groups = new Map(); // 色のHex文字列 -> { positions: [], indices: [], nextLocalIndex }
+  const groups = new Map(); // 色のHex文字列 -> { positions: [], indices: [], vertexIdToLocal }
   function groupFor(colorHex) {
     let g = groups.get(colorHex);
     if (!g) {
@@ -1570,13 +1601,47 @@ function buildExportScene() {
   }
 
   const scene = new THREE.Scene();
+  const hasRig = joints.length > 0;
+  let boneIndexById = null;
+  let skeleton = null;
+  if (hasRig) {
+    computeMeshBindings(); // TEST POSE中かどうかに関わらず、現在のリグ構成に基づいて結びつけ直す
+    const { armature, byId } = buildExportBoneHierarchy();
+    const boneList = joints.map((j) => byId.get(j.id));
+    boneIndexById = new Map(joints.map((j, i) => [j.id, i]));
+    skeleton = new THREE.Skeleton(boneList);
+    scene.add(armature);
+  }
+
   for (const [colorHex, g] of groups) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(g.positions, 3));
     geo.setIndex(g.indices);
     geo.computeVertexNormals();
     const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex), roughness: 1, metalness: 0 });
-    scene.add(new THREE.Mesh(geo, mat));
+
+    if (!hasRig) {
+      scene.add(new THREE.Mesh(geo, mat));
+      continue;
+    }
+
+    const localToVid = [];
+    for (const [vid, local] of g.vertexIdToLocal) localToVid[local] = vid;
+    const vertexCount = g.positions.length / 3;
+    const skinIndices = new Array(vertexCount * 4).fill(0);
+    const skinWeights = new Array(vertexCount * 4).fill(0);
+    for (let local = 0; local < vertexCount; local++) {
+      const binding = meshBindings && meshBindings.get(localToVid[local]);
+      const boneId = binding && binding.length > 0 ? binding[0].boneId : joints[0].id;
+      skinIndices[local * 4] = boneIndexById.get(boneId) ?? 0;
+      skinWeights[local * 4] = 1;
+    }
+    geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skinIndices, 4));
+    geo.setAttribute("skinWeight", new THREE.Float32BufferAttribute(skinWeights, 4));
+    mat.skinning = true;
+    const skinnedMesh = new THREE.SkinnedMesh(geo, mat);
+    skinnedMesh.bind(skeleton);
+    scene.add(skinnedMesh);
   }
   return scene;
 }
