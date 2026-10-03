@@ -297,6 +297,30 @@ fetch("./assets/boxer_parts.json")
   })
   .catch((err) => console.error("boxer_parts.json の読み込みに失敗しました", err));
 
+// ---------- 関節カバー球(肩・肘・股関節・膝) ----------
+// パーツを完全に独立したメッシュへ分割したことで、関節を大きく曲げると
+// 境界が開いて隙間が見えてしまう問題があったため、各関節のちょうど
+// ボーン位置に小さな球を置いて隙間を隠す(以前のプリミティブ版で
+// 「肩関節・肘関節・股関節・膝関節が分かるように」置いていた球と同じ
+// 仕組み)。球は「回転先(末端側)のボーン自身の原点」に、オフセット
+// 0で配置する。そのボーン自身の回転は球の位置を一切動かさない
+// (原点にあるため、回転してもその場で自転するだけ)ので、親ボーン側の
+// 回転だけで正しく追従しつつ、曲げ角度に関わらず常にその関節の真上に
+// 留まり続ける。詳細は後述「ボクサーモデルのパーツ分割リギング」を参照。
+const jointMat = new THREE.MeshStandardMaterial({ color: 0xd9a066, roughness: 0.6 });
+fetch("./assets/boxer_joints.json")
+  .then((res) => res.json())
+  .then(({ joints }) => {
+    for (const { bone: boneName, radius, center } of Object.values(joints)) {
+      const bone = boneByNameForParts[boneName];
+      if (!bone) continue;
+      const geometry = new THREE.SphereGeometry(radius, 14, 12);
+      geometry.translate(center[0], center[1], center[2]);
+      addWorldPart(geometry, jointMat, bone);
+    }
+  })
+  .catch((err) => console.error("boxer_joints.json の読み込みに失敗しました", err));
+
 // ---------- ポーズエディタ(FKによるボーン選択・回転・キーフレーム記録) ----------
 const boneNameToBone = Object.fromEntries(allBones.map((b) => [b.name, b]));
 
