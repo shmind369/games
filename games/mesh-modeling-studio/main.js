@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "./vendor/controls/OrbitControls.js";
 import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
+import { GLTFExporter } from "./vendor/exporters/GLTFExporter.js";
 
 // ============================================================
 // Mesh Modeling Studio — Phase 1(モデリングの基本構造)
@@ -432,6 +433,7 @@ function findFaceAt(clientX, clientY, key) {
 // 頂点はGLBインポートで数百〜千個規模になり得るため、1頂点1Meshではなく
 // 単一のTHREE.Points(1回の描画呼び出しで済む)で描画する。選択中/選択
 // 途中の頂点は色と点サイズの両方を変えて見分けやすくする。
+const DEFAULT_FACE_COLOR = 0x6fae6f; // 色が未設定の面のデフォルト表示色(描画・GLB書き出し共通)
 const VERTEX_POINT_SIZE = 9;
 const vertexPointsMaterial = new THREE.PointsMaterial({
   size: VERTEX_POINT_SIZE,
@@ -498,7 +500,7 @@ function rebuildScene() {
       const isSelected = f.id === selectedFaceId;
       // 選択中は既存の選択ハイライト(黄)を優先して見せ、選択を解除すると
       // 実際に設定した色(未設定ならデフォルトの緑)が見える
-      const c = isSelected ? new THREE.Color(0xffd24c) : new THREE.Color(f.color || 0x6fae6f);
+      const c = isSelected ? new THREE.Color(0xffd24c) : new THREE.Color(f.color || DEFAULT_FACE_COLOR);
       for (const vid of f.verts) {
         const v = vertices.find((vv) => vv.id === vid);
         if (!v) continue;
@@ -542,6 +544,7 @@ const gridBtn = document.getElementById("gridBtn");
 const magnetBtn = document.getElementById("magnetBtn");
 const importBtn = document.getElementById("importBtn");
 const importFileInput = document.getElementById("importFileInput");
+const exportBtn = document.getElementById("exportBtn");
 const colorBtn = document.getElementById("colorBtn");
 const colorPaletteOverlay = document.getElementById("colorPaletteOverlay");
 const colorPickerInput = document.getElementById("colorPickerInput");
@@ -720,12 +723,24 @@ const IMPORT_WELD_EPSILON = 1e-4; // ほぼ同じ座標の頂点は同一頂点�
 // 複数の頂点エントリを持つことが多い。座標を量子化したキーで同一頂点を
 // 束ねることで、隣接する三角形が正しく頂点を共有する「編集可能な」
 // トポロジーに変換する(そうしないと、頂点を動かしても隣の面が追従しない)。
-function importGeometryAsEditableMesh(geometry, matrixWorld) {
+// テクスチャを持たない単純な単色マテリアルの場合は、その色をそのまま
+// face.colorへ引き継ぐ(このアプリ自身が書き出したGLBを再インポートした
+// 際に、面カラーが正しく復元されるようにするため。テクスチャ付きの
+// マテリアルは、UV/テクスチャ自体を保持しない既存方針のまま対象外とする)
+//
+// vertexIdByKeyは1回のGLBインポート全体(複数Meshにまたがる場合も)で
+// 共有する。面カラー機能のエクスポートは、色ごとに別々のMesh(=別々の
+// 頂点バッファ)として書き出すため、色の境界をまたぐ頂点はMesh単位で
+// 溶接すると重複してしまう。ファイル全体で共有した溶接マップを使うことで、
+// 色違いの面同士が接する境界の頂点も正しく1つの編集可能な頂点にまとまる。
+function importGeometryAsEditableMesh(geometry, matrixWorld, material, vertexIdByKey) {
   const posAttr = geometry.getAttribute("position");
   if (!posAttr) return { addedFaces: 0 };
+  const flatColorHex = material && !material.map && material.color
+    ? `#${material.color.getHexString()}`
+    : null;
 
   const indexAttr = geometry.getIndex();
-  const vertexIdByKey = new Map(); // 量子化した"x,y,z" -> このアプリでの頂点id
   const localToModelId = new Array(posAttr.count).fill(-1);
   const tmp = new THREE.Vector3();
 
@@ -753,7 +768,11 @@ function importGeometryAsEditableMesh(geometry, matrixWorld) {
     addEdge(a, b);
     addEdge(b, c);
     addEdge(c, a);
-    if (addFace(a, b, c)) addedFaces++;
+    const f = addFace(a, b, c);
+    if (f) {
+      if (flatColorHex) f.color = flatColorHex;
+      addedFaces++;
+    }
   }
   return { addedFaces };
 }
@@ -810,10 +829,11 @@ function importGLTFArrayBuffer(arrayBuffer) {
       pushUndoSnapshot();
       const beforeVertexCount = vertices.length;
       let addedFaces = 0;
+      const vertexIdByKey = new Map(); // ファイル全体(複数Meshにまたがる場合も)で溶接マップを共有する
       gltf.scene.updateMatrixWorld(true);
       gltf.scene.traverse((obj) => {
         if (obj.isMesh && obj.geometry) {
-          addedFaces += importGeometryAsEditableMesh(obj.geometry, obj.matrixWorld).addedFaces;
+          addedFaces += importGeometryAsEditableMesh(obj.geometry, obj.matrixWorld, obj.material, vertexIdByKey).addedFaces;
         }
       });
       const box = computeVerticesBounds(vertices.map((v) => v.id));
@@ -839,6 +859,77 @@ importFileInput.addEventListener("change", async () => {
   } catch (err) {
     console.error("GLB import failed:", err);
     statusEl.textContent = "GLBの読み込みに失敗しました";
+  }
+});
+
+// ---------- GLBエクスポート(編集結果をゲームへ持ち出す) ----------
+// 将来のGLTF/GLB出力を見据えたFace.colorの設計を、実際に書き出せる形に
+// する。同じ色を持つ面をまとめて1つのMesh(=1つのMaterial)にすることで、
+// 「面カラー機能」のFace→Material→GLTF/GLBという拡張方針をそのまま
+// 実現している。GLTFExporter自体はThree.js本家(他プロジェクトの
+// humanoid-gltf-exporterと同じr160)の第三者ライブラリをそのまま
+// コピーしたもの。
+function buildExportScene() {
+  const groups = new Map(); // 色のHex文字列 -> { positions: [], indices: [], nextLocalIndex }
+  function groupFor(colorHex) {
+    let g = groups.get(colorHex);
+    if (!g) {
+      g = { positions: [], indices: [], vertexIdToLocal: new Map() };
+      groups.set(colorHex, g);
+    }
+    return g;
+  }
+  for (const f of faces) {
+    const colorHex = f.color || `#${DEFAULT_FACE_COLOR.toString(16).padStart(6, "0")}`;
+    const g = groupFor(colorHex);
+    for (const vid of f.verts) {
+      if (!g.vertexIdToLocal.has(vid)) {
+        const v = vertices.find((vv) => vv.id === vid);
+        g.vertexIdToLocal.set(vid, g.positions.length / 3);
+        g.positions.push(v.x, v.y, v.z);
+      }
+      g.indices.push(g.vertexIdToLocal.get(vid));
+    }
+  }
+
+  const scene = new THREE.Scene();
+  for (const [colorHex, g] of groups) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(g.positions, 3));
+    geo.setIndex(g.indices);
+    geo.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex), roughness: 1, metalness: 0 });
+    scene.add(new THREE.Mesh(geo, mat));
+  }
+  return scene;
+}
+
+function exportGLB() {
+  return new Promise((resolve, reject) => {
+    if (faces.length === 0) { reject(new Error("書き出せる面がありません")); return; }
+    const scene = buildExportScene();
+    const exporter = new GLTFExporter();
+    exporter.parse(scene, (result) => resolve(result), (err) => reject(err), { binary: true });
+  });
+}
+
+exportBtn.addEventListener("click", async () => {
+  statusEl.textContent = "GLBを書き出し中...";
+  try {
+    const arrayBuffer = await exportGLB();
+    const blob = new Blob([arrayBuffer], { type: "model/gltf-binary" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mesh-modeling-studio-export.glb";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    statusEl.textContent = "GLBを書き出しました";
+  } catch (err) {
+    console.error("GLB export failed:", err);
+    statusEl.textContent = "GLBの書き出しに失敗しました(面が1つもありません)";
   }
 });
 
@@ -1118,4 +1209,27 @@ window.__model = {
   pickColor: (color) => applyColorToSelectedFace(color),
   getPaletteSwatchColors: () => Array.from(document.querySelectorAll(".swatchBtn")).map((b) => b.dataset.color),
   setFaceColorDirect: (id, color) => { pushUndoSnapshot(); setFaceColor(id, color); rebuildScene(); },
+  // 複数の面の色を1回のUndoでまとめて設定する(colorByFaceIdは { faceId: hex } 形式)。
+  // 外部スクリプトから大量の面を一括着色する用途を想定
+  setFaceColorsDirect: (colorByFaceId) => {
+    pushUndoSnapshot();
+    for (const [idStr, color] of Object.entries(colorByFaceId)) setFaceColor(Number(idStr), color);
+    rebuildScene();
+  },
+  // モデル全体を一律倍率で拡大縮小する(頂点座標を直接書き換える)。
+  // オブジェクト全体の拡大縮小UIは今回未実装だが、インポートしたモデルを
+  // ゲームで使える大きさに揃える用途のため、データレベルの操作として用意した
+  scaleAllVerticesDirect: (factor) => {
+    pushUndoSnapshot();
+    for (const v of vertices) { v.x *= factor; v.y *= factor; v.z *= factor; }
+    rebuildScene();
+  },
+  getBoundsY: () => {
+    if (vertices.length === 0) return { minY: 0, maxY: 0 };
+    let minY = Infinity, maxY = -Infinity;
+    for (const v of vertices) { minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y); }
+    return { minY, maxY };
+  },
+  exportGLB,
+  fitViewsToCurrentBounds: () => fitViewsToBounds(computeVerticesBounds(vertices.map((v) => v.id))),
 };
