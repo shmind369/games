@@ -195,37 +195,41 @@ function bone(name, x, y, z) {
   return b;
 }
 
-// プロポーション調整(第2段): 頭を少し拡大、首を細く伸ばして肩への
-// つながりを自然にし、肩幅をさらに拡張、腕を少し伸ばして人体比率に
-// 近づけた(ボーンの名前・階層・本数は変更していない)。
+// ボーンの位置(回転の中心=関節)は、ボクサーモデル(Tripo製のTポーズ
+// メッシュ)の断面を実測して求めた実際の肩・肘・手首・股関節・膝・足首・
+// 腰・首の位置に合わせている(tools/build_boxer_parts.py が出力する値を
+// 親からのオフセットに直したもの)。以前は手作りの値のままで、メッシュの
+// 実際の関節とずれていたため、膝や肘を曲げるとパーツが関節から離れた
+// 位置で振り回され、メッシュが千切れたように見えていた。ボーンの名前・
+// 階層・本数は変更していない。
 // GLBインポート機能の追加により、「読み込んだモデルに差し替え」→
 // 「🥊でボクサーに戻す」を何度でも行えるようにするため、以前は
 // モジュール最上位で1回だけ実行していたボーン構築を関数化した
 // (ルートボーンを1つ返すだけで、rootへの追加はしない)
 function buildBoxerBoneHierarchy() {
   const hips = bone("Hips", 0, 0.92, 0);
-  const spine = bone("Spine", 0, 0.13, 0);
-  const chest = bone("Chest", 0, 0.17, 0);
-  const neck = bone("Neck", 0, 0.19, 0);
-  const head = bone("Head", 0, 0.15, 0);
+  const spine = bone("Spine", 0, 0.08, 0);
+  const chest = bone("Chest", 0, 0.15, 0);
+  const neck = bone("Neck", 0, 0.18, -0.05);
+  const head = bone("Head", 0, 0.05, 0.05);
 
-  const leftShoulder = bone("LeftShoulder", 0.195, 0.13, 0);
-  const leftUpperArm = bone("LeftUpperArm", 0.07, 0, 0);
-  const leftForearm = bone("LeftForearm", 0, -0.29, 0);
-  const leftHand = bone("LeftHand", 0, -0.27, 0);
+  const leftShoulder = bone("LeftShoulder", 0.09, 0.137, -0.038);
+  const leftUpperArm = bone("LeftUpperArm", 0.13, 0, 0);
+  const leftForearm = bone("LeftForearm", 0.0303, -0.2181, -0.0029);
+  const leftHand = bone("LeftHand", 0.0295, -0.1674, 0.0041);
 
-  const rightShoulder = bone("RightShoulder", -0.195, 0.13, 0);
-  const rightUpperArm = bone("RightUpperArm", -0.07, 0, 0);
-  const rightForearm = bone("RightForearm", 0, -0.29, 0);
-  const rightHand = bone("RightHand", 0, -0.27, 0);
+  const rightShoulder = bone("RightShoulder", -0.09, 0.137, -0.038);
+  const rightUpperArm = bone("RightUpperArm", -0.13, 0, 0);
+  const rightForearm = bone("RightForearm", -0.0303, -0.2181, -0.0029);
+  const rightHand = bone("RightHand", -0.0295, -0.1674, 0.0041);
 
-  const leftUpperLeg = bone("LeftUpperLeg", 0.10, -0.02, 0);
-  const leftLowerLeg = bone("LeftLowerLeg", 0, -0.43, 0);
-  const leftFoot = bone("LeftFoot", 0, -0.43, 0.045);
+  const leftUpperLeg = bone("LeftUpperLeg", 0.0992, -0.08, -0.0009);
+  const leftLowerLeg = bone("LeftLowerLeg", 0.0435, -0.39, -0.0459);
+  const leftFoot = bone("LeftFoot", 0.0266, -0.32, 0.015);
 
-  const rightUpperLeg = bone("RightUpperLeg", -0.10, -0.02, 0);
-  const rightLowerLeg = bone("RightLowerLeg", 0, -0.43, 0);
-  const rightFoot = bone("RightFoot", 0, -0.43, 0.045);
+  const rightUpperLeg = bone("RightUpperLeg", -0.0992, -0.08, -0.0009);
+  const rightLowerLeg = bone("RightLowerLeg", -0.0435, -0.39, -0.0459);
+  const rightFoot = bone("RightFoot", -0.0266, -0.32, 0.015);
 
   hips.add(spine, leftUpperLeg, rightUpperLeg);
   spine.add(chest);
@@ -297,7 +301,7 @@ function bindToSingleBone(geometry, bone, skel) {
 // キャラクターを簡単かつ安定して動かせるようにしてほしい(身体パーツを
 // 独立したメッシュとして扱い、各パーツを対応するボーンに直接追従させる)」
 // という依頼を受け、Tripo製ボクサーモデル(third-person-boxer-3dで使用した
-// ものと同じ.glb)を一度だけオフラインで処理し、ボーンと同じ名前の16個の
+// ものと同じ.glb)を一度だけオフラインで処理し、ボーンと同じ名前の17個の
 // メッシュ片(assets/boxer_parts.json、頂点座標はこのスケルトンのレスト
 // ポーズに合わせて事前に配置・回転済み)として書き出したものを読み込む。
 // 1頂点=1ボーンの100%ウェイトで結びつける点は、以前のプリミティブ版と
