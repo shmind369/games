@@ -71,17 +71,10 @@
       right: 10px;
       z-index: 10;
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: flex-start;
       gap: 8px;
       pointer-events: none;
-    }
-    #title {
-      font-size: 12px;
-      font-weight: 600;
-      opacity: 0.8;
-      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
-      padding-top: 6px;
     }
     #hudRight {
       display: flex;
@@ -89,13 +82,10 @@
       gap: 8px;
       pointer-events: auto;
     }
-    #boneInfo {
-      font-size: 11px;
-      opacity: 0.85;
-      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
-      text-align: right;
-      padding-top: 6px;
-    }
+    /* 「選択中のボーン」表示は、タイムラインドックのボーン選択(boneSelect)が
+       同じ情報を常に示しているため、3Dビューを覆わないよう非表示にしている
+       (main.jsが更新するselectedBoneLabel要素自体は互換のため残す) */
+    #boneInfo { display: none; }
     #exportBtn, #animMenuBtn, #importModelBtn, #resetModelBtn {
       flex: 0 0 auto;
       width: 40px;
@@ -167,27 +157,20 @@
     }
     #animPanel button:active { transform: scale(0.94); }
 
-    /* poseBarは3Dビュー上の一部にしか置かないよう、左上に小さく収める
-       (全幅に広げると、その帯の下にある3Dビューへのタップを奪ってしまうため) */
+    /* ボーン選択とPOSE/MOVE切替は、以前は3Dビュー左上に重ねていたが、
+       TOPビューの作業領域を覆ってしまうため、タイムラインドックの
+       読み出し行(Frame表示とTime表示の間)へ移した */
     #poseBar {
-      position: absolute;
-      top: max(52px, calc(env(safe-area-inset-top) + 44px));
-      left: 10px;
-      max-width: min(58%, 220px);
-      z-index: 10;
+      min-width: 0;
       display: flex;
       align-items: center;
-      gap: 6px;
-      background: rgba(20,22,28,0.55);
-      border-radius: 999px;
-      padding: 6px 10px;
-      pointer-events: auto;
     }
     #poseBar select {
       font: inherit;
       font-size: 11px;
       flex: 1 1 auto;
       min-width: 0;
+      max-width: 180px;
       background: #2a2e38;
       color: #eee;
       border: none;
@@ -196,27 +179,21 @@
       touch-action: manipulation;
     }
 
-    /* [POSE]/[MOVE]モード切替。poseBarと同様、左上に小さく収めて
-       3Dビューへのタップを奪わないようにする */
+    /* [POSE]/[MOVE]モード切替(poseBarと同じくタイムラインドックの読み出し行) */
     #modeBar {
-      position: absolute;
-      top: max(92px, calc(env(safe-area-inset-top) + 84px));
-      left: 10px;
-      z-index: 10;
       display: flex;
-      gap: 3px;
-      background: rgba(20,22,28,0.55);
+      gap: 2px;
+      background: #2a2e38;
       border-radius: 999px;
-      padding: 4px;
-      pointer-events: auto;
+      padding: 2px;
     }
     .modeBtn {
       font: inherit;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.02em;
-      padding: 6px 12px;
-      min-height: 32px;
+      padding: 4px 10px;
+      min-height: 30px;
       border: none;
       border-radius: 999px;
       background: transparent;
@@ -286,13 +263,21 @@
       touch-action: none;
       overflow: hidden; /* 高さを伸縮しても内部要素がはみ出さないようにする保険 */
     }
+    /* 左列にFrame/Timeを上下2段で置き、残りの横幅をボーン選択とPOSE/MOVE
+       切替に使う(幅の狭いスマートフォンでもボーン名が読める幅を確保する) */
     #timelineReadout {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-rows: auto auto;
+      align-items: center;
+      column-gap: 8px;
       font-size: 11px;
       padding: 2px 2px 0;
     }
+    #frameReadout { grid-column: 1; grid-row: 1; white-space: nowrap; }
+    #timeReadout { grid-column: 1; grid-row: 2; white-space: nowrap; }
+    #poseBar { grid-column: 2; grid-row: 1 / span 2; }
+    #modeBar { grid-column: 3; grid-row: 1 / span 2; }
     #frameReadout {
       font-weight: 700;
       font-size: 13px;
@@ -378,7 +363,6 @@
       </div>
 
       <div id="hud">
-        <div id="title">Humanoid glTF Exporter</div>
         <div id="hudRight">
           <div id="boneInfo">選択中のボーン<br /><span id="selectedBoneLabel">なし</span></div>
           <button id="importModelBtn" title="GLB/glTFモデルを読み込む(現在のモデルと差し替え。ボーン名・本数は問わない)">📥</button>
@@ -388,19 +372,6 @@
           <button id="exportBtn" title="3Dモデルを書き出す(.glb / メッシュ・マテリアル・ボーン構造のみ)">⇩</button>
         </div>
       </div>
-      <div id="poseBar">
-        <select id="boneSelect">
-          <option value="">(ボーン未選択)</option>
-        </select>
-      </div>
-      <!-- POSE: 選択した関節を3軸回転させる(既存の操作)。
-           MOVE: 現在のポーズ(各ボーンの回転・キーフレーム)を一切変更せず、
-           モデル全体(ModelTransform)の位置だけをドラッグで移動する -->
-      <div id="modeBar">
-        <button id="modePoseBtn" class="modeBtn active">POSE</button>
-        <button id="modeMoveBtn" class="modeBtn">MOVE</button>
-      </div>
-
       <!-- アニメーション管理パネル: 3Dモデル(character.glb)とは別データとして、
            ボーン名・キーフレーム・FPS・アニメーション長だけを持つ「アニメーション」を
            複数名前付きで保存・切替・書き出し(.json)・読み込み(.json)できるようにする。
@@ -434,6 +405,18 @@
     <div id="timelineDock">
       <div id="timelineReadout">
         <span id="frameReadout">Frame: 0 / 60</span>
+        <div id="poseBar">
+          <select id="boneSelect">
+            <option value="">(ボーン未選択)</option>
+          </select>
+        </div>
+        <!-- POSE: 選択した関節を3軸回転させる(既存の操作)。
+             MOVE: 現在のポーズ(各ボーンの回転・キーフレーム)を一切変更せず、
+             モデル全体(ModelTransform)の位置だけをドラッグで移動する -->
+        <div id="modeBar">
+          <button id="modePoseBtn" class="modeBtn active">POSE</button>
+          <button id="modeMoveBtn" class="modeBtn">MOVE</button>
+        </div>
         <span id="timeReadout">Time: 0.000s</span>
       </div>
       <div id="timelineButtons">
