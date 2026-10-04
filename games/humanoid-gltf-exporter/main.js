@@ -197,7 +197,7 @@ function bone(name, x, y, z) {
 
 // ボーンの位置(回転の中心=関節)は、ボクサーモデル(Tripo製のTポーズ
 // メッシュ)の断面を実測して求めた実際の肩・肘・手首・股関節・膝・足首・
-// 腰・首の位置に合わせている(tools/build_boxer_parts.py が出力する値を
+// 腰・首の位置に合わせている(tools/tpose_rig.py が出力する値を
 // 親からのオフセットに直したもの)。以前は手作りの値のままで、メッシュの
 // 実際の関節とずれていたため、膝や肘を曲げるとパーツが関節から離れた
 // 位置で振り回され、メッシュが千切れたように見えていた。ボーンの名前・
@@ -1868,7 +1868,36 @@ resize();
 setCurrentTime(0); // 初期状態のフレーム表示・目盛を描画しておく
 updateUndoBtnState(); // 初期状態ではUndo履歴が空のためボタンを無効化しておく
 updateDeleteKeyframeBtnState(); // 初期状態ではキーフレーム未選択のためボタンを無効化しておく
-loadBoxerModel(); // 初期表示は従来通りボクサーモデル
+// ---------- URLパラメータでリグ済みモデルを開く(?model=box_usa など) ----------
+// tools/tpose_rig.py でボーンを入れたGLBを assets/<名前>_rigged.glb に置いておくと、
+// index.html?model=<名前> を開くだけで、📥でファイルを選ばなくても最初から
+// そのモデルを読み込んだ状態で始められる(読み込み処理自体は📥と同じ)。
+// ボクサーのパーツ読み込み(fetch)と並行させると、後から届いたボクサーの
+// パーツが差し替え後のモデルに混ざってしまうため、指定があるときは
+// ボクサーを読み込まない(読み込みに失敗した場合だけボクサーに戻す)
+const initialModelName = new URLSearchParams(location.search).get("model");
+if (initialModelName && /^[\w-]+$/.test(initialModelName)) {
+  const url = `./assets/${initialModelName}_rigged.glb`;
+  statusEl.textContent = `「${initialModelName}」を読み込み中...`;
+  fetch(url)
+    .then((res) => {
+      if (!res.ok) throw new Error(`${url}: ${res.status}`);
+      return res.arrayBuffer();
+    })
+    .then((buffer) => new Promise((resolve, reject) => gltfLoader.parse(buffer, "", resolve, reject)))
+    .then((gltf) => {
+      loadModelFromGLTFScene(gltf.scene);
+      statusEl.textContent = `「${initialModelName}」を読み込みました(ボーン${allBones.length}本)`;
+    })
+    .catch((err) => {
+      console.error("リグ済みモデルの読み込みに失敗しました", err);
+      loadBoxerModel();
+      statusEl.textContent = `「${initialModelName}」の読み込みに失敗しました`;
+    })
+    .finally(() => setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000));
+} else {
+  loadBoxerModel(); // 初期表示は従来通りボクサーモデル
+}
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
 const VIEW_ORDER = ["top", "front", "left", "free"];
