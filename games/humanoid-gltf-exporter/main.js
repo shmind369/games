@@ -464,6 +464,17 @@ function loadModelFromGLTFScene(gltfScene) {
   gltfScene.updateMatrixWorld(true);
   const { bones, meshes, rootBones } = extractSkinnedContent(gltfScene);
   if (meshes.length === 0) throw new Error("メッシュが見つかりませんでした");
+  // ボーン(スケルトン)を持たない静的メッシュのGLBは、エラーなく読み込め
+  // てしまうとポーズを付ける対象が0個のまま現在のモデルを上書きしてしまい、
+  // 「読み込めたのに何も操作できない」という分かりにくい状態になる。
+  // それよりも、現在のモデルは差し替えずにはっきり理由を伝える方が親切
+  // なので、ここで明示的に失敗として扱う
+  if (bones.length === 0) {
+    throw new Error(
+      "ボーン(スケルトン)が見つかりませんでした。先にBlenderなどでリグ" +
+      "(ボーンの追加とスキニング)を済ませたGLBを読み込んでください。"
+    );
+  }
 
   clearCurrentModel();
 
@@ -1846,7 +1857,11 @@ importModelFileEl.addEventListener("change", async () => {
     statusEl.textContent = `「${file.name}」を読み込みました(ボーン${allBones.length}本)`;
   } catch (err) {
     console.error("GLBモデルの読み込みに失敗しました", err);
-    statusEl.textContent = "GLBモデルの読み込みに失敗しました";
+    statusEl.textContent = err && err.message
+      ? `読み込めませんでした: ${err.message}`
+      : "GLBモデルの読み込みに失敗しました";
+    setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 6000);
+    return;
   }
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
 });
