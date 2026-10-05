@@ -1499,6 +1499,45 @@ function fitViewsToBounds(box) {
   setCursor(center.x, center.y, center.z);
 }
 
+// 読み込んだGLBが既にボーン(glTF Skeleton/Skin)を持っている場合、そのボーンの
+// レスト姿勢でのワールド座標をそのままjointsとして取り込む。「どの頂点が
+// どのボーンに属するか」(meshBindings/重み)は取り込まず、既存のRIGGINGモード
+// 通りjoints配置に基づいて後から自動計算させる(=位置を動かせば帰属も
+// その新しい位置に追従する、という既存の設計をそのまま活かす)。これにより、
+// 他ツール(例: Blenderでの自動ウェイト付けリグ)で作ったボーン入りGLBを
+// 読み込んで、関節の位置・長さ(=親子の位置関係)だけをRIGGINGモードの
+// 既存のドラッグ操作でズレ調整できるようになる
+function importSkeletonJoints(gltfScene) {
+  const skeletons = new Set();
+  gltfScene.traverse((obj) => {
+    if (obj.isSkinnedMesh && obj.skeleton) skeletons.add(obj.skeleton);
+  });
+  let addedJoints = 0;
+  const worldPos = new THREE.Vector3();
+  for (const skeleton of skeletons) {
+    const bones = skeleton.bones;
+    const boneSet = new Set(bones);
+    const jointIdByBone = new Map();
+    // 1周目: 全ボーンをルート扱い(parentId=null)でまず作る
+    for (const bone of bones) {
+      bone.getWorldPosition(worldPos);
+      const name = bone.name || `Bone${bones.indexOf(bone) + 1}`;
+      const j = addJoint(name, worldPos.x, worldPos.y, worldPos.z, null, sideOfX(worldPos.x));
+      jointIdByBone.set(bone, j.id);
+      addedJoints++;
+    }
+    // 2周目: 親もこのスケルトン内のボーンである場合だけ親子関係を張り直す
+    // (ボーンの親がArmatureノード等、スケルトン外のオブジェクトの場合はRootのまま)
+    for (const bone of bones) {
+      if (bone.parent && boneSet.has(bone.parent)) {
+        const j = joints.find((jj) => jj.id === jointIdByBone.get(bone));
+        j.parentId = jointIdByBone.get(bone.parent);
+      }
+    }
+  }
+  return addedJoints;
+}
+
 function importGLTFArrayBuffer(arrayBuffer) {
   return new Promise((resolve, reject) => {
     const loader = new GLTFLoader();
@@ -1513,12 +1552,14 @@ function importGLTFArrayBuffer(arrayBuffer) {
           addedFaces += importGeometryAsEditableMesh(obj.geometry, obj.matrixWorld, obj.material, vertexIdByKey).addedFaces;
         }
       });
+      const addedJoints = importSkeletonJoints(gltf.scene);
       const box = computeVerticesBounds(vertices.map((v) => v.id));
       fitViewsToBounds(box);
       rebuildScene();
       updateDeleteBtnState();
       updateStatus();
-      resolve({ addedVertices: vertices.length - beforeVertexCount, addedFaces });
+      if (addedJoints > 0) setAppMode("rigging"); // 取り込んだボーンがすぐ見える・ドラッグできるようRIGGINGモードへ
+      resolve({ addedVertices: vertices.length - beforeVertexCount, addedFaces, addedJoints });
     }, (err) => reject(err));
   });
 }
@@ -1532,7 +1573,8 @@ importFileInput.addEventListener("change", async () => {
   try {
     const buf = await file.arrayBuffer();
     const result = await importGLTFArrayBuffer(buf);
-    statusEl.textContent = `インポート完了: 頂点+${result.addedVertices} 面+${result.addedFaces}`;
+    statusEl.textContent = `インポート完了: 頂点+${result.addedVertices} 面+${result.addedFaces}`
+      + (result.addedJoints > 0 ? ` ボーン+${result.addedJoints}(RIGGINGモードでドラッグして調整できます)` : "");
   } catch (err) {
     console.error("GLB import failed:", err);
     statusEl.textContent = "GLBの読み込みに失敗しました";
