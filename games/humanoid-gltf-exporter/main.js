@@ -1830,6 +1830,46 @@ animImportFileEl.addEventListener("change", async () => {
 
 refreshAnimSelect();
 
+// ---------- 同梱アニメーション(assets/animations/<名前>.json) ----------
+// 書き出しと同じ形式のJSONをアプリに同梱しておき、起動時にアニメーション
+// 管理パネルの一覧へ追加する(📂でタイムラインへ読込→▶で再生→📤で書き出し)。
+// index.html?anim=<名前> を開いた場合は、そのアニメーションを最初から
+// タイムラインへ読み込み、アニメーション名欄にも名前を入れておく
+// (そのまま📤を押すと <名前>.json として書き出せる)
+const BUILTIN_ANIMATIONS = ["leftPunch"];
+// 初期モデルの読み込み(?model=指定時は非同期)が終わる前にアニメーションを
+// タイムラインへ読み込むと、モデル差し替え時のclearCurrentModelでキーフレームが
+// 消えてしまうため、?anim=の読み込みはモデルの準備完了を待ってから行う
+let resolveInitialModelReady;
+const initialModelReady = new Promise((resolve) => { resolveInitialModelReady = resolve; });
+const initialAnimName = new URLSearchParams(location.search).get("anim");
+for (const animName of BUILTIN_ANIMATIONS) {
+  fetch(`./assets/animations/${animName}.json`)
+    .then((res) => {
+      if (!res.ok) throw new Error(`${animName}.json: ${res.status}`);
+      return res.json();
+    })
+    .then((json) => {
+      const fps = json.fps || FPS;
+      const anim = {
+        name: json.name || animName,
+        fps,
+        totalFrames: json.totalFrames || TOTAL_FRAMES,
+        keyframes: (json.keyframes || []).map((k) => ({ time: k.time ?? k.frame / fps, pose: k.pose || null, modelPosition: k.modelPosition || null })),
+      };
+      if (!animations.some((a) => a.name === anim.name)) animations.push(anim);
+      refreshAnimSelect();
+      if (initialAnimName === anim.name) return initialModelReady.then(() => {
+        loadAnimationData(anim);
+        animSelectEl.value = anim.name;
+        animNameInputEl.value = anim.name;
+        statusEl.textContent = `アニメーション「${anim.name}」を読み込みました(▶で再生)`;
+        setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
+      });
+    })
+    .catch((err) => console.error("同梱アニメーションの読み込みに失敗しました", err));
+}
+
 // ---------- GLBインポート(モデルの差し替え) ----------
 // 読み込んだGLBのボーン名・本数が今のモデルと一致していなくても、
 // applyPoseObject等が存在するボーン名だけを安全に適用する既存の仕組み
@@ -1909,9 +1949,11 @@ if (initialModelName && /^[\w-]+$/.test(initialModelName)) {
       loadBoxerModel();
       statusEl.textContent = `「${initialModelName}」の読み込みに失敗しました`;
     })
+    .then(() => resolveInitialModelReady())
     .finally(() => setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000));
 } else {
   loadBoxerModel(); // 初期表示は従来通りボクサーモデル
+  resolveInitialModelReady();
 }
 
 // ---------- レンダーループ(4分割ビューを同じシーンに対して順に描画) ----------
