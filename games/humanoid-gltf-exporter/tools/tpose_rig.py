@@ -8,6 +8,7 @@
 
     # box_usa: ボーン・スキン入りのGLBを書き出す(アプリの📥で読み込める)
     python3 tools/tpose_rig.py box_usa path/to/box_usa.glb assets/box_usa_rigged.glb
+    python3 tools/tpose_rig.py china path/to/china_rig.glb assets/china_rigged.glb
 
 以前の前処理は、三角形を3頂点の多数決でパーツへ丸ごと割り当てていたうえ、
 切れ目の位置とボーンの回転中心(関節)が一致していなかったため、関節を曲げると
@@ -41,6 +42,23 @@ PRESETS = {
         HIP_Y=0.85, KNEE_Y=0.50, ANKLE_Y=0.14,
         SPINE_Y=1.05, CHEST_Y=1.20, NECK_Y=1.42, HEAD_Y=1.48,
         NECK_HALF_W=0.10, ARM_MIN_Y=1.10, HIPS_Y=0.95,
+    ),
+    # china: ユーザー提供の関節位置の図(頭・首・肩・肘・手首・胸・腰・股関節・膝・
+    # 足首)を、メッシュの断面で確かめながら決めた。肩は腕の付け根(脇の位置)、
+    # 腰(骨盤)=Hips、胸=Chest。図にない背骨(Spine)は帯のくびれに置いた
+    "china": dict(
+        SHOULDER_X=0.18, ELBOW_X=0.42, WRIST_X=0.57,
+        HIP_Y=0.84, KNEE_Y=0.50, ANKLE_Y=0.15,
+        SPINE_Y=1.08, CHEST_Y=1.20, NECK_Y=1.33, HEAD_Y=1.37,
+        NECK_HALF_W=0.10, ARM_MIN_Y=1.10, HIPS_Y=0.94,
+        HIP_X=0.125,
+        # 腰から膝上まで垂れている前後・左右の布(前掛け)は、太ももと同じ
+        # 高さにあるが脚ではないため、太ももの軸(股関節→膝)からこの距離より
+        # 離れた三角形は太ももではなく腰(Hips)に付ける。左右の脚の境界(x=0)で
+        # 前掛けが縦に裂けて片側だけ脚と一緒に動くのを防ぐため
+        SKIRT_RADIUS=0.13,
+        HEAD_ALL_X=True,
+        JOINT_TEXTURE_UV=True,
     ),
 }
 MARGIN = 0.02       # 子パーツを親側へはみ出させる重なり幅(曲げたときの隙間対策)
@@ -129,12 +147,17 @@ def rig(src, c):
         (cl, el), (cr, er) = section_center(axis, val, filt_l), section_center(axis, val * (-1 if axis == 0 else 1), filt_r)
         return np.array([(cl[0] - cr[0]) / 2, (cl[1] + cr[1]) / 2, (cl[2] + cr[2]) / 2]), (el + er) / 2
 
-    up = lambda p: p[1] > 1.1
+    if c.get("HEAD_ALL_X"):  # 肩の高さまで垂れる髪を腕の断面に含めない
+        up = lambda p: c["ARM_MIN_Y"] < p[1] < c["HEAD_Y"]
+    else:
+        up = lambda p: p[1] > 1.1
     L, R = (lambda p: p[0] > 0), (lambda p: p[0] < 0)
     shoulder, shoulder_e = sym(0, c["SHOULDER_X"], up, up)
     elbow, elbow_e = sym(0, c["ELBOW_X"], up, up)
     wrist, _ = sym(0, c["WRIST_X"], up, up)
     hip, _ = sym(1, c["HIP_Y"], L, R)
+    if "HIP_X" in c:  # 前掛けなどで股関節の断面が測れないモデルは、図から読んだ値を使う
+        hip = np.array([c["HIP_X"], c["HIP_Y"], 0.0])
     knee, knee_e = sym(1, c["KNEE_Y"], L, R)
     ankle, _ = sym(1, c["ANKLE_Y"], L, R)
     neck_c, _ = section_center(1, c["NECK_Y"], lambda p: abs(p[0]) < c["NECK_HALF_W"])
@@ -161,6 +184,7 @@ def rig(src, c):
     SX, EX, WX = c["SHOULDER_X"], c["ELBOW_X"], c["WRIST_X"]
     HY, KY, AY = c["HIP_Y"], c["KNEE_Y"], c["ANKLE_Y"]
     SY, CY, NY, HDY, NW, AMY = c["SPINE_Y"], c["CHEST_Y"], c["NECK_Y"], c["HEAD_Y"], c["NECK_HALF_W"], c["ARM_MIN_Y"]
+    arm_top = [below(HDY)] if c.get("HEAD_ALL_X") else []  # 頭の範囲(髪など)を腕に含めない
     regions = {
         "Hips": [[above(HY), below(SY), right_of(-SX), left_of(SX)]],
         "Spine": [[above(SY, M), below(CY), right_of(-SX), left_of(SX)]],
@@ -168,13 +192,14 @@ def rig(src, c):
                   [above(NY), below(HDY), right_of(NW), left_of(SX)],
                   [above(NY), below(HDY), right_of(-SX), left_of(-NW)]],
         "Neck": [[above(NY, M), below(HDY), right_of(-NW), left_of(NW)]],
-        "Head": [[above(HDY, M), right_of(-SX), left_of(SX)]],
-        "LeftUpperArm": [[above(AMY), right_of(SX, M), left_of(EX)]],
-        "LeftForearm": [[above(AMY), right_of(EX, M), left_of(WX)]],
-        "LeftHand": [[above(AMY), right_of(WX, M)]],
-        "RightUpperArm": [[above(AMY), left_of(-SX, M), right_of(-EX)]],
-        "RightForearm": [[above(AMY), left_of(-EX, M), right_of(-WX)]],
-        "RightHand": [[above(AMY), left_of(-WX, M)]],
+        # HEAD_ALL_X: 頭をX方向に制限しない(肩幅より外まで垂れる髪・リボンも頭に付ける)
+        "Head": [[above(HDY, M)] + ([] if c.get("HEAD_ALL_X") else [right_of(-SX), left_of(SX)])],
+        "LeftUpperArm": [[above(AMY), *arm_top, right_of(SX, M), left_of(EX)]],
+        "LeftForearm": [[above(AMY), *arm_top, right_of(EX, M), left_of(WX)]],
+        "LeftHand": [[above(AMY), *arm_top, right_of(WX, M)]],
+        "RightUpperArm": [[above(AMY), *arm_top, left_of(-SX, M), right_of(-EX)]],
+        "RightForearm": [[above(AMY), *arm_top, left_of(-EX, M), right_of(-WX)]],
+        "RightHand": [[above(AMY), *arm_top, left_of(-WX, M)]],
         "LeftUpperLeg": [[below(HY, M), above(KY), right_of(0)]],
         "LeftLowerLeg": [[below(KY, M), above(AY), right_of(0)]],
         "LeftFoot": [[below(AY, M), right_of(0)]],
@@ -183,6 +208,18 @@ def rig(src, c):
         "RightFoot": [[below(AY, M), left_of(0)]],
     }
     parts = {name: extract(r) for name, r in regions.items()}
+
+    # ---------- 前掛け(太ももと同じ高さの布)を腰へ移す ----------
+    if "SKIRT_RADIUS" in c:
+        for side, sgn in (("Left", 1), ("Right", -1)):
+            a = np.array([sgn * hip[0], hip[1], hip[2]])
+            b = np.array([sgn * knee[0], knee[1], knee[2]])
+            keep = []
+            for tri in parts[side + "UpperLeg"]:
+                p = tri[:, :3].mean(0)
+                t = np.clip(np.dot(p - a, b - a) / np.dot(b - a, b - a), 0, 1)
+                (keep if np.linalg.norm(p - (a + t * (b - a))) <= c["SKIRT_RADIUS"] else parts["Hips"]).append(tri)
+            parts[side + "UpperLeg"] = keep
 
     # ---------- 腕をTポーズから体側へ下げる(肩中心の剛体回転) ----------
     R_L, R_R = rot_z(-ARM_DOWN_DEG), rot_z(ARM_DOWN_DEG)
@@ -218,6 +255,16 @@ def rig(src, c):
         "LeftKnee": {"bone": "LeftLowerLeg", "radius": round(float(knee_e[0]) / 2 * 0.85, 3), "center": knee},
         "RightKnee": {"bone": "RightLowerLeg", "radius": round(float(knee_e[0]) / 2 * 0.85, 3), "center": mirror(knee)},
     }
+    if c.get("JOINT_TEXTURE_UV"):
+        # 関節カバー球を肌色の単色ではなく、その関節の周りの服・肌と同じ色に
+        # するため、関節に最も近い元の頂点のUVを球全体に割り当てる(本体と
+        # 同じテクスチャの1点の色で塗られる)。服を着た関節で肌色の球が
+        # 見えてしまうのを防ぐ
+        # Pは腕を下ろす前(Tポーズ)の座標なので、腕の関節はTポーズでの位置で探す
+        tpose = {"LeftShoulder": S_L, "RightShoulder": S_R, "LeftElbow": elbow, "RightElbow": mirror(elbow)}
+        for jname, jv in joints.items():
+            d = np.linalg.norm(P - tpose.get(jname, jv["center"]), axis=1)
+            jv["uv"] = U[int(np.argmin(d))].tolist()
     return parts, joints, bone_world, img
 
 
@@ -290,11 +337,14 @@ def write_glb(parts, joints, bone_world, img, out_path, name):
                 pos.append(row[:3]); nrm.append(row[3:6]); uv.append(row[6:8]); jnt.append(bidx[pname])
             idx.append(key[k])
     # 関節カバー球(テクスチャなしの肌色マテリアル、別プリミティブ)
-    spos, snrm, sjnt, sidx = [], [], [], []
+    # (JOINT_TEXTURE_UVのモデルは、本体と同じテクスチャの1点の色で塗る)
+    spos, snrm, sjnt, sidx, suv = [], [], [], [], []
     for jv in joints.values():
         p, n_, t = sphere(np.asarray(jv["center"], float), jv["radius"])
         sidx.extend((t + len(spos)).ravel().tolist())
         spos.extend(p); snrm.extend(n_); sjnt.extend([bidx[jv["bone"]]] * len(p))
+        suv.extend([jv.get("uv", [0, 0])] * len(p))
+    sphere_uv = all("uv" in jv for jv in joints.values())
 
     bin_ = bytearray()
     views, accs = [], []
@@ -327,7 +377,7 @@ def write_glb(parts, joints, bone_world, img, out_path, name):
             attrs["TEXCOORD_0"] = add(np.asarray(U_, np.float32), 5126, "VEC2", 34962)
         return {"attributes": attrs, "indices": add(np.asarray(I_, np.uint32), 5125, "SCALAR", 34963), "material": material}
 
-    prims = [prim(pos, nrm, jnt, idx, uv, 0), prim(spos, snrm, sjnt, sidx, None, 1)]
+    prims = [prim(pos, nrm, jnt, idx, uv, 0), prim(spos, snrm, sjnt, sidx, suv, 0) if sphere_uv else prim(spos, snrm, sjnt, sidx, None, 1)]
     # inverseBindMatrices: 全ボーンが回転なしなので「ワールド位置の逆平行移動」になる(列優先)
     ibm = np.zeros((len(bones), 16), np.float32)
     for i, b in enumerate(bones):
