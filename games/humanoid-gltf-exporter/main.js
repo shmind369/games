@@ -1836,7 +1836,7 @@ refreshAnimSelect();
 // index.html?anim=<名前> を開いた場合は、そのアニメーションを最初から
 // タイムラインへ読み込み、アニメーション名欄にも名前を入れておく
 // (そのまま📤を押すと <名前>.json として書き出せる)
-const BUILTIN_ANIMATIONS = ["leftPunch"];
+const BUILTIN_ANIMATIONS = ["leftPunch", "leftPunch1"];
 // 初期モデルの読み込み(?model=指定時は非同期)が終わる前にアニメーションを
 // タイムラインへ読み込むと、モデル差し替え時のclearCurrentModelでキーフレームが
 // 消えてしまうため、?anim=の読み込みはモデルの準備完了を待ってから行う
