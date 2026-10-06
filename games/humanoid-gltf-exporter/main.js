@@ -47,8 +47,8 @@ controls.update();
 // ---------- 4分割ビュー(TOP/FRONT/LEFT/FREE CAMERA) ----------
 // 画面を2x2に分割し、同じシーンを4台のカメラで同時に描画する。
 // FREE CAMERAは既存のPerspectiveCamera+OrbitControlsをそのまま使い、
-// 挙動を変更していない。TOP/FRONT/LEFTは固定の正投影カメラ(パン・ズーム等の
-// 操作は今回のスコープ外のため実装しない)
+// 挙動を変更していない。TOP/FRONT/LEFTは正投影カメラ(ピンチ・2本指スワイプ
+// での拡大縮小・移動は後述「2本指ジェスチャ」を参照)
 // GLBインポートで読み込んだモデルの大きさに合わせて後から再計算する
 // (applyViewFraming参照)ため、const ではなく let にしている。初期値は
 // ボクサーモデル用に手調整した元の値のまま
@@ -128,6 +128,8 @@ function applyViewFraming(targetY, sideHalfHeight, topHalfSize) {
   SIDE_HALF_HEIGHT = sideHalfHeight;
   TOP_HALF_SIZE = topHalfSize;
 
+  // モデルを読み込み直したときは、拡大縮小・移動をリセットして全身が収まる表示に戻す
+  topCamera.zoom = frontCamera.zoom = leftCamera.zoom = 1;
   topCamera.position.set(0, VIEW_TARGET_Y + 3, 0);
   topCamera.lookAt(0, VIEW_TARGET_Y, 0);
   frontCamera.position.set(0, VIEW_TARGET_Y, 3);
@@ -932,6 +934,137 @@ function screenAngleAround(center, clientX, clientY, key) {
   const c = worldToClient(center, key);
   return Math.atan2(clientY - c.y, clientX - c.x);
 }
+
+// ---------- 2本指ジェスチャ(ピンチで拡大縮小・2本指スワイプで画面移動) ----------
+// TOP/FRONT/LEFT(正投影)は、以前は固定の画面だった。FREE CAMERAのOrbitControls
+// (ピンチ=拡大縮小、2本指スワイプ=移動)と同じ操作ができるよう、同じビューの
+// 中に2本の指が置かれたら、その2本の動きからズーム(OrthographicCameraのzoom)と
+// 平行移動(カメラ位置)を求めて、そのビューのカメラだけを動かす。
+// ・指の中点の下にある世界の点が動かないようにズームする(指を置いた場所が拡大の中心)
+// ・2本目の指が置かれた時点で、1本目の指で始まっていた操作(ギズモのリング回転・
+//   MOVEのドラッグ・タップ選択)は中止し、離したときもタップとして扱わない
+// ・FREE CAMERAは、OrbitControlsが有効なとき(ボーン未選択のPOSE)はそちらに任せる。
+//   ボーン選択中・MOVE中はOrbitControlsが無効なので、同じ操作を下のコードで行う
+//   (ピンチ=カメラ距離、2本指スワイプ=注視点とカメラの平行移動)
+// ・パソコンでは、TOP/FRONT/LEFTでマウスホイールによるズームもできる
+const activePointers = new Map(); // pointerId -> { x, y, view }
+let pinch = null; // { ids:[a, b], view, prevDist, prevMidX, prevMidY }
+const ORTHO_ZOOM_MIN = 0.4, ORTHO_ZOOM_MAX = 10;
+const NO_REFERENCE = new THREE.Vector3();
+
+function pinchEligible(view) {
+  if (view !== "free") return true;
+  return !(editMode === "pose" && !selectedBone);
+}
+
+// 1本目の指で始まっていた操作を中止する(ギズモのリングを回していた場合は、
+// そこまでの回転をUndo履歴に残して確定する)
+function abortSingleTouchActions() {
+  if (activeRingDrag) {
+    setRingHighlight(activeRingDrag.key, false);
+    if (!activeRingDrag.startQuat.equals(selectedBone.quaternion)) {
+      pushUndo({ type: "rotateBone", boneName: selectedBone.name, beforeQuat: activeRingDrag.startQuat.toArray() });
+    }
+    activeRingDrag = null;
+  }
+  pointerDownInfo = null;
+  modelDrag = null;
+  controls.enabled = false;
+}
+
+const ORTHO_HOME_OFFSET = { top: [0, 3, 0], front: [0, 0, 3], left: [-3, 0, 0] };
+function clampOrthoPan(key) {
+  const cam = camerasByKey[key];
+  const o = ORTHO_HOME_OFFSET[key];
+  const home = new THREE.Vector3(o[0], VIEW_TARGET_Y + o[1], o[2]);
+  const off = cam.position.clone().sub(home);
+  const limit = Math.max(SIDE_HALF_HEIGHT, TOP_HALF_SIZE) * 2; // モデルを見失わない範囲に制限する
+  if (off.length() > limit) cam.position.copy(home).add(off.setLength(limit));
+}
+
+// ratio: 今回の指の間隔 / 前回の指の間隔。(mx,my): 指の中点。(dmx,dmy): 中点の移動量(px)
+function applyPinchGesture(view, ratio, mx, my, dmx, dmy) {
+  const cam = camerasByKey[view];
+  const vp = viewLayout[view];
+  if (cam.isOrthographicCamera) {
+    cam.position.sub(screenDeltaToWorld(view, dmx, dmy, NO_REFERENCE)); // 内容が指についてくる向きへ動かす
+    const newZoom = THREE.MathUtils.clamp(cam.zoom * ratio, ORTHO_ZOOM_MIN, ORTHO_ZOOM_MAX);
+    const r = newZoom / cam.zoom;
+    if (r !== 1) {
+      const rect = canvas.getBoundingClientRect();
+      const ndcX = ((mx - rect.left - vp.x) / vp.w) * 2 - 1;
+      const ndcY = -(((my - rect.top - vp.y) / vp.h) * 2 - 1);
+      const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0).normalize();
+      const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1).normalize();
+      const offX = ndcX * (cam.right - cam.left) / 2 / cam.zoom;
+      const offY = ndcY * (cam.top - cam.bottom) / 2 / cam.zoom;
+      const k = 1 - 1 / r;
+      cam.position.add(right.multiplyScalar(offX * k)).add(up.multiplyScalar(offY * k));
+      cam.zoom = newZoom;
+      cam.updateProjectionMatrix();
+    }
+    clampOrthoPan(view);
+  } else {
+    // FREE CAMERA(透視投影): ピンチ=注視点までの距離、2本指スワイプ=注視点ごと平行移動
+    const delta = screenDeltaToWorld(view, dmx, dmy, controls.target);
+    camera.position.sub(delta);
+    controls.target.sub(delta);
+    const offset = camera.position.clone().sub(controls.target);
+    const dist = THREE.MathUtils.clamp(offset.length() / ratio, controls.minDistance, controls.maxDistance);
+    camera.position.copy(controls.target).add(offset.setLength(dist));
+    controls.update();
+  }
+}
+
+canvas.addEventListener("pointerdown", (evt) => {
+  if (evt.pointerType === "mouse") return;
+  const view = viewAt(evt.clientX, evt.clientY);
+  activePointers.set(evt.pointerId, { x: evt.clientX, y: evt.clientY, view });
+  if (pinch) { evt.stopImmediatePropagation(); return; } // 3本目以降は無視する
+  if (!pinchEligible(view)) return;
+  const same = [...activePointers.entries()].filter(([, p]) => p.view === view);
+  if (same.length !== 2) return;
+  const [[idA, a], [idB, b]] = same;
+  abortSingleTouchActions();
+  setActiveView(view);
+  pinch = { ids: [idA, idB], view, prevDist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), prevMidX: (a.x + b.x) / 2, prevMidY: (a.y + b.y) / 2 };
+  evt.stopImmediatePropagation(); // 2本目の指のpointerdownを、タップ選択・リング判定へ渡さない
+}, { capture: true });
+
+canvas.addEventListener("pointermove", (evt) => {
+  const p = activePointers.get(evt.pointerId);
+  if (!p) return;
+  p.x = evt.clientX; p.y = evt.clientY;
+  if (!pinch) return;
+  evt.stopImmediatePropagation();
+  if (!pinch.ids.includes(evt.pointerId)) return;
+  const a = activePointers.get(pinch.ids[0]), b = activePointers.get(pinch.ids[1]);
+  if (!a || !b) return;
+  const dist = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  applyPinchGesture(pinch.view, dist / pinch.prevDist, mx, my, mx - pinch.prevMidX, my - pinch.prevMidY);
+  pinch.prevDist = dist; pinch.prevMidX = mx; pinch.prevMidY = my;
+}, { capture: true });
+
+function onPinchPointerEnd(evt) {
+  if (!activePointers.delete(evt.pointerId)) return;
+  if (pinch && pinch.ids.includes(evt.pointerId)) {
+    pinch = null;
+    evt.stopImmediatePropagation(); // 指を離したときも、タップとして扱わない
+  }
+}
+canvas.addEventListener("pointerup", onPinchPointerEnd, { capture: true });
+canvas.addEventListener("pointercancel", onPinchPointerEnd, { capture: true });
+
+canvas.addEventListener("wheel", (evt) => {
+  const view = viewAt(evt.clientX, evt.clientY);
+  if (view === "free") return; // OrbitControlsに任せる
+  evt.preventDefault();
+  const cam = camerasByKey[view];
+  const ratio = Math.exp(-evt.deltaY * 0.0015);
+  if (cam.zoom * ratio === cam.zoom) return;
+  applyPinchGesture(view, ratio, evt.clientX, evt.clientY, 0, 0);
+}, { passive: false });
 
 // キャプチャフェーズで先に実行し、(1)タップされたビューをアクティブビューにする、
 // (2)FREE CAMERA以外の象限でのドラッグがOrbitControlsを動かさないようにする。
