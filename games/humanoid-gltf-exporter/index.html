@@ -86,7 +86,7 @@
        同じ情報を常に示しているため、3Dビューを覆わないよう非表示にしている
        (main.jsが更新するselectedBoneLabel要素自体は互換のため残す) */
     #boneInfo { display: none; }
-    #exportBtn, #animMenuBtn, #importModelBtn, #resetModelBtn {
+    #fileMenuBtn {
       flex: 0 0 auto;
       width: 40px;
       height: 40px;
@@ -101,61 +101,60 @@
       box-shadow: 0 3px 10px rgba(0,0,0,0.4);
       touch-action: manipulation;
     }
-    #exportBtn { background: #4c8dff; }
-    #animMenuBtn { background: #8a5cf5; }
-    #importModelBtn { background: #2f8f5f; }
-    #resetModelBtn { background: #555b6a; }
-    #exportBtn:active, #animMenuBtn:active, #importModelBtn:active, #resetModelBtn:active { transform: scale(0.94); }
-    #animMenuBtn.active { box-shadow: 0 0 0 2px #ffd24c, 0 3px 10px rgba(0,0,0,0.4); }
+    #fileMenuBtn { background: #4c8dff; }
+    #fileMenuBtn:active { transform: scale(0.94); }
+    #fileMenuBtn.active { box-shadow: 0 0 0 2px #ffd24c, 0 3px 10px rgba(0,0,0,0.4); }
 
-    /* アニメーション管理パネル: 3Dモデル(メッシュ・マテリアル・ボーン構造)と
-       アニメーション(ボーン名ごとのキーフレーム)を別データとして扱うための
-       保存・読込・書き出し・読み込みUI。既存のタイムライン/ギズモ領域とは
-       独立しており、普段は非表示(animMenuBtnで開閉)にして画面を圧迫しない */
-    #animPanel {
+    /* ファイルメニュー: モデルの読み込み・書き出し、モーションの読み込み・書き出しを
+       すべて右上の⇩ボタン1つにまとめた(以前は📥・🥊・🎞・⇩の4ボタン+
+       アニメーション管理パネルだった)。⇩を押すと開き、操作を選ぶか、メニューの
+       外をタップすると閉じる。普段は非表示にして3Dビューを覆わない */
+    #fileMenu {
       position: absolute;
-      top: max(52px, calc(env(safe-area-inset-top) + 44px));
+      top: max(60px, calc(env(safe-area-inset-top) + 52px));
       right: 10px;
-      max-width: min(70%, 260px);
+      width: min(80%, 280px);
       z-index: 10;
       display: none;
       flex-direction: column;
       gap: 6px;
-      background: rgba(20,22,28,0.9);
+      background: rgba(20,22,28,0.94);
       border-radius: 14px;
       padding: 10px;
       pointer-events: auto;
-      font-size: 11px;
+      font-size: 12px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.5);
     }
-    #animPanel.open { display: flex; }
-    #animPanel .animTitle { font-weight: 700; opacity: 0.85; }
-    #animPanel .animRow { display: flex; gap: 4px; align-items: center; }
-    #animPanel input[type="text"], #animPanel select {
+    #fileMenu.open { display: flex; }
+    #fileMenu .menuSection { font-weight: 700; opacity: 0.7; font-size: 11px; margin-top: 4px; letter-spacing: 0.04em; }
+    #fileMenu .menuSection:first-child { margin-top: 0; }
+    #fileMenu .menuRow { display: flex; gap: 6px; align-items: center; }
+    #fileMenu input[type="text"], #fileMenu select {
       font: inherit;
-      font-size: 11px;
+      font-size: 13px;
       flex: 1 1 auto;
       min-width: 0;
       background: #2a2e38;
       color: #eee;
       border: none;
       border-radius: 8px;
-      padding: 6px 8px;
+      padding: 8px 10px;
       touch-action: manipulation;
     }
-    #animPanel button {
+    #fileMenu button {
       font: inherit;
       font-size: 13px;
-      flex: 0 0 auto;
-      min-width: 36px;
-      min-height: 32px;
-      padding: 4px 8px;
+      min-height: 40px;
+      padding: 6px 10px;
       border: none;
       border-radius: 8px;
       background: #3a3f4a;
       color: #eee;
+      text-align: left;
       touch-action: manipulation;
     }
-    #animPanel button:active { transform: scale(0.94); }
+    #fileMenu .menuRow button { flex: 0 0 auto; text-align: center; }
+    #fileMenu button:active { transform: scale(0.97); }
 
     /* ボーン選択とPOSE/MOVE切替は、以前は3Dビュー左上に重ねていたが、
        TOPビューの作業領域を覆ってしまうため、タイムラインドックの
@@ -365,33 +364,30 @@
       <div id="hud">
         <div id="hudRight">
           <div id="boneInfo">選択中のボーン<br /><span id="selectedBoneLabel">なし</span></div>
-          <button id="importModelBtn" title="GLB/glTFモデルを読み込む(現在のモデルと差し替え。ボーン名・本数は問わない)">📥</button>
-          <button id="resetModelBtn" title="ボクサーモデルに戻す">🥊</button>
-          <input type="file" id="importModelFile" accept=".glb,.gltf,model/gltf-binary" style="display:none" />
-          <button id="animMenuBtn" title="アニメーション管理(モデルとは別データとして保存・書き出し)">🎞</button>
-          <button id="exportBtn" title="3Dモデルを書き出す(.glb / メッシュ・マテリアル・ボーン構造のみ)">⇩</button>
+          <button id="fileMenuBtn" title="ファイル(モデル・モーションの読み込みと書き出し)">⇩</button>
         </div>
       </div>
-      <!-- アニメーション管理パネル: 3Dモデル(character.glb)とは別データとして、
-           ボーン名・キーフレーム・FPS・アニメーション長だけを持つ「アニメーション」を
-           複数名前付きで保存・切替・書き出し(.json)・読み込み(.json)できるようにする。
-           ボーン名だけに依存した形式なので、同じボーン構成の別モデルにも流用できる -->
-      <div id="animPanel">
-        <div class="animTitle">アニメーション管理(モデルとは別データ)</div>
-        <div class="animRow">
-          <input type="text" id="animNameInput" placeholder="アニメーション名" />
-          <button id="animSaveBtn" title="現在のタイムラインを名前付きアニメーションとして保存">💾</button>
-        </div>
-        <div class="animRow">
+      <!-- ファイルメニュー(右上の⇩ボタンで開閉)。
+           モデル(3Dモデル: メッシュ・マテリアル・ボーン構造)とモーション(ボーン名ごとの
+           キーフレーム。モデルとは別データ)の読み込み・書き出しを、ここに集約している。
+           モーションはボーン名だけに依存した形式なので、同じボーン構成の別モデルにも流用できる -->
+      <div id="fileMenu">
+        <div class="menuSection">モデル</div>
+        <button id="modelImportBtn" title="GLB/glTFモデルを読み込む(現在のモデルと差し替え。ボーン名・本数は問わない)">📥 モデルを読み込む(GLB)</button>
+        <button id="modelExportBtn" title="3Dモデルを書き出す(.glb / メッシュ・マテリアル・ボーン構造のみ)">⇩ モデルを書き出す(GLB)</button>
+        <input type="file" id="importModelFile" accept=".glb,.gltf,model/gltf-binary" style="display:none" />
+        <div class="menuSection">モーション</div>
+        <button id="animImportBtn" title="モーションJSONを読み込む">📥 モーションを読み込む(JSON)</button>
+        <input type="file" id="animImportFile" accept="application/json" style="display:none" />
+        <div class="menuRow">
           <select id="animSelect">
-            <option value="">(保存されたアニメーションなし)</option>
+            <option value="">(モーションなし)</option>
           </select>
-          <button id="animLoadBtn" title="選択したアニメーションをタイムラインへ読込">📂</button>
+          <button id="animLoadBtn" title="選んだモーションをタイムラインへ読み込む">開く</button>
         </div>
-        <div class="animRow">
-          <button id="animExportBtn" title="現在のタイムラインをアニメーションJSONとして書き出す">📤 書き出し</button>
-          <button id="animImportBtn" title="アニメーションJSONを読み込む">📥 読み込み</button>
-          <input type="file" id="animImportFile" accept="application/json" style="display:none" />
+        <div class="menuRow">
+          <input type="text" id="animNameInput" placeholder="モーション名(ファイル名)" />
+          <button id="animExportBtn" title="現在のタイムラインをモーションJSONとして書き出す">💾 書き出し</button>
         </div>
       </div>
 

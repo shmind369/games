@@ -367,7 +367,7 @@ function clearCurrentModel() {
 }
 
 // ---------- ボクサーモデルの(再)読み込み ----------
-// GLBインポート後に🥊ボタンを押すと、元のボクサーモデルへいつでも戻せる
+// GLBインポート後は、ページを開き直すと元のボクサーモデルに戻る(以前の🥊ボタンは廃止)
 function loadBoxerModel() {
   clearCurrentModel();
   const hipsBone = buildBoxerBoneHierarchy();
@@ -1647,8 +1647,9 @@ deleteKeyframeBtn.addEventListener("click", () => {
 // 対象とする。アニメーション(ポーズのキーフレーム)はモデルとは別データ
 // として扱うため、ここではGLTFExporterにanimationsを一切渡さない
 // (= 書き出されるGLBには常にアニメーションが含まれない)
-const exportBtn = document.getElementById("exportBtn");
-exportBtn.addEventListener("click", () => {
+const modelExportBtn = document.getElementById("modelExportBtn");
+modelExportBtn.addEventListener("click", () => {
+  closeFileMenu();
   const exporter = new GLTFExporter();
   exporter.parse(
     root,
@@ -1662,7 +1663,7 @@ exportBtn.addEventListener("click", () => {
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      statusEl.textContent = "humanoid.glb を書き出しました(モデルのみ。アニメーションは🎞から別途書き出せます)";
+      statusEl.textContent = "humanoid.glb を書き出しました(モデルのみ。モーションは⇩メニューから別途書き出せます)";
       setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
     },
     (err) => {
@@ -1714,7 +1715,7 @@ function refreshAnimSelect() {
   if (animations.length === 0) {
     const opt = document.createElement("option");
     opt.value = "";
-    opt.textContent = "(保存されたアニメーションなし)";
+    opt.textContent = "(モーションなし)";
     animSelectEl.appendChild(opt);
     return;
   }
@@ -1768,34 +1769,35 @@ function importAnimationJSON(json) {
   }
 }
 
-const animMenuBtn = document.getElementById("animMenuBtn");
-const animPanelEl = document.getElementById("animPanel");
+const fileMenuBtn = document.getElementById("fileMenuBtn");
+const fileMenuEl = document.getElementById("fileMenu");
 const animNameInputEl = document.getElementById("animNameInput");
 const animSelectEl = document.getElementById("animSelect");
-const animSaveBtn = document.getElementById("animSaveBtn");
 const animLoadBtn = document.getElementById("animLoadBtn");
 const animExportBtn = document.getElementById("animExportBtn");
 const animImportBtn = document.getElementById("animImportBtn");
 const animImportFileEl = document.getElementById("animImportFile");
 
-animMenuBtn.addEventListener("click", () => {
-  animPanelEl.classList.toggle("open");
-  animMenuBtn.classList.toggle("active", animPanelEl.classList.contains("open"));
+// 右上の⇩ボタンでメニューを開閉する。メニューの外(3Dビュー・タイムライン)を
+// タップしたときも閉じる(その操作自体は通常どおり3Dビュー等へ伝わる)。
+// closeFileMenu は関数宣言なので、先に定義されているモデル書き出しの
+// ハンドラからも呼べる
+function closeFileMenu() {
+  fileMenuEl.classList.remove("open");
+  fileMenuBtn.classList.remove("active");
+}
+fileMenuBtn.addEventListener("click", () => {
+  fileMenuEl.classList.toggle("open");
+  fileMenuBtn.classList.toggle("active", fileMenuEl.classList.contains("open"));
 });
-
-animSaveBtn.addEventListener("click", () => {
-  const name = animNameInputEl.value.trim();
-  if (!name) {
-    statusEl.textContent = "アニメーション名を入力してください";
-    setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2000);
-    return;
-  }
-  saveCurrentAsAnimation(name);
-  statusEl.textContent = `アニメーション「${name}」を保存しました(モデルとは別データ)`;
-  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
-});
+document.addEventListener("pointerdown", (evt) => {
+  if (!fileMenuEl.classList.contains("open")) return;
+  if (fileMenuEl.contains(evt.target) || fileMenuBtn.contains(evt.target)) return;
+  closeFileMenu();
+}, true);
 
 animLoadBtn.addEventListener("click", () => {
+  closeFileMenu();
   const anim = animations.find((a) => a.name === animSelectEl.value);
   if (!anim) return;
   loadAnimationData(anim);
@@ -1805,6 +1807,7 @@ animLoadBtn.addEventListener("click", () => {
 });
 
 animExportBtn.addEventListener("click", () => {
+  closeFileMenu();
   const name = animNameInputEl.value.trim() || "animation";
   const json = animationToExportJSON(currentAnimationData(name));
   downloadJSON(json, `${name}.json`);
@@ -1812,7 +1815,7 @@ animExportBtn.addEventListener("click", () => {
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
 });
 
-animImportBtn.addEventListener("click", () => animImportFileEl.click());
+animImportBtn.addEventListener("click", () => { closeFileMenu(); animImportFileEl.click(); });
 animImportFileEl.addEventListener("change", async () => {
   const file = animImportFileEl.files && animImportFileEl.files[0];
   animImportFileEl.value = "";
@@ -1881,12 +1884,11 @@ for (const animName of BUILTIN_ANIMATIONS) {
 // 特にボーン構成の互換性チェックは行わない。読み込みに成功したら
 // 現在のモデル(ボクサー、または以前に読み込んだ別のモデル)を完全に
 // 差し替える
-const importModelBtn = document.getElementById("importModelBtn");
+const modelImportBtn = document.getElementById("modelImportBtn");
 const importModelFileEl = document.getElementById("importModelFile");
-const resetModelBtn = document.getElementById("resetModelBtn");
 const gltfLoader = new GLTFLoader();
 
-importModelBtn.addEventListener("click", () => importModelFileEl.click());
+modelImportBtn.addEventListener("click", () => { closeFileMenu(); importModelFileEl.click(); });
 importModelFileEl.addEventListener("change", async () => {
   const file = importModelFileEl.files && importModelFileEl.files[0];
   importModelFileEl.value = "";
@@ -1910,7 +1912,9 @@ importModelFileEl.addEventListener("change", async () => {
   setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 3000);
 });
 
-resetModelBtn.addEventListener("click", () => loadBoxerModel());
+// 以前は🥊ボタンでボクサーへ戻せたが、ボタンを廃止した(ページを開き直すと
+// 最初のボクサー、?model=<名前>ならそのモデルに戻る)。テスト用フック
+// (__model.resetToBoxer)は残している
 
 // ---------- リサイズ ----------
 // レンダラーのサイズは、ウィンドウ全体ではなく#viewportArea(3Dビュー専用領域、
@@ -1929,8 +1933,8 @@ updateUndoBtnState(); // 初期状態ではUndo履歴が空のためボタンを
 updateDeleteKeyframeBtnState(); // 初期状態ではキーフレーム未選択のためボタンを無効化しておく
 // ---------- URLパラメータでリグ済みモデルを開く(?model=box_usa など) ----------
 // tools/tpose_rig.py でボーンを入れたGLBを assets/<名前>_rigged.glb に置いておくと、
-// index.html?model=<名前> を開くだけで、📥でファイルを選ばなくても最初から
-// そのモデルを読み込んだ状態で始められる(読み込み処理自体は📥と同じ)。
+// index.html?model=<名前> を開くだけで、ファイルを選ばなくても最初から
+// そのモデルを読み込んだ状態で始められる(読み込み処理自体はメニューの「モデルを読み込む」と同じ)。
 // ボクサーのパーツ読み込み(fetch)と並行させると、後から届いたボクサーの
 // パーツが差し替え後のモデルに混ざってしまうため、指定があるときは
 // ボクサーを読み込まない(読み込みに失敗した場合だけボクサーに戻す)
@@ -2026,8 +2030,8 @@ window.__model = {
       }
     }, reject);
   }),
-  isImportBtnPresent: () => !!importModelBtn,
-  isResetBtnPresent: () => !!resetModelBtn,
+  isImportBtnPresent: () => !!modelImportBtn,
+  isResetBtnPresent: () => !!document.getElementById("resetModelBtn"),
 };
 
 // ---------- ポーズエディタのテスト/デバッグ用フック ----------
@@ -2114,8 +2118,8 @@ window.__fk = {
     return animationToExportJSON(anim);
   },
   importAnimationJSON,
-  isAnimPanelOpen: () => animPanelEl.classList.contains("open"),
-  toggleAnimPanel: () => animMenuBtn.click(),
+  isAnimPanelOpen: () => fileMenuEl.classList.contains("open"),
+  toggleAnimPanel: () => fileMenuBtn.click(),
   // タイムラインのレイアウト・キーフレームドラッグのテスト/デバッグ用
   getTimelineButtonsRect: () => document.getElementById("timelineButtons").getBoundingClientRect().toJSON(),
   getTimelineCanvasRect: () => timelineCanvas.getBoundingClientRect().toJSON(),

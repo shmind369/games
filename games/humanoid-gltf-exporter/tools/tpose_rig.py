@@ -4,7 +4,9 @@
 結びつけるオフライン前処理(要 numpy)。アプリ本体には含まれない。
 
     # ボクサー(アプリ内蔵モデル): assets/boxer_parts.json / boxer_joints.json を作る
+    # (2つ目の引数にパスを渡すと、同じ内容のボーン・スキン入りGLBも書き出す)
     python3 tools/tpose_rig.py boxer
+    python3 tools/tpose_rig.py boxer assets/boxer_rigged.glb
 
     # box_usa: ボーン・スキン入りのGLBを書き出す(アプリの📥で読み込める)
     python3 tools/tpose_rig.py box_usa path/to/box_usa.glb assets/box_usa_rigged.glb
@@ -438,7 +440,10 @@ if __name__ == "__main__":
     model = sys.argv[1] if len(sys.argv) > 1 else "boxer"
     if model == "boxer":
         src = os.path.join(APP, "..", "third-person-boxer-3d", "assets", "boxer.glb")
-        write_app_json(*rig(src, PRESETS["boxer"])[:3])
+        parts, joints, bone_world, img = rig(src, PRESETS["boxer"])
+        write_app_json(parts, joints, bone_world)
+        if len(sys.argv) > 2:  # 追加の引数があれば、同じ内容のボーン・スキン入りGLBも書き出す
+            write_glb(parts, joints, bone_world, img, sys.argv[2], "boxer")
     else:
         src, out = sys.argv[2], sys.argv[3]
         parts, joints, bone_world, img = rig(src, PRESETS[model])
