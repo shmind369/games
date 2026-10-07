@@ -674,6 +674,15 @@ function findTakebackTime(clip, forearmName) {
   }
   return 0.15;
 }
+// 右ストレート用: 前腕がまっすぐ伸びる(wが大きい)直前のキー = 最大テイクバック
+function findTakebackByExtension(clip, forearmName) {
+  const keys = clip.keyframes;
+  for (let i = 1; i < keys.length; i++) {
+    const q = keys[i].pose[forearmName];
+    if (q && Math.abs(q[3]) > 0.9) return keys[i - 1].time;
+  }
+  return 0.15;
+}
 const punchDurationMs = (kind) => ((PUNCHES[kind].range.end - PUNCHES[kind].range.start) * 1000) / PUNCH_SPEED;
 
 for (const [kind, p] of Object.entries(PUNCHES)) {
@@ -683,7 +692,7 @@ for (const [kind, p] of Object.entries(PUNCHES)) {
       p.clip = json;
       p.range = findPunchActiveRange(json);
       p.hasMove = json.keyframes.some((k) => k.modelPosition);
-      if (kind === "leftJab") p.takebackT = findTakebackTime(json, p.forearm);
+      p.takebackT = kind === "leftJab" ? findTakebackTime(json, p.forearm) : findTakebackByExtension(json, p.forearm);
       console.log(`[Player] ${p.label} clip ready (play ${p.range.start.toFixed(2)}s-${p.range.end.toFixed(2)}s, ${punchDurationMs(kind).toFixed(0)}ms)`);
     })
     .catch((err) => console.error(p.url + " の読み込みに失敗しました", err));
@@ -802,14 +811,17 @@ const SLING_START_PX = 10;      // これ以上、下へ動いたらスリング
 const SLING_MAX_DRAG_PX = 160;  // この距離で最大テイクバック(100%)
 const SLING_MIN_PULL = 0.12;    // これ未満で離したらキャンセル(パンチを出さずIdleへ)
 const SLING_EXTRA_RELEASE_MS = 70; // 離したあと、上乗せの引きが消えるまでの時間
-const SLING_EXTRA = { LeftShoulder: -0.25, LeftUpperArm: -0.5, LeftForearm: -0.35, Chest: 0.12 }; // X軸回転(ラジアン)
-const sling = { active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
-function slingTakebackSec() { return PUNCHES.leftJab.takebackT || 0.15; }
-function slingStart(y, pointerId = null) {
-  const p = PUNCHES.leftJab;
+const SLING_EXTRA = { // X軸回転(ラジアン)
+  leftJab: { LeftShoulder: -0.25, LeftUpperArm: -0.5, LeftForearm: -0.35, Chest: 0.12 },
+  rightStraight: { RightShoulder: -0.1, Chest: 0.12 }, // 右ストレートのクリップは引きが大きいので、上乗せは控えめ
+};
+const sling = { kind: "leftJab", active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
+function slingTakebackSec() { return PUNCHES[sling.kind].takebackT || 0.15; }
+function slingStart(y, pointerId = null, kind = "leftJab") {
+  const p = PUNCHES[kind];
   if (!p.clip || !p.range || punchState.phase || dodgeState.phase || sling.active) return false;
-  Object.assign(sling, { active: true, pull: 0, pointerId, startY: y });
-  playerDebug("Sling pull start");
+  Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y });
+  playerDebug(`Sling pull start (${p.label})`);
   return true;
 }
 function slingSetPull(pull) { if (sling.active) sling.pull = clamp01(pull); }
@@ -826,14 +838,14 @@ function slingRelease(now) {
   sling.active = false;
   sling.releasedAt = now;
   sling.releasedPull = sling.pull;
-  punchState = triggerPunch(punchState, "leftJab", now, Math.max(1, (t * 1000) / PUNCH_SPEED));
+  punchState = triggerPunch(punchState, sling.kind, now, Math.max(1, (t * 1000) / PUNCH_SPEED));
   punchStats.started++;
-  playerDebug(`Sling release (pull ${(sling.pull * 100).toFixed(0)}% = clip ${t.toFixed(3)}s) -> Left Jab`);
+  playerDebug(`Sling release (pull ${(sling.pull * 100).toFixed(0)}% = clip ${t.toFixed(3)}s) -> ${PUNCHES[sling.kind].label}`);
   return true;
 }
 // 引いている間の姿勢: クリップの 0〜takeback をドラッグ量で直接サンプルする(Idleからは最初の少しでなじませる)
 function sampleSlingPull(now) {
-  const p = PUNCHES.leftJab;
+  const p = PUNCHES[sling.kind];
   const idle = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
   const sample = sampleClip(p.clip, sling.pull * slingTakebackSec());
   const w = clamp01(sling.pull / 0.15);
@@ -856,9 +868,10 @@ const _sQ = new THREE.Quaternion(), _sE = new THREE.Euler();
 function applySlingExtra(now) {
   const k = slingExtraAmount(now);
   if (k <= 0) return;
-  for (const name of Object.keys(SLING_EXTRA)) {
+  const extra = SLING_EXTRA[sling.kind];
+  for (const name of Object.keys(extra)) {
     const bone = allBonesByName[name];
-    if (bone) bone.quaternion.premultiply(_sQ.setFromEuler(_sE.set(SLING_EXTRA[name] * k, 0, 0)));
+    if (bone) bone.quaternion.premultiply(_sQ.setFromEuler(_sE.set(extra[name] * k, 0, 0)));
   }
 }
 
@@ -875,10 +888,10 @@ function onPointerDown(evt) {
 }
 function onPointerMove(evt) {
   if (sling.active) { if (evt.pointerId === sling.pointerId) slingDragTo(evt.clientY); return; }
-  if (!gestureStart || gestureStart.punchKind !== "leftJab" || evt.pointerId !== gestureStart.pointerId) return;
+  if (!gestureStart || !gestureStart.punchKind || evt.pointerId !== gestureStart.pointerId) return;
   const dx = evt.clientX - gestureStart.x, dy = evt.clientY - gestureStart.y;
   // 下向きの動きが主で、少し動いたらスリング開始(横の動きが主ならスリングにせず、離した時のスワイプ=かわしになる)
-  if (dy >= SLING_START_PX && dy > Math.abs(dx) && slingStart(gestureStart.y, evt.pointerId)) {
+  if (dy >= SLING_START_PX && dy > Math.abs(dx) && slingStart(gestureStart.y, evt.pointerId, gestureStart.punchKind)) {
     try { canvas.setPointerCapture(evt.pointerId); } catch (_) {}
     slingDragTo(evt.clientY);
   }
@@ -891,14 +904,8 @@ function onPointerUp(evt) {
   if (!gestureStart) return;
   const end = pointerPos(evt);
   const now = performance.now();
-  const dx = end.x - gestureStart.x, dy = end.y - gestureStart.y, dt = now - gestureStart.t;
-  const punchKind = gestureStart.punchKind;
+  const dx = end.x - gestureStart.x, dt = now - gestureStart.t, dy = end.y - gestureStart.y;
   gestureStart = null;
-  // 右グローブの上でのタップ(ほとんど動かさず、すぐ離した) → 右ストレート。動かした場合はスワイプ=かわしの判定へ
-  if (punchKind === "rightStraight" && Math.hypot(dx, dy) <= PUNCH_TAP_MAX_MOVE_PX && dt <= PUNCH_TAP_MAX_MS) {
-    tryPunch(punchKind, now);
-    return;
-  }
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
   // パンチ中は、回避の入力を受け付けない
@@ -1129,8 +1136,8 @@ window.__enemy = {
 
 // 肩タップのパンチ(左ジャブ・右ストレート)のテスト/デバッグ用
 window.__sling = {
-  getState: () => ({ ...sling, takebackT: PUNCHES.leftJab.takebackT }),
-  start: (y = 0) => slingStart(y),
+  getState: () => ({ ...sling, takebackT: PUNCHES.leftJab.takebackT, takebackTRight: PUNCHES.rightStraight.takebackT }),
+  start: (y = 0, kind = "leftJab") => slingStart(y, null, kind),
   setPull: slingSetPull,
   release: () => slingRelease(performance.now()),
   cancel: () => slingCancel(),
