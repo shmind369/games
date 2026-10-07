@@ -12,17 +12,14 @@ const SWIPE_THRESHOLD_PX = 30;
 const SWIPE_MAX_MS = 500;
 
 // dx/dy/dt(ポインターの移動量と経過時間)からスワイプ方向を判定する。
-// 横方向の移動が縦方向より十分大きい場合は左右スワイプ、縦方向の移動が
-// 横方向より十分大きく、かつ下向きの場合は下スワイプ(しゃがみ込み)と
-// みなす(上スワイプは今回のスコープに含まれないため未対応のまま)
+// 横方向の移動が縦方向より十分大きい場合は左右スワイプとみなす。
+// 縦方向のスワイプは、以前は下スワイプ=しゃがみ込みだったが、今後の攻撃操作と
+// 競合するおそれがあるため廃止した(nullを返す)
 function classifySwipe(dx, dy, dt) {
   if (dt > SWIPE_MAX_MS) return null;
   const adx = Math.abs(dx), ady = Math.abs(dy);
   if (adx >= SWIPE_THRESHOLD_PX && adx > ady * 1.2) {
     return dx < 0 ? "left" : "right";
-  }
-  if (ady >= SWIPE_THRESHOLD_PX && ady > adx * 1.2 && dy > 0) {
-    return "down";
   }
   return null;
 }
@@ -88,55 +85,6 @@ function computeDodgePosture(progress) {
     kneeBend: -mag * MAX_HIP_BEND * KNEE_COUNTER,
   };
 }
-
-// ---------- 下スワイプでのしゃがみ込み(humanoid-gltf-exporterで作成した ----------
-// ポーズアニメーションJSONを再生する、小さなクリッププレイヤー)
-// クリップのデータ構造(pose: 各ボーンの姿勢、modelPosition: ModelRootの
-// 絶対座標)は、humanoid-gltf-exporter側のキーフレームシステムとそのまま
-// 互換性がある。このゲームでは、そのうちの1本(しゃがみ込みながら
-// 後方へ沈み込むポーズ)をアセットとして同梱し、下スワイプで再生する
-const DUCK_CLIP = {
-  keyframes: [
-    {
-      time: 0,
-      pose: {
-        Hips: [0, 0, 0, 1], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
-        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [0, 0, 0, 1], LeftHand: [0, 0, 0, 1],
-        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
-        LeftUpperLeg: [0, 0, 0, 1], LeftLowerLeg: [0, 0, 0, 1], LeftFoot: [0, 0, 0, 1],
-        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [0, 0, 0, 1], RightFoot: [0, 0, 0, 1],
-      },
-      modelPosition: [0, 0, 0],
-    },
-    {
-      time: 0.5,
-      pose: {
-        Hips: [0.00854071962748727, 0, 0, 0.9999635273889966], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
-        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [-0.8966347975492622, 0, 0, 0.44277086605127214], LeftHand: [0, 0, 0, 1],
-        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
-        LeftUpperLeg: [-0.6836714393495077, 0, 0, 0.729789944448245], LeftLowerLeg: [-0.7248182352526064, 0, 0, -0.6889401467800358], LeftFoot: [0, 0, 0, 1],
-        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [-0.741607709700769, 0, 0, -0.6708338131850391], RightFoot: [0, 0, 0, 1],
-      },
-      modelPosition: [-0.02706766917293233, -0.4035087719298246, -0.412781954887218],
-    },
-    {
-      time: 0.9,
-      pose: {
-        Hips: [0.00854071962748727, 0, 0, 0.9999635273889966], Spine: [0, 0, 0, 1], Chest: [0, 0, 0, 1], Neck: [0, 0, 0, 1], Head: [0, 0, 0, 1],
-        LeftShoulder: [0, 0, 0, 1], LeftUpperArm: [0, 0, 0, 1], LeftForearm: [-0.8966347975492622, 0, 0, 0.44277086605127214], LeftHand: [0, 0, 0, 1],
-        RightShoulder: [0, 0, 0, 1], RightUpperArm: [0, 0, 0, 1], RightForearm: [0, 0, 0, 1], RightHand: [0, 0, 0, 1],
-        LeftUpperLeg: [-0.6836714393495077, 0, 0, 0.729789944448245], LeftLowerLeg: [-0.7248182352526064, 0, 0, -0.6889401467800358], LeftFoot: [0, 0, 0, 1],
-        RightUpperLeg: [0, 0, 0, 1], RightLowerLeg: [-0.741607709700769, 0, 0, -0.6708338131850391], RightFoot: [0, 0, 0, 1],
-      },
-      modelPosition: [-0.013533834586466165, -0.4035087719298246, -0.42180451127819535],
-    },
-  ],
-};
-const DUCK_CLIP_END_TIME = DUCK_CLIP.keyframes[DUCK_CLIP.keyframes.length - 1].time;
-// クリップ本来のテンポ(0→0.9秒でしゃがみ込む)を、しゃがむ方向・戻る方向の
-// 両方にそのまま使う(対称な速さで、しゃがんで→戻る、という動作にする)
-const DUCK_OUT_MS = DUCK_CLIP_END_TIME * 1000;
-const DUCK_RETURN_MS = DUCK_CLIP_END_TIME * 1000;
 
 // ---------- アイドル状態(常時構え)でループ再生するクリップ ----------
 // humanoid-gltf-exporterで作成した、両腕を構えたボクシングのガードポーズ
@@ -254,33 +202,6 @@ function sampleClip(clip, time) {
   return { pose, modelPosition };
 }
 
-// しゃがみ込みの状態機械(Three.js非依存の純粋関数。既存の左右スワイプ回避
-// (dodgeState)と同じ「out→return→ニュートラル」という構成にしている)
-function createDuckState() { return { phase: null, startAt: 0 }; }
-
-function triggerDuck(state, now) {
-  if (state.phase) return state; // 再生中は多重起動しない
-  return { phase: "out", startAt: now };
-}
-
-function advanceDuck(state, now) {
-  if (!state.phase) return state;
-  const dur = state.phase === "out" ? DUCK_OUT_MS : DUCK_RETURN_MS;
-  if (now - state.startAt < dur) return state;
-  if (state.phase === "out") return { phase: "return", startAt: now };
-  return createDuckState();
-}
-
-// 現在のduckStateから、クリップ上の再生時刻(秒)を求める。
-// outフェーズは0→クリップ終端、returnフェーズはクリップ終端→0と、
-// クリップを逆再生することでしゃがんだ姿勢から自然に元の姿勢へ戻す
-function computeDuckClipTime(state, now) {
-  if (!state.phase) return 0;
-  const dur = state.phase === "out" ? DUCK_OUT_MS : DUCK_RETURN_MS;
-  const t = clamp01((now - state.startAt) / dur);
-  return state.phase === "out" ? DUCK_CLIP_END_TIME * t : DUCK_CLIP_END_TIME * (1 - t);
-}
-
 // 参照画像(スーパーパンチアウト風)の構図を再現するためのカメラパラメータ。
 // 手前に背中を向けたプレイヤー(頭が画面の中ほど、腰より上が映る)、その奥に
 // 向かい合う相手(頭が画面の上のほう、プレイヤーの約半分の大きさ)が並んで見えるよう、
@@ -386,10 +307,9 @@ opponent.position.copy(OPPONENT_BASE);
 scene.add(opponent);
 
 const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerLeg: null, rightLowerLeg: null };
-// しゃがみ込みクリップ(DUCK_CLIP)はSpine/LeftUpperLeg等だけでなく、Hips・
-// LeftForearmなど回避動作では使っていないボーンも操作するため、ボーン名で
-// 引けるマップを別途用意する(将来別のクリップを追加する場合もそのまま
-// 流用できる汎用的な仕組みにしている)
+// アイドル・パンチのクリップはHips・LeftForearmなど、回避動作では使っていない
+// ボーンも操作するため、ボーン名で引けるマップを別途用意する(将来別のクリップを
+// 追加する場合もそのまま流用できる汎用的な仕組みにしている)
 let allBonesByName = {};
 let opponentBonesByName = {};
 let opponentIdleClip = null; // assets/fightIdleUsa.json(USAボクサーの構えのアイドル。2秒でループ)
@@ -549,31 +469,34 @@ const opponentShadow = shadowBlob.clone();
 opponentShadow.position.set(OPPONENT_BASE.x + 0.05, 0.015, OPPONENT_BASE.z + 0.04);
 scene.add(opponentShadow);
 
-// ---------- スリング式の左ジャブ(左肩タップ) ----------
-// Sling Kongのような「ゴムを弾く」感覚のパンチ入力のプロトタイプ。今回は、プレイヤーの
-// 左肩付近をタップすると左ジャブが出る、という1つだけを実装している(右パンチ・フック・
-// アッパー・攻撃判定・ダメージ・コンボ・引っ張り量による威力変化は作っていない)。
-//  ・モーションは、すでにあるhumanoid-gltf-exporter製の「踏み込んで左ジャブ」(assets/leftPunch1.json、
-//    ボクサー用)をそのまま使う(ファイルは変更しない)。腰を沈めて左足を踏み出しながら打ち、
-//    後ろ足を引き付けて元の位置へ戻る動きで、1m先の相手に拳が届く。
-//    その場で打つ版(leftPunch.json)は、拳が約0.25mしか伸びず、相手の手前で止まってしまう。
+// ---------- 肩タップのパンチ(左肩=左ジャブ、右肩=右ストレート) ----------
+// Sling Kongのような「ゴムを弾く」感覚のパンチ入力のテストは、いったん終了した。
+// 今は、プレイヤーの肩付近をタップするだけで、次のパンチが1回出る:
+//    左肩をタップ → 左ジャブ     右肩をタップ → 右ストレート
+// (フック・アッパー・スワイプでの方向指定・攻撃判定・ダメージ・コンボ・引っ張り量による威力変化は
+//  作っていない。しゃがみ込み=下スワイプは、攻撃操作と競合するおそれがあるので廃止した)
+//  ・モーションは、humanoid-gltf-exporterで作ったボクサー用のものをそのまま使う(ファイルは変更しない)
+//      左ジャブ    = assets/leftPunch1.json   (腰を沈めて左足を踏み出しながら打つ。1m先の相手に拳が届く)
+//      右ストレート = assets/rightStraight.json (腰を回して後ろ足のかかとを上げ、右腕をまっすぐ伸ばす。5キーフレーム)
 //    体の前進・沈み込みは、クリップのmodelPositionに入っている。クリップはモデル向き(+Z)で
 //    作られているが、プレイヤーは背中をカメラへ向けて(Y軸で180°回して)いるため、
 //    ワールドでは x と z の符号を反転して適用する
 //  ・再生は、クリップの先頭から「構えに戻った時点」まで(末尾の、構えのまま止まっている区間は
 //    使わない)。キーフレームは変更せず、再生する範囲を決めるだけ
 //  ・入力は、タップした瞬間(pointerdown)に出す。指を離すまで待たないので、その分だけ速い。
-//    (左肩から始まったスワイプは、回避ではなくジャブの入力として扱う)
-//  ・状態は IDLE ⇄ LEFT_JAB の2つ。ジャブ再生中のタップは無視する(多重再生しない)。
-//    ジャブが終わったら、必ずIDLEへ戻る
-const JAB_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
-const JAB_BLEND_IN_MS = 60; // Idleの姿勢からジャブの最初の姿勢へなじませる時間(短いほど弾ける感じ)
-const JAB_BLEND_OUT_MS = 150; // ジャブの最後の構えからIdleへなじませる時間
-const JAB_HIT_RADIUS_M = 0.17; // 左肩のタップ判定の半径(ワールド単位。画面上ではこの大きさに投影する。大きすぎると体の中央まで入ってしまう)
-const JAB_HIT_MIN_RADIUS_PX = 44; // 画面が小さいときでも、指で押せる最小の半径(CSSピクセル)
+//    (肩から始まったスワイプは、回避ではなくパンチの入力として扱う)
+//  ・状態は IDLE ⇄ パンチ(1種類ずつ)。パンチ再生中のタップは、肩が左右どちらでも無視する
+//    (多重再生しない)。パンチが終わったら、必ずIDLEへ戻る
+const PUNCHES = {
+  leftJab: { label: "Left Jab", url: "./assets/leftPunch1.json", bone: "LeftUpperArm", clip: null, range: null },
+  rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightUpperArm", clip: null, range: null },
+};
+const PUNCH_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
+const PUNCH_BLEND_IN_MS = 60; // Idleの姿勢からパンチの最初の姿勢へなじませる時間(短いほど弾ける感じ)
+const PUNCH_BLEND_OUT_MS = 150; // パンチの最後の構えからIdleへなじませる時間
+const PUNCH_HIT_RADIUS_M = 0.17; // 肩のタップ判定の半径(ワールド単位。画面上ではこの大きさに投影する。大きすぎると体の中央まで入ってしまう)
+const PUNCH_HIT_MIN_RADIUS_PX = 44; // 画面が小さいときでも、指で押せる最小の半径(CSSピクセル)
 
-let jabClip = null; // assets/leftPunch1.json
-let jabRange = null; // { start, end }(クリップ内の再生範囲、秒)
 function poseEquals(a, b) {
   for (const name of Object.keys(a)) {
     const x = a[name], y = b[name];
@@ -584,7 +507,7 @@ function poseEquals(a, b) {
 }
 // 先頭の「構えのまま止まっている」区間の終わりと、末尾の「構えに戻って止まっている」区間の
 // 始まりを、キーフレームから求める
-function findJabActiveRange(clip) {
+function findPunchActiveRange(clip) {
   const keys = clip.keyframes.filter((k) => k.pose);
   let startIdx = 0;
   while (startIdx + 1 < keys.length && poseEquals(keys[startIdx + 1].pose, keys[0].pose)) startIdx++;
@@ -592,109 +515,124 @@ function findJabActiveRange(clip) {
   while (endIdx - 1 > startIdx && poseEquals(keys[endIdx - 1].pose, keys[keys.length - 1].pose)) endIdx--;
   return { start: keys[startIdx].time, end: keys[endIdx].time };
 }
-const jabDurationMs = () => ((jabRange.end - jabRange.start) * 1000) / JAB_SPEED;
+const punchDurationMs = (kind) => ((PUNCHES[kind].range.end - PUNCHES[kind].range.start) * 1000) / PUNCH_SPEED;
 
-fetch("./assets/leftPunch1.json")
-  .then((res) => res.json())
-  .then((json) => {
-    jabClip = json;
-    jabRange = findJabActiveRange(json);
-    console.log(`[Player] Left Jab clip ready (play ${jabRange.start.toFixed(2)}s-${jabRange.end.toFixed(2)}s, ${jabDurationMs().toFixed(0)}ms)`);
-  })
-  .catch((err) => console.error("leftPunch1.json の読み込みに失敗しました", err));
-
-// 状態機械(Three.js非依存の純粋関数): { phase: null(=IDLE) | "jab", startAt }
-function createJabState() { return { phase: null, startAt: 0 }; }
-function triggerJab(state, now) {
-  if (state.phase) return state; // 再生中は無視(多重再生しない)
-  return { phase: "jab", startAt: now };
+for (const [kind, p] of Object.entries(PUNCHES)) {
+  fetch(p.url)
+    .then((res) => res.json())
+    .then((json) => {
+      p.clip = json;
+      p.range = findPunchActiveRange(json);
+      p.hasMove = json.keyframes.some((k) => k.modelPosition);
+      console.log(`[Player] ${p.label} clip ready (play ${p.range.start.toFixed(2)}s-${p.range.end.toFixed(2)}s, ${punchDurationMs(kind).toFixed(0)}ms)`);
+    })
+    .catch((err) => console.error(p.url + " の読み込みに失敗しました", err));
 }
-function advanceJab(state, now, durationMs) {
-  if (state.phase && now - state.startAt >= durationMs) return createJabState();
+
+// 状態機械(Three.js非依存の純粋関数): { phase: null(=IDLE) | "leftJab" | "rightStraight", startAt }
+function createPunchState() { return { phase: null, startAt: 0 }; }
+function triggerPunch(state, kind, now) {
+  if (state.phase) return state; // 再生中は無視(多重再生しない)
+  return { phase: kind, startAt: now };
+}
+function advancePunch(state, now, durationMs) {
+  if (state.phase && now - state.startAt >= durationMs) return createPunchState();
   return state;
 }
 
-let jabState = createJabState();
-const jabStats = { started: 0, ignored: 0, finished: 0 };
+let punchState = createPunchState();
+const punchStats = { started: 0, ignored: 0, finished: 0 };
 function playerDebug(message) { console.log("[Player] " + message); }
 
-// 左肩(左上腕の付け根)の画面上の位置と、タップ判定の半径(CSSピクセル)を求める。
-// プレイヤーは背中をカメラへ向けているので、モデルの「左」は画面の左側に見える
-function leftShoulderScreenZone() {
-  const bone = allBonesByName.LeftUpperArm;
+// 肩(上腕の付け根)の画面上の位置と、タップ判定の半径(CSSピクセル)を求める。
+// プレイヤーは背中をカメラへ向けているので、モデルの「左」は画面の左側、「右」は右側に見える
+function shoulderScreenZone(kind) {
+  const bone = allBonesByName[PUNCHES[kind].bone];
   if (!bone) return null;
   const rect = canvas.getBoundingClientRect();
   const p = bone.getWorldPosition(new THREE.Vector3());
   const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
   const toScreen = (v) => { const n = v.clone().project(camera); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height }; };
-  const c = toScreen(p), e = toScreen(p.clone().addScaledVector(camRight, JAB_HIT_RADIUS_M));
-  return { x: c.x, y: c.y, r: Math.max(JAB_HIT_MIN_RADIUS_PX, Math.hypot(e.x - c.x, e.y - c.y)) };
+  const c = toScreen(p), e = toScreen(p.clone().addScaledVector(camRight, PUNCH_HIT_RADIUS_M));
+  return { x: c.x, y: c.y, r: Math.max(PUNCH_HIT_MIN_RADIUS_PX, Math.hypot(e.x - c.x, e.y - c.y)) };
 }
-function isInLeftShoulderZone(clientX, clientY) {
-  const z = leftShoulderScreenZone();
-  return !!z && Math.hypot(clientX - z.x, clientY - z.y) <= z.r;
+// タップ位置が、どの肩の円に入っているか("leftJab" / "rightStraight" / null)
+function punchAtScreen(clientX, clientY) {
+  for (const kind of Object.keys(PUNCHES)) {
+    const z = shoulderScreenZone(kind);
+    if (z && Math.hypot(clientX - z.x, clientY - z.y) <= z.r) return kind;
+  }
+  return null;
 }
 
-// タップされたときに左ジャブを始める。IDLEのときだけ受け付ける(ジャブ中・回避中・しゃがみ中は無視)
-function tryLeftJab(now) {
-  if (!jabClip || !jabRange) return false;
-  if (jabState.phase || dodgeState.phase || duckState.phase) {
-    jabStats.ignored++;
-    playerDebug(jabState.phase ? "Left Jab input ignored (jab in progress)" : "Left Jab input ignored (busy)");
+// タップされたときにパンチを始める。IDLEのときだけ受け付ける(パンチ中・回避中は無視)
+function tryPunch(kind, now) {
+  const p = PUNCHES[kind];
+  if (!p.clip || !p.range) return false;
+  if (punchState.phase || dodgeState.phase) {
+    punchStats.ignored++;
+    playerDebug(punchState.phase ? `${p.label} input ignored (${PUNCHES[punchState.phase].label} in progress)` : `${p.label} input ignored (busy)`);
     return false;
   }
-  jabState = triggerJab(jabState, now);
-  jabStats.started++;
-  playerDebug("Left Jab");
+  punchState = triggerPunch(punchState, kind, now);
+  punchStats.started++;
+  playerDebug(p.label);
   return true;
 }
 
-// IDLEの上にジャブを重ねた姿勢を作る。IDLEのクリップは止めずに進め続け、ジャブ中だけ
-// その上にジャブのクリップ(範囲の中だけ)をかぶせる。頭と終わりの短い時間はIDLEの姿勢・
+// IDLEの上にパンチを重ねた姿勢を作る。IDLEのクリップは止めずに進め続け、パンチ中だけ
+// その上にパンチのクリップ(範囲の中だけ)をかぶせる。頭と終わりの短い時間はIDLEの姿勢・
 // 体の位置と混ぜる(姿勢はクォータニオンのslerp、位置はlerp)ので、飛ばない。
-// ジャブのmodelPosition(モデル向きでの前進・沈み込み)は、プレイヤーが180°回っているため、
+// パンチのmodelPosition(モデル向きでの前進・沈み込み)は、プレイヤーが180°回っているため、
 // xとzの符号を反転してワールドの位置にする
-function sampleJabOverIdle(now) {
+function samplePunchOverIdle(now) {
+  const p = PUNCHES[punchState.phase];
   const idle = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
-  const elapsedMs = now - jabState.startAt;
-  const totalMs = jabDurationMs();
-  const w = clamp01(Math.min(elapsedMs / JAB_BLEND_IN_MS, (totalMs - elapsedMs) / JAB_BLEND_OUT_MS));
-  const jab = sampleClip(jabClip, jabRange.start + (elapsedMs * JAB_SPEED) / 1000);
-  for (const name of Object.keys(jab.pose)) {
-    idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(jab.pose[name], w) : jab.pose[name];
+  const elapsedMs = now - punchState.startAt;
+  const totalMs = punchDurationMs(punchState.phase);
+  const w = clamp01(Math.min(elapsedMs / PUNCH_BLEND_IN_MS, (totalMs - elapsedMs) / PUNCH_BLEND_OUT_MS));
+  const sample = sampleClip(p.clip, p.range.start + (elapsedMs * PUNCH_SPEED) / 1000);
+  for (const name of Object.keys(sample.pose)) {
+    idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(sample.pose[name], w) : sample.pose[name];
   }
-  const jabWorldPos = [-jab.modelPosition[0], jab.modelPosition[1], -jab.modelPosition[2]];
-  idle.modelPosition = idle.modelPosition.map((v, i) => v + (jabWorldPos[i] - v) * w);
+  if (p.hasMove) {
+    const worldPos = [-sample.modelPosition[0], sample.modelPosition[1], -sample.modelPosition[2]];
+    idle.modelPosition = idle.modelPosition.map((v, i) => v + (worldPos[i] - v) * w);
+  }
   return idle;
 }
 
-// 動作確認用: ?debug=1 を付けて開くと、左肩のタップ判定の範囲を半透明の円で表示する
-let jabZoneDebugEl = null;
+// 動作確認用: ?debug=1 を付けて開くと、左右の肩のタップ判定の範囲を半透明の円で表示する
+const punchZoneDebugEls = {};
 if (new URLSearchParams(location.search).has("debug")) {
-  jabZoneDebugEl = document.createElement("div");
-  jabZoneDebugEl.style.cssText = "position:fixed;pointer-events:none;border:2px solid rgba(255,80,80,0.9);background:rgba(255,80,80,0.18);border-radius:50%;z-index:5;display:none;";
-  document.body.appendChild(jabZoneDebugEl);
+  for (const kind of Object.keys(PUNCHES)) {
+    const el = document.createElement("div");
+    el.style.cssText = "position:fixed;pointer-events:none;border:2px solid rgba(255,80,80,0.9);background:rgba(255,80,80,0.18);border-radius:50%;z-index:5;display:none;";
+    document.body.appendChild(el);
+    punchZoneDebugEls[kind] = el;
+  }
 }
-function updateJabZoneDebug() {
-  if (!jabZoneDebugEl) return;
-  const z = leftShoulderScreenZone();
-  if (!z) return;
-  jabZoneDebugEl.style.display = "block";
-  jabZoneDebugEl.style.left = `${z.x - z.r}px`;
-  jabZoneDebugEl.style.top = `${z.y - z.r}px`;
-  jabZoneDebugEl.style.width = jabZoneDebugEl.style.height = `${z.r * 2}px`;
+function updatePunchZoneDebug() {
+  for (const [kind, el] of Object.entries(punchZoneDebugEls)) {
+    const z = shoulderScreenZone(kind);
+    if (!z) continue;
+    el.style.display = "block";
+    el.style.left = `${z.x - z.r}px`;
+    el.style.top = `${z.y - z.r}px`;
+    el.style.width = el.style.height = `${z.r * 2}px`;
+  }
 }
 
-// ---------- 入力(左右スワイプ・下スワイプ) ----------
+// ---------- 入力(左右スワイプ・肩タップ) ----------
 let dodgeState = createDodgeState();
-let duckState = createDuckState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 function onPointerDown(evt) {
-  // 左肩付近へのタップは、ジャブの入力として扱う(スワイプ・回避の判定には回さない)
-  if (isInLeftShoulderZone(evt.clientX, evt.clientY)) {
+  // 肩付近へのタップは、パンチの入力として扱う(スワイプ・回避の判定には回さない)
+  const punchKind = punchAtScreen(evt.clientX, evt.clientY);
+  if (punchKind) {
     gestureStart = null;
-    tryLeftJab(performance.now());
+    tryPunch(punchKind, performance.now());
     return;
   }
   gestureStart = { ...pointerPos(evt), t: performance.now() };
@@ -707,14 +645,8 @@ function onPointerUp(evt) {
   gestureStart = null;
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
-  // しゃがみ込み中は、一連の動作(しゃがむ→戻る)が終わるまで新しい入力を
-  // 受け付けない(左右の回避移動としゃがみ込みが同時に競合しないようにする)
-  if (duckState.phase || jabState.phase) return; // ジャブ中は回避・しゃがみ込みを受け付けない
-  if (direction === "down") {
-    duckState = triggerDuck(duckState, now);
-    dodgeState = createDodgeState(); // 進行中の回避があれば、しゃがみ込みで打ち切る
-    return;
-  }
+  // パンチ中は、回避の入力を受け付けない
+  if (punchState.phase) return;
   dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now));
 }
 canvas.addEventListener("pointerdown", onPointerDown);
@@ -735,25 +667,18 @@ resize();
 // ---------- レンダーループ ----------
 function render() {
   const now = performance.now();
-  duckState = advanceDuck(duckState, now);
   dodgeState = advanceDodge(dodgeState, now);
 
-  // しゃがみ込み(ダウン)・左右の回避(ドジ)・アイドルの構えループは、
-  // 常にどれか1つだけがボーン・モデル位置を完全に支配する(3状態の
-  // 完全な排他制御)。優先順位はダウン > ドジ > アイドルで、ドジも
-  // ダウンも行っていないときは常にアイドルの構えループが再生される
-  const prevJab = jabState;
-  if (jabClip && jabRange) jabState = advanceJab(jabState, now, jabDurationMs());
-  if (prevJab.phase && !jabState.phase) { jabStats.finished++; playerDebug("Return to Idle"); }
+  // パンチ・左右の回避(ドジ)・アイドルの構えループは、常にどれか1つだけが
+  // ボーン・モデル位置を完全に支配する(完全な排他制御)。優先順位はパンチ > ドジ > アイドルで、
+  // どれも行っていないときは常にアイドルの構えループが再生される
+  const prevPunch = punchState;
+  if (prevPunch.phase) punchState = advancePunch(punchState, now, punchDurationMs(prevPunch.phase));
+  if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
-  if (jabState.phase) {
-    // 左ジャブ(IDLEの上に重ねる)。しゃがみ込み・回避はジャブが終わるまで始まらない
-    const sample = sampleJabOverIdle(now);
-    applyClipSample(sample);
-    shadowBlob.position.x = sample.modelPosition[0] + 0.05;
-  } else if (duckState.phase) {
-    const clipTime = computeDuckClipTime(duckState, now);
-    const sample = sampleClip(DUCK_CLIP, clipTime);
+  if (punchState.phase) {
+    // 肩タップのパンチ(IDLEの上に重ねる)。回避はパンチが終わるまで始まらない
+    const sample = samplePunchOverIdle(now);
     applyClipSample(sample);
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   } else if (dodgeState.phase) {
@@ -767,7 +692,7 @@ function render() {
     shadowBlob.position.x = x + 0.05;
 
     if (bones.spine) {
-      // しゃがみ込み・アイドルのクリップだけが操作するボーン(Hips・
+      // アイドル・パンチのクリップだけが操作するボーン(Hips・
       // LeftForearm)は、回避姿勢には含まれないため、ここで明示的に
       // 直立姿勢へ戻しておく(他のクリップの端数が残らないようにする)
       if (bones.hips) bones.hips.quaternion.identity();
@@ -786,7 +711,7 @@ function render() {
   }
 
   updateOpponent(now);
-  updateJabZoneDebug();
+  updatePunchZoneDebug();
 
   renderer.render(scene, camera);
   requestAnimationFrame(render);
@@ -806,25 +731,13 @@ window.__dodge = {
   getState: () => dodgeState,
   simulateSwipe: (direction, now) => { dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now)); },
 };
-// しゃがみ込み(下スワイプ)のテスト/デバッグ用
-window.__duck = {
-  createDuckState,
-  triggerDuck,
-  advanceDuck,
-  computeDuckClipTime,
-  sampleClip,
-  clip: DUCK_CLIP,
-  clipEndTime: DUCK_CLIP_END_TIME,
-  getState: () => duckState,
-  simulateDown: (now) => { duckState = triggerDuck(duckState, now); dodgeState = createDodgeState(); },
-};
 // アイドル状態(常時構え)のループ再生のテスト/デバッグ用
 window.__idle = {
   clip: IDLE_CLIP,
   loopDuration: IDLE_LOOP_DURATION,
   computeIdleClipTime,
   sampleClip,
-  isActive: () => !duckState.phase && !dodgeState.phase,
+  isActive: () => !dodgeState.phase,
 };
 
 // 相手の攻撃遷移のテスト/デバッグ用
@@ -839,17 +752,17 @@ window.__enemy = {
   WAIT_MAX_MS: ENEMY_WAIT_MAX_MS,
 };
 
-// スリング式の左ジャブ(左肩タップ)のテスト/デバッグ用
-window.__jab = {
-  createJabState,
-  triggerJab,
-  advanceJab,
-  tryLeftJab,
-  findJabActiveRange,
-  leftShoulderScreenZone,
-  isInLeftShoulderZone,
-  getState: () => jabState,
-  getStats: () => ({ ...jabStats }),
-  getRange: () => jabRange,
-  durationMs: () => (jabRange ? jabDurationMs() : null),
+// 肩タップのパンチ(左ジャブ・右ストレート)のテスト/デバッグ用
+window.__punch = {
+  createPunchState,
+  triggerPunch,
+  advancePunch,
+  tryPunch,
+  findPunchActiveRange,
+  shoulderScreenZone,
+  punchAtScreen,
+  getState: () => punchState,
+  getStats: () => ({ ...punchStats }),
+  getRange: (kind) => PUNCHES[kind].range,
+  durationMs: (kind) => (PUNCHES[kind].range ? punchDurationMs(kind) : null),
 };
