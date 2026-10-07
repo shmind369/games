@@ -848,6 +848,82 @@ function applyHitRecoil(now) {
   player.position.y -= HIT_RECOIL_DROP_M * k;
 }
 
+
+// ---------- 敵の被弾/ガード(プレイヤーのパンチの結果) ----------
+// プレイヤーのパンチのグローブが敵の頭・胸に届いた瞬間に、1パンチにつき1回だけ結果を決める。
+// ENEMY_HIT_CHANCE(=10%)で「被弾」、残り(90%)は「ガード」。どちらも、敵の現在の姿勢の上に
+// ボーンの回転・位置を上乗せする(プレイヤーの被弾のけぞりと同じ方式)。
+// 被弾したら、敵の攻撃は中断される(カウンター)。ガードでは攻撃は止まらない
+const ENEMY_HIT_CHANCE = 0.1;
+const ENEMY_REACT = {
+  // 被弾: 瞬間的に大きくのけぞる(頭を跳ね上げ、腕を振り上げ、後ろへ下がる)
+  hit: { inMs: 50, holdMs: 80, outMs: 380, back: 0.22, drop: 0.05,
+    bones: { Hips: [-0.2, 0, 0], Spine: [-0.55, 0, 0], Chest: [-0.35, 0, 0], Neck: [-0.5, 0, 0], Head: [-0.6, 0, 0],
+      LeftShoulder: [-0.3, 0, 0], RightShoulder: [-0.3, 0, 0], LeftUpperArm: [-0.7, 0, 0], RightUpperArm: [-0.7, 0, 0] } },
+  // ガード: 両腕を顔の前へ固めて、頭を縮め、体が軽く後ろへ押される
+  guard: { inMs: 40, holdMs: 90, outMs: 240, back: 0.07, drop: 0.03,
+    bones: { Spine: [-0.12, 0, 0], Chest: [0.1, 0, 0], Neck: [0.25, 0, 0], Head: [0.2, 0, 0],
+      LeftShoulder: [0.1, 0, 0.05], RightShoulder: [0.1, 0, -0.05], LeftUpperArm: [0.1, 0, 0], RightUpperArm: [0.1, 0, 0],
+      LeftForearm: [-0.2, 0, 0], RightForearm: [-0.2, 0, 0] } },
+};
+let enemyReact = { kind: null, at: -1e9, side: 1 };
+let enemyHitProbability = ENEMY_HIT_CHANCE;
+let enemyForcedResult = null; // テスト用
+let punchResolved = true;
+const enemyReactMs = (r) => r.inMs + r.holdMs + r.outMs;
+function enemyReactAmount(now) {
+  if (!enemyReact.kind) return 0;
+  const r = ENEMY_REACT[enemyReact.kind], e = now - enemyReact.at;
+  if (e < 0 || e >= enemyReactMs(r)) return 0;
+  if (e < r.inMs) return easeOutCubic(e / r.inMs);
+  if (e < r.inMs + r.holdMs) return 1;
+  const t = (e - r.inMs - r.holdMs) / r.outMs;
+  return 1 - t * t * (3 - 2 * t);
+}
+const _eQ = new THREE.Quaternion(), _eE = new THREE.Euler();
+function applyEnemyReact(now) {
+  const k = enemyReactAmount(now);
+  if (k <= 0) return;
+  const r = ENEMY_REACT[enemyReact.kind];
+  for (const name of Object.keys(r.bones)) {
+    const bone = opponentBonesByName[name];
+    if (!bone) continue;
+    const [x, y, z] = r.bones[name];
+    // 被弾のときは、パンチの左右で頭と上体が少しひねられる
+    const twist = enemyReact.kind === "hit" && (name === "Head" || name === "Spine") ? 0.35 * enemyReact.side : 0;
+    bone.quaternion.premultiply(_eQ.setFromEuler(_eE.set(x * k, (y + twist) * k, z * k)));
+  }
+  opponent.position.z -= r.back * k; // 敵は+Zを向いているので、-Zが後ろ
+  opponent.position.y -= r.drop * k;
+}
+// プレイヤーのグローブ(手首から前腕の向きへ少し先)が、敵の頭・胸の球に届いたか
+function playerGloveReachesEnemy() {
+  const p = PUNCHES[punchState.phase];
+  const hand = allBonesByName[p.bone], fore = allBonesByName[p.forearm];
+  if (!hand || !fore) return false;
+  const h = hand.getWorldPosition(new THREE.Vector3()), f = fore.getWorldPosition(new THREE.Vector3());
+  const glove = h.clone().add(h.clone().sub(f).normalize().multiplyScalar(PUNCH_GLOVE_FORWARD_M));
+  for (const [name, radius] of [["Head", 0.18], ["Chest", 0.24]]) {
+    const b = opponentBonesByName[name];
+    if (b && glove.distanceTo(b.getWorldPosition(new THREE.Vector3())) <= radius + FIST_RADIUS_M) return true;
+  }
+  return false;
+}
+function resolvePlayerPunch(now) {
+  const p = PUNCHES[punchState.phase];
+  const hit = enemyForcedResult ? enemyForcedResult === "hit" : Math.random() < enemyHitProbability;
+  enemyReact = { kind: hit ? "hit" : "guard", at: now, side: punchState.phase === "leftJab" ? 1 : -1 };
+  playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}`);
+  if (hit && enemyState && enemyState.phase === "jab") { enemyAttackResolved = true; enemyState = createEnemyState(now); enemyDebug("Attack interrupted by counter"); }
+}
+// 毎フレーム: パンチが始まった直後に判定をリセットし、グローブが届いた瞬間(届かなければ後半の途中)に1回だけ結果を出す
+function updatePunchResult(now) {
+  if (!punchState.phase) { punchResolved = false; return; }
+  if (punchResolved) return;
+  const elapsed = now - punchState.startAt, total = punchDurationMs(punchState.phase);
+  if (playerGloveReachesEnemy() || elapsed > total * 0.6) { punchResolved = true; resolvePlayerPunch(now); }
+}
+
 // ---------- レンダーループ ----------
 function render() {
   const now = performance.now();
@@ -897,6 +973,8 @@ function render() {
 
   applyHitRecoil(now);
   updateOpponent(now);
+  applyEnemyReact(now);
+  updatePunchResult(now);
   updatePunchZoneDebug();
 
   renderer.render(scene, camera);
@@ -955,6 +1033,13 @@ window.__punch = {
 };
 
 // プレイヤーの被ダメージのテスト/デバッグ用
+window.__enemyReact = {
+  getState: () => ({ ...enemyReact }),
+  amount: () => enemyReactAmount(performance.now()),
+  force: (r) => { enemyForcedResult = r; }, // "hit" | "guard" | null
+  setHitChance: (v) => { enemyHitProbability = v; },
+  trigger: (kind) => { enemyReact = { kind, at: performance.now(), side: 1 }; },
+};
 window.__combat = {
   MAX_HP: PLAYER_MAX_HP,
   JAB_DAMAGE: ENEMY_JAB_DAMAGE,
