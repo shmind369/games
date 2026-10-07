@@ -281,13 +281,18 @@ function computeDuckClipTime(state, now) {
   return state.phase === "out" ? DUCK_CLIP_END_TIME * t : DUCK_CLIP_END_TIME * (1 - t);
 }
 
-// 参照画像の構図(頭が地平線のすぐ下、キャラクターが画面下半分を占める、
-// 見下ろし気味のカメラ)を再現するためのカメラパラメータ。
+// 参照画像(スーパーパンチアウト風)の構図を再現するためのカメラパラメータ。
+// 手前に背中を向けたプレイヤー(頭が画面の中ほど、腰より上が映る)、その奥に
+// 向かい合う相手(頭が画面の上のほう、プレイヤーの約半分の大きさ)が並んで見えるよう、
+// カメラを高めに置いて見下ろす。プレイヤーの頭・相手の頭・プレイヤーの腰の
+// 画面上の高さが参照画像に近づくよう、距離と高さと角度を計算して決めた
+// (縦FOV42°で、頭頂が画面の約49%・約20%の位置、プレイヤーの腰が約88%の位置。
+// 相手はプレイヤーの約1.7m先にいて、画面上の大きさはプレイヤーの約半分)。
 // キャラクターは原点に立ち、背中をカメラ側(+Z)に向けている(-Z方向を向く)。
 const CAMERA_FOV_DEG = 42;
-const CAMERA_HEIGHT = 1.85;
-const CAMERA_DISTANCE = 3.0;
-const LOOK_AT_HEIGHT = 1.5;
+const CAMERA_HEIGHT = 2.55;
+const CAMERA_DISTANCE = 1.8;
+const LOOK_AT_HEIGHT = 1.67;
 
 function computeCameraPose() {
   return {
@@ -357,14 +362,25 @@ scene.add(keyLight);
 const skyFill = new THREE.HemisphereLight(0x9fb8e6, 0x8a91a0, 0.6);
 scene.add(skyFill);
 
-// ---------- キャラクター(humanoid-gltf-exporterで書き出したGLTFモデルを読み込む) ----------
-// 回避の姿勢制御(腰を支点にした上半身の傾き、股関節・膝の曲げ)は、
-// モデルの内部にある同名のボーン(Spine/LeftUpperLeg/LeftLowerLeg等)を
+// ---------- キャラクター(humanoid-gltf-exporterで書き出した、ボーン入りGLBを読み込む) ----------
+// 参照画像(スーパーパンチアウト風)の構図に合わせて、2人のボクサーを向かい合わせに配置する。
+//  ・手前(プレイヤー): 赤パンのボクサー(boxer_rigged.glb)。背中をカメラ(+Z)に向けて原点に立つ
+//  ・奥(相手): USAボクサー(box_usa_rigged.glb)。プレイヤーの正面(-Z側)に、カメラ側(+Z)を向いて立つ
+// どちらも19本のボーン(Hips/Spine/.../RightFoot)を持つ同じ構成のモデルで、ボーン名で
+// 回転を適用できる。回避の姿勢制御(腰を支点にした上半身の傾き、股関節・膝の曲げ)は、
+// プレイヤーモデルの内部にある同名のボーン(Spine/LeftUpperLeg/LeftLowerLeg等)を
 // 直接回転させることで実現する。モデルが届くまでは空のグループのまま
 // レンダーループを回し、読み込み完了時にボーン参照をセットする
 const player = new THREE.Group();
 player.rotation.y = Math.PI; // 背中をカメラ(+Z)に向ける
 scene.add(player);
+
+// 相手のボクサー(USA)。位置はOPPONENT_BASE(ワールド)で、プレイヤーと向かい合う
+// (モデルは+Z方向を向いて作られているので、回転なしでカメラ側を向く)
+const OPPONENT_BASE = new THREE.Vector3(0.1, 0, -1.7);
+const opponent = new THREE.Group();
+opponent.position.copy(OPPONENT_BASE);
+scene.add(opponent);
 
 const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerLeg: null, rightLowerLeg: null };
 // しゃがみ込みクリップ(DUCK_CLIP)はSpine/LeftUpperLeg等だけでなく、Hips・
@@ -372,28 +388,55 @@ const bones = { spine: null, leftUpperLeg: null, rightUpperLeg: null, leftLowerL
 // 引けるマップを別途用意する(将来別のクリップを追加する場合もそのまま
 // 流用できる汎用的な仕組みにしている)
 let allBonesByName = {};
-new GLTFLoader().load(
-  "./assets/boxer.glb",
-  (gltf) => {
-    const model = gltf.scene;
-    // 書き出し元(humanoid-gltf-exporter)はアニメーション再生中にエクスポート
-    // されたため、各ボーンの初期回転にアニメーション途中の姿勢が焼き込まれて
-    // いる。回避動作の回転と衝突しないよう、全ボーンを回転なしの直立姿勢に
-    // リセットしてから使う
-    model.traverse((o) => { if (o.isBone) o.quaternion.identity(); });
-    player.add(model);
-    model.traverse((o) => { if (o.isBone) allBonesByName[o.name] = o; });
-    bones.hips = model.getObjectByName("Hips");
-    bones.spine = model.getObjectByName("Spine");
-    bones.leftUpperLeg = model.getObjectByName("LeftUpperLeg");
-    bones.rightUpperLeg = model.getObjectByName("RightUpperLeg");
-    bones.leftLowerLeg = model.getObjectByName("LeftLowerLeg");
-    bones.rightLowerLeg = model.getObjectByName("RightLowerLeg");
-    bones.leftForearm = model.getObjectByName("LeftForearm");
-  },
-  undefined,
-  (err) => console.error("boxer.glb の読み込みに失敗しました", err)
-);
+let opponentBonesByName = {};
+let opponentIdleClip = null; // assets/fightIdleUsa.json(USAボクサーの構えのアイドル。2秒でループ)
+
+function loadFighter(url, group, onBones) {
+  new GLTFLoader().load(
+    url,
+    (gltf) => {
+      const model = gltf.scene;
+      // 全ボーンを回転なしの直立姿勢にリセットしてから使う(クリップの回転と衝突しないように)
+      model.traverse((o) => { if (o.isBone) o.quaternion.identity(); });
+      group.add(model);
+      const byName = {};
+      model.traverse((o) => { if (o.isBone) byName[o.name] = o; });
+      onBones(model, byName);
+    },
+    undefined,
+    (err) => console.error(url + " の読み込みに失敗しました", err)
+  );
+}
+
+loadFighter("./assets/boxer_rigged.glb", player, (model, byName) => {
+  allBonesByName = byName;
+  bones.hips = model.getObjectByName("Hips");
+  bones.spine = model.getObjectByName("Spine");
+  bones.leftUpperLeg = model.getObjectByName("LeftUpperLeg");
+  bones.rightUpperLeg = model.getObjectByName("RightUpperLeg");
+  bones.leftLowerLeg = model.getObjectByName("LeftLowerLeg");
+  bones.rightLowerLeg = model.getObjectByName("RightLowerLeg");
+  bones.leftForearm = model.getObjectByName("LeftForearm");
+});
+loadFighter("./assets/box_usa_rigged.glb", opponent, (model, byName) => { opponentBonesByName = byName; });
+fetch("./assets/fightIdleUsa.json")
+  .then((res) => res.json())
+  .then((json) => { opponentIdleClip = json; })
+  .catch((err) => console.error("fightIdleUsa.json の読み込みに失敗しました", err));
+
+// 相手のアイドル(構えのループ)を、現在時刻で再生する。クリップの先頭と末尾の姿勢・位置が
+// 一致しているので、時刻を長さで割った余りを取るだけで継ぎ目なくループする
+function updateOpponentIdle(nowMs) {
+  if (!opponentIdleClip) return;
+  const keys = opponentIdleClip.keyframes;
+  const duration = keys[keys.length - 1].time;
+  const sample = sampleClip(opponentIdleClip, (nowMs / 1000) % duration);
+  for (const name of Object.keys(sample.pose)) {
+    const bone = opponentBonesByName[name];
+    if (bone) bone.quaternion.copy(sample.pose[name]);
+  }
+  opponent.position.set(OPPONENT_BASE.x + sample.modelPosition[0], OPPONENT_BASE.y + sample.modelPosition[1], OPPONENT_BASE.z + sample.modelPosition[2]);
+}
 
 // クリップのサンプル結果(pose: ボーン名→Quaternion、modelPosition)を、
 // 実際のシーングラフ(ボーン・player.position)へ適用する
@@ -427,6 +470,10 @@ const shadowBlob = new THREE.Mesh(
 shadowBlob.rotation.x = -Math.PI / 2;
 shadowBlob.position.set(0.05, 0.015, 0.18);
 scene.add(shadowBlob);
+// 相手の足元にも同じ接地シャドウを置く
+const opponentShadow = shadowBlob.clone();
+opponentShadow.position.set(OPPONENT_BASE.x + 0.05, 0.015, OPPONENT_BASE.z + 0.04);
+scene.add(opponentShadow);
 
 // ---------- 入力(左右スワイプ・下スワイプ) ----------
 let dodgeState = createDodgeState();
@@ -513,13 +560,15 @@ function render() {
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   }
 
+  updateOpponentIdle(now);
+
   renderer.render(scene, camera);
   requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
 
 // テスト/デバッグ用に主要オブジェクトを公開
-window.__scene = { scene, camera, player, ground, grid, bones, allBonesByName: () => allBonesByName };
+window.__scene = { scene, camera, player, opponent, ground, grid, bones, allBonesByName: () => allBonesByName, opponentBonesByName: () => opponentBonesByName };
 window.__dodge = {
   classifySwipe,
   onSwipe,
