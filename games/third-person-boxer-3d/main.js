@@ -402,6 +402,20 @@ fetch("./assets/leftJabWindupUsa.json")
   .then((res) => res.json())
   .then((json) => { enemyWindupClip = json; })
   .catch((err) => console.error("leftJabWindupUsa.json の読み込みに失敗しました", err));
+// 敵のガード(プレイヤーのパンチをガードしたとき)のモーション。攻撃中でなければ、これを再生する
+let enemyGuardClip = null; // assets/guardUsa1.json
+const ENEMY_GUARD_BLEND_IN_MS = 40, ENEMY_GUARD_BLEND_OUT_MS = 100;
+fetch("./assets/guardUsa1.json")
+  .then((res) => res.json())
+  .then((json) => { enemyGuardClip = json; })
+  .catch((err) => console.error("guardUsa1.json の読み込みに失敗しました", err));
+// ガードのクリップをどれだけ反映するか(0〜1)。ガード中でない/攻撃中(攻撃の腕を邪魔しない)/クリップ未読み込みなら0
+function enemyGuardClipWeight(nowMs) {
+  if (!enemyGuardClip || enemyReact.kind !== "guard" || (enemyState && enemyState.phase === "jab")) return 0;
+  const e = nowMs - enemyReact.at, dur = clipEndMs(enemyGuardClip);
+  if (e < 0 || e >= dur) return 0;
+  return clamp01(Math.min(e / ENEMY_GUARD_BLEND_IN_MS, (dur - e) / ENEMY_GUARD_BLEND_OUT_MS));
+}
 
 function stepEnemyState(now) {
   if (!opponentIdleClip || !enemyJabClip || !enemyWindupClip) return;
@@ -645,6 +659,12 @@ function updateOpponent(nowMs) {
       sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(atk.pose[name], w) : atk.pose[name];
     }
     sample.modelPosition = sample.modelPosition.map((v, i) => v + (atk.modelPosition[i] - v) * w);
+  }
+  const gw = enemyGuardClipWeight(nowMs);
+  if (gw > 0) {
+    const g = sampleClip(enemyGuardClip, (nowMs - enemyReact.at) / 1000);
+    for (const name of Object.keys(g.pose)) sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(g.pose[name], gw) : g.pose[name];
+    sample.modelPosition = sample.modelPosition.map((v, i) => v + (g.modelPosition[i] - v) * gw);
   }
   for (const name of Object.keys(sample.pose)) {
     const bone = opponentBonesByName[name];
@@ -1172,6 +1192,7 @@ const _eQ = new THREE.Quaternion(), _eE = new THREE.Euler();
 function applyEnemyReact(now) {
   const k = enemyReactAmount(now);
   if (k <= 0) return;
+  if (enemyReact.kind === "guard" && enemyGuardClipWeight(now) > 0) return; // ガードはクリップで再生中(上乗せは、攻撃中などクリップを使えないときだけ)
   const r = ENEMY_REACT[enemyReact.kind];
   for (const name of Object.keys(r.bones)) {
     const bone = opponentBonesByName[name];
