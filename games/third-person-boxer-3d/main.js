@@ -812,7 +812,7 @@ const SLING_MAX_DRAG_PX = 160;  // この距離で最大テイクバック(100%)
 const SLING_MIN_PULL = 0.12;    // これ未満で離したらキャンセル(パンチを出さずIdleへ)
 const SLING_EXTRA_RELEASE_MS = 70; // 離したあと、上乗せの引きが消えるまでの時間
 const SLING_EXTRA = { // X軸回転(ラジアン)
-  leftJab: { LeftShoulder: -0.1, LeftUpperArm: -0.2, LeftForearm: -0.15 }, // 左ジャブのクリップ自体に振りかぶりがあるので、上乗せは控えめ
+  leftJab: { LeftShoulder: -0.05 }, // 左ジャブのクリップ自体に振りかぶりがあるので、上乗せは控えめ
   rightStraight: { RightShoulder: -0.1, Chest: 0.12 }, // 右ストレートのクリップは引きが大きいので、上乗せは控えめ
 };
 let slingSeq = 0;
