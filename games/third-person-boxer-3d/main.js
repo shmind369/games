@@ -378,8 +378,9 @@ scene.add(player);
 // 相手のボクサー(USA)。位置はOPPONENT_BASE(ワールド)で、プレイヤーと向かい合う
 // (モデルは+Z方向を向いて作られているので、回転なしでカメラ側を向く)
 // 左ジャブ(手首が相手の基準位置から約0.73m前へ伸びる)の拳が、プレイヤーの顔の前に
-// 届く距離(z=-1.0)と横位置(x=-0.12。相手の左手は+X側に伸びるため、その分左へずらす)
-const OPPONENT_BASE = new THREE.Vector3(-0.12, 0, -1.0);
+// 届く距離(z=-1.0)。横位置(x)は、プレイヤー(原点、x=0)と相手の中心線が一致するよう
+// x=0(画面中央)にしている(正面から見て、両者が同じX座標)
+const OPPONENT_BASE = new THREE.Vector3(0, 0, -1.0);
 const opponent = new THREE.Group();
 opponent.position.copy(OPPONENT_BASE);
 scene.add(opponent);
