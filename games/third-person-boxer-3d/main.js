@@ -549,12 +549,154 @@ const opponentShadow = shadowBlob.clone();
 opponentShadow.position.set(OPPONENT_BASE.x + 0.05, 0.015, OPPONENT_BASE.z + 0.04);
 scene.add(opponentShadow);
 
+// ---------- スリング式の左ジャブ(左肩タップ) ----------
+// Sling Kongのような「ゴムを弾く」感覚のパンチ入力のプロトタイプ。今回は、プレイヤーの
+// 左肩付近をタップすると左ジャブが出る、という1つだけを実装している(右パンチ・フック・
+// アッパー・攻撃判定・ダメージ・コンボ・引っ張り量による威力変化は作っていない)。
+//  ・モーションは、すでにあるhumanoid-gltf-exporter製の「踏み込んで左ジャブ」(assets/leftPunch1.json、
+//    ボクサー用)をそのまま使う(ファイルは変更しない)。腰を沈めて左足を踏み出しながら打ち、
+//    後ろ足を引き付けて元の位置へ戻る動きで、1m先の相手に拳が届く。
+//    その場で打つ版(leftPunch.json)は、拳が約0.25mしか伸びず、相手の手前で止まってしまう。
+//    体の前進・沈み込みは、クリップのmodelPositionに入っている。クリップはモデル向き(+Z)で
+//    作られているが、プレイヤーは背中をカメラへ向けて(Y軸で180°回して)いるため、
+//    ワールドでは x と z の符号を反転して適用する
+//  ・再生は、クリップの先頭から「構えに戻った時点」まで(末尾の、構えのまま止まっている区間は
+//    使わない)。キーフレームは変更せず、再生する範囲を決めるだけ
+//  ・入力は、タップした瞬間(pointerdown)に出す。指を離すまで待たないので、その分だけ速い。
+//    (左肩から始まったスワイプは、回避ではなくジャブの入力として扱う)
+//  ・状態は IDLE ⇄ LEFT_JAB の2つ。ジャブ再生中のタップは無視する(多重再生しない)。
+//    ジャブが終わったら、必ずIDLEへ戻る
+const JAB_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
+const JAB_BLEND_IN_MS = 60; // Idleの姿勢からジャブの最初の姿勢へなじませる時間(短いほど弾ける感じ)
+const JAB_BLEND_OUT_MS = 150; // ジャブの最後の構えからIdleへなじませる時間
+const JAB_HIT_RADIUS_M = 0.17; // 左肩のタップ判定の半径(ワールド単位。画面上ではこの大きさに投影する。大きすぎると体の中央まで入ってしまう)
+const JAB_HIT_MIN_RADIUS_PX = 44; // 画面が小さいときでも、指で押せる最小の半径(CSSピクセル)
+
+let jabClip = null; // assets/leftPunch1.json
+let jabRange = null; // { start, end }(クリップ内の再生範囲、秒)
+function poseEquals(a, b) {
+  for (const name of Object.keys(a)) {
+    const x = a[name], y = b[name];
+    if (!y) return false;
+    for (let i = 0; i < 4; i++) if (Math.abs(x[i] - y[i]) > 1e-9) return false;
+  }
+  return true;
+}
+// 先頭の「構えのまま止まっている」区間の終わりと、末尾の「構えに戻って止まっている」区間の
+// 始まりを、キーフレームから求める
+function findJabActiveRange(clip) {
+  const keys = clip.keyframes.filter((k) => k.pose);
+  let startIdx = 0;
+  while (startIdx + 1 < keys.length && poseEquals(keys[startIdx + 1].pose, keys[0].pose)) startIdx++;
+  let endIdx = keys.length - 1;
+  while (endIdx - 1 > startIdx && poseEquals(keys[endIdx - 1].pose, keys[keys.length - 1].pose)) endIdx--;
+  return { start: keys[startIdx].time, end: keys[endIdx].time };
+}
+const jabDurationMs = () => ((jabRange.end - jabRange.start) * 1000) / JAB_SPEED;
+
+fetch("./assets/leftPunch1.json")
+  .then((res) => res.json())
+  .then((json) => {
+    jabClip = json;
+    jabRange = findJabActiveRange(json);
+    console.log(`[Player] Left Jab clip ready (play ${jabRange.start.toFixed(2)}s-${jabRange.end.toFixed(2)}s, ${jabDurationMs().toFixed(0)}ms)`);
+  })
+  .catch((err) => console.error("leftPunch1.json の読み込みに失敗しました", err));
+
+// 状態機械(Three.js非依存の純粋関数): { phase: null(=IDLE) | "jab", startAt }
+function createJabState() { return { phase: null, startAt: 0 }; }
+function triggerJab(state, now) {
+  if (state.phase) return state; // 再生中は無視(多重再生しない)
+  return { phase: "jab", startAt: now };
+}
+function advanceJab(state, now, durationMs) {
+  if (state.phase && now - state.startAt >= durationMs) return createJabState();
+  return state;
+}
+
+let jabState = createJabState();
+const jabStats = { started: 0, ignored: 0, finished: 0 };
+function playerDebug(message) { console.log("[Player] " + message); }
+
+// 左肩(左上腕の付け根)の画面上の位置と、タップ判定の半径(CSSピクセル)を求める。
+// プレイヤーは背中をカメラへ向けているので、モデルの「左」は画面の左側に見える
+function leftShoulderScreenZone() {
+  const bone = allBonesByName.LeftUpperArm;
+  if (!bone) return null;
+  const rect = canvas.getBoundingClientRect();
+  const p = bone.getWorldPosition(new THREE.Vector3());
+  const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  const toScreen = (v) => { const n = v.clone().project(camera); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height }; };
+  const c = toScreen(p), e = toScreen(p.clone().addScaledVector(camRight, JAB_HIT_RADIUS_M));
+  return { x: c.x, y: c.y, r: Math.max(JAB_HIT_MIN_RADIUS_PX, Math.hypot(e.x - c.x, e.y - c.y)) };
+}
+function isInLeftShoulderZone(clientX, clientY) {
+  const z = leftShoulderScreenZone();
+  return !!z && Math.hypot(clientX - z.x, clientY - z.y) <= z.r;
+}
+
+// タップされたときに左ジャブを始める。IDLEのときだけ受け付ける(ジャブ中・回避中・しゃがみ中は無視)
+function tryLeftJab(now) {
+  if (!jabClip || !jabRange) return false;
+  if (jabState.phase || dodgeState.phase || duckState.phase) {
+    jabStats.ignored++;
+    playerDebug(jabState.phase ? "Left Jab input ignored (jab in progress)" : "Left Jab input ignored (busy)");
+    return false;
+  }
+  jabState = triggerJab(jabState, now);
+  jabStats.started++;
+  playerDebug("Left Jab");
+  return true;
+}
+
+// IDLEの上にジャブを重ねた姿勢を作る。IDLEのクリップは止めずに進め続け、ジャブ中だけ
+// その上にジャブのクリップ(範囲の中だけ)をかぶせる。頭と終わりの短い時間はIDLEの姿勢・
+// 体の位置と混ぜる(姿勢はクォータニオンのslerp、位置はlerp)ので、飛ばない。
+// ジャブのmodelPosition(モデル向きでの前進・沈み込み)は、プレイヤーが180°回っているため、
+// xとzの符号を反転してワールドの位置にする
+function sampleJabOverIdle(now) {
+  const idle = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
+  const elapsedMs = now - jabState.startAt;
+  const totalMs = jabDurationMs();
+  const w = clamp01(Math.min(elapsedMs / JAB_BLEND_IN_MS, (totalMs - elapsedMs) / JAB_BLEND_OUT_MS));
+  const jab = sampleClip(jabClip, jabRange.start + (elapsedMs * JAB_SPEED) / 1000);
+  for (const name of Object.keys(jab.pose)) {
+    idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(jab.pose[name], w) : jab.pose[name];
+  }
+  const jabWorldPos = [-jab.modelPosition[0], jab.modelPosition[1], -jab.modelPosition[2]];
+  idle.modelPosition = idle.modelPosition.map((v, i) => v + (jabWorldPos[i] - v) * w);
+  return idle;
+}
+
+// 動作確認用: ?debug=1 を付けて開くと、左肩のタップ判定の範囲を半透明の円で表示する
+let jabZoneDebugEl = null;
+if (new URLSearchParams(location.search).has("debug")) {
+  jabZoneDebugEl = document.createElement("div");
+  jabZoneDebugEl.style.cssText = "position:fixed;pointer-events:none;border:2px solid rgba(255,80,80,0.9);background:rgba(255,80,80,0.18);border-radius:50%;z-index:5;display:none;";
+  document.body.appendChild(jabZoneDebugEl);
+}
+function updateJabZoneDebug() {
+  if (!jabZoneDebugEl) return;
+  const z = leftShoulderScreenZone();
+  if (!z) return;
+  jabZoneDebugEl.style.display = "block";
+  jabZoneDebugEl.style.left = `${z.x - z.r}px`;
+  jabZoneDebugEl.style.top = `${z.y - z.r}px`;
+  jabZoneDebugEl.style.width = jabZoneDebugEl.style.height = `${z.r * 2}px`;
+}
+
 // ---------- 入力(左右スワイプ・下スワイプ) ----------
 let dodgeState = createDodgeState();
 let duckState = createDuckState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 function onPointerDown(evt) {
+  // 左肩付近へのタップは、ジャブの入力として扱う(スワイプ・回避の判定には回さない)
+  if (isInLeftShoulderZone(evt.clientX, evt.clientY)) {
+    gestureStart = null;
+    tryLeftJab(performance.now());
+    return;
+  }
   gestureStart = { ...pointerPos(evt), t: performance.now() };
 }
 function onPointerUp(evt) {
@@ -567,7 +709,7 @@ function onPointerUp(evt) {
   if (!direction) return;
   // しゃがみ込み中は、一連の動作(しゃがむ→戻る)が終わるまで新しい入力を
   // 受け付けない(左右の回避移動としゃがみ込みが同時に競合しないようにする)
-  if (duckState.phase) return;
+  if (duckState.phase || jabState.phase) return; // ジャブ中は回避・しゃがみ込みを受け付けない
   if (direction === "down") {
     duckState = triggerDuck(duckState, now);
     dodgeState = createDodgeState(); // 進行中の回避があれば、しゃがみ込みで打ち切る
@@ -600,7 +742,16 @@ function render() {
   // 常にどれか1つだけがボーン・モデル位置を完全に支配する(3状態の
   // 完全な排他制御)。優先順位はダウン > ドジ > アイドルで、ドジも
   // ダウンも行っていないときは常にアイドルの構えループが再生される
-  if (duckState.phase) {
+  const prevJab = jabState;
+  if (jabClip && jabRange) jabState = advanceJab(jabState, now, jabDurationMs());
+  if (prevJab.phase && !jabState.phase) { jabStats.finished++; playerDebug("Return to Idle"); }
+
+  if (jabState.phase) {
+    // 左ジャブ(IDLEの上に重ねる)。しゃがみ込み・回避はジャブが終わるまで始まらない
+    const sample = sampleJabOverIdle(now);
+    applyClipSample(sample);
+    shadowBlob.position.x = sample.modelPosition[0] + 0.05;
+  } else if (duckState.phase) {
     const clipTime = computeDuckClipTime(duckState, now);
     const sample = sampleClip(DUCK_CLIP, clipTime);
     applyClipSample(sample);
@@ -635,6 +786,7 @@ function render() {
   }
 
   updateOpponent(now);
+  updateJabZoneDebug();
 
   renderer.render(scene, camera);
   requestAnimationFrame(render);
@@ -685,4 +837,19 @@ window.__enemy = {
   jabDurationMs: () => (enemyJabClip ? enemyJabDurationMs() : null),
   WAIT_MIN_MS: ENEMY_WAIT_MIN_MS,
   WAIT_MAX_MS: ENEMY_WAIT_MAX_MS,
+};
+
+// スリング式の左ジャブ(左肩タップ)のテスト/デバッグ用
+window.__jab = {
+  createJabState,
+  triggerJab,
+  advanceJab,
+  tryLeftJab,
+  findJabActiveRange,
+  leftShoulderScreenZone,
+  isInLeftShoulderZone,
+  getState: () => jabState,
+  getStats: () => ({ ...jabStats }),
+  getRange: () => jabRange,
+  durationMs: () => (jabRange ? jabDurationMs() : null),
 };
