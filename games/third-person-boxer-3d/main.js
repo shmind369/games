@@ -449,6 +449,7 @@ const PLAYER_HURTBOXES = [{ bone: "Head", radius: 0.18 }, { bone: "Chest", radiu
 let playerHp = PLAYER_MAX_HP;
 let playerKO = false;
 let playerHitUntil = 0;
+let playerHitAt = -1e9;
 let enemyAttackResolved = true; // 今のジャブの判定が終わっているか(ジャブごとにリセット)
 let enemyAttackDodged = false; // 判定の間に、回避の動作中だったか
 let enemyStrikeLogged = false;
@@ -475,6 +476,7 @@ function applyPlayerDamage(amount, now) {
   if (playerKO) return false;
   playerHp = Math.max(0, playerHp - amount);
   playerHitUntil = now + HIT_STATE_MS;
+  playerHitAt = now;
   if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); }
   return true;
 }
@@ -815,6 +817,37 @@ window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
 resize();
 
+
+// ---------- 被弾のけぞり(瞬間的・大げさ) ----------
+// 被弾の瞬間に一気に後ろへのけぞり(HIT_RECOIL_IN_MS)、少し止まってから、元の構えへ戻る。
+// アイドル・パンチ・かわしのどの姿勢の上にも「上乗せ」する(ボーンの回転と位置を足すだけ)
+const HIT_RECOIL_IN_MS = 55, HIT_RECOIL_HOLD_MS = 70, HIT_RECOIL_OUT_MS = 330;
+const HIT_RECOIL_MS = HIT_RECOIL_IN_MS + HIT_RECOIL_HOLD_MS + HIT_RECOIL_OUT_MS;
+// 値はX軸回転(ラジアン)。マイナス=後ろへ倒れる
+const HIT_RECOIL_BONES = { Hips: -0.12, Spine: -0.3, Chest: -0.2, Neck: -0.3, Head: -0.3, LeftShoulder: -0.2, RightShoulder: -0.2, LeftUpperArm: -0.5, RightUpperArm: -0.5 };
+const HIT_RECOIL_BACK_M = 0.06, HIT_RECOIL_DROP_M = 0.05;
+function hitRecoilAmount(now) {
+  const e = now - playerHitAt;
+  if (e < 0 || e >= HIT_RECOIL_MS) return 0;
+  if (e < HIT_RECOIL_IN_MS) return easeOutCubic(e / HIT_RECOIL_IN_MS);
+  if (e < HIT_RECOIL_IN_MS + HIT_RECOIL_HOLD_MS) return 1;
+  const t = (e - HIT_RECOIL_IN_MS - HIT_RECOIL_HOLD_MS) / HIT_RECOIL_OUT_MS;
+  return 1 - t * t * (3 - 2 * t);
+}
+const _recoilQ = new THREE.Quaternion(), _recoilE = new THREE.Euler();
+function applyHitRecoil(now) {
+  const k = hitRecoilAmount(now);
+  if (k <= 0) return;
+  for (const name of Object.keys(HIT_RECOIL_BONES)) {
+    const bone = allBonesByName[name];
+    if (!bone) continue;
+    _recoilQ.setFromEuler(_recoilE.set(HIT_RECOIL_BONES[name] * k, 0, 0));
+    bone.quaternion.premultiply(_recoilQ);
+  }
+  player.position.z += HIT_RECOIL_BACK_M * k; // プレイヤーは-Zを向いているので、+Zが後ろ
+  player.position.y -= HIT_RECOIL_DROP_M * k;
+}
+
 // ---------- レンダーループ ----------
 function render() {
   const now = performance.now();
@@ -827,6 +860,7 @@ function render() {
   if (prevPunch.phase) punchState = advancePunch(punchState, now, punchDurationMs(prevPunch.phase));
   if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
+  if (punchState.phase && now - playerHitAt < HIT_RECOIL_MS) punchState = createPunchState(); // 被弾でパンチは中断
   if (punchState.phase) {
     // 肩タップのパンチ(IDLEの上に重ねる)。回避はパンチが終わるまで始まらない
     const sample = samplePunchOverIdle(now);
@@ -861,6 +895,7 @@ function render() {
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   }
 
+  applyHitRecoil(now);
   updateOpponent(now);
   updatePunchZoneDebug();
 
@@ -926,6 +961,7 @@ window.__combat = {
   getHp: () => playerHp,
   isKO: () => playerKO,
   isHit: () => isPlayerHit(performance.now()),
+  recoilAmount: () => hitRecoilAmount(performance.now()),
   getLog: () => combatLog.slice(),
   setHp: (v) => { playerHp = v; playerKO = v <= 0; updateHpDisplay(performance.now()); },
   applyDamage: (n) => applyPlayerDamage(n, performance.now()),
