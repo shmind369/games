@@ -399,9 +399,103 @@ function stepEnemyState(now) {
   if (enemyState === prev) return;
   if (enemyState.phase === "jab") {
     enemyDebug("Left Jab");
+    startEnemyAttack();
   } else {
+    endEnemyAttack();
     enemyDebug("Return to Idle");
     enemyDebug(`Next attack in ${(enemyState.waitMs / 1000).toFixed(1)}s`);
+  }
+}
+
+// ---------- プレイヤーの被ダメージ(敵のジャブが当たったらHPが減る) ----------
+// 今回は被ダメージの処理だけを実装している(プレイヤーの攻撃・敵のパターン・やられモーション・
+// 試合時間・勝敗判定・コンボ・ガードは変更していない)。まだHPのしくみは無かったので新しく作った。
+//  ・敵のジャブ1回につき、当たれば ENEMY_JAB_DAMAGE(=10)のダメージ。当たらなければ0(Miss)
+//  ・当たり判定は、ジャブの「拳」(左手首から前腕の向きへ少し先)の球と、プレイヤーの頭・胸の球が
+//    重なったかどうか。ジャブが伸びている間(開始から0.10〜0.36秒)に、毎フレーム調べる。
+//    回避でプレイヤーが横へ動いて球が離れていれば当たらない(ダメージなし)。
+//    1回のジャブでダメージを受けるのは最大1回(当たった時点で、そのジャブの判定は終わり)
+//  ・被弾状態: ダメージを受けた瞬間から HIT_STATE_MS の間(`isPlayerHit`)。被弾モーションは
+//    まだ無いので、新しく作らず、HPの減少と状態のフラグ・ログ・HP表示の赤い点滅だけにしている
+//  ・HPが0以下になったことは `playerKO` で検出できる(KO演出・試合終了・勝敗判定は未実装)
+const PLAYER_MAX_HP = 100;
+const ENEMY_JAB_DAMAGE = 10;
+const HIT_STATE_MS = 400;
+const ENEMY_JAB_HIT_WINDOW_MS = { from: 100, to: 360 }; // 拳が伸びきるのは約0.23秒。引き戻しが始まる0.36秒までを判定する
+const FIST_RADIUS_M = 0.1;
+const FIST_FORWARD_OFFSET_M = 0.12; // 手首から拳の中心までの距離(前腕の向きへ)
+const PLAYER_HURTBOXES = [{ bone: "Head", radius: 0.18 }, { bone: "Chest", radius: 0.24 }];
+
+let playerHp = PLAYER_MAX_HP;
+let playerKO = false;
+let playerHitUntil = 0;
+let enemyAttackResolved = true; // 今のジャブの判定が終わっているか(ジャブごとにリセット)
+const combatLog = [];
+function combatDebug(message) {
+  combatLog.push({ t: performance.now(), message });
+  console.log("[Combat] " + message);
+}
+
+// HP表示(小さな文字だけ。UIのデザインは変えていない)
+const hpDisplayEl = document.createElement("div");
+hpDisplayEl.id = "hpDisplay";
+hpDisplayEl.style.cssText = "position:fixed;left:10px;top:max(10px,env(safe-area-inset-top));z-index:5;font:600 14px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);pointer-events:none;transition:color 0.1s;";
+document.body.appendChild(hpDisplayEl);
+function updateHpDisplay(now) {
+  hpDisplayEl.textContent = `HP ${Math.max(0, Math.round(playerHp))} / ${PLAYER_MAX_HP}`;
+  hpDisplayEl.style.color = now < playerHitUntil ? "#ff5a5a" : "#fff";
+}
+updateHpDisplay(0);
+const isPlayerHit = (now) => now < playerHitUntil;
+
+// ダメージを与える。KO(HP<=0)になったら以降は減らさない
+function applyPlayerDamage(amount, now) {
+  if (playerKO) return false;
+  playerHp = Math.max(0, playerHp - amount);
+  playerHitUntil = now + HIT_STATE_MS;
+  if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); }
+  return true;
+}
+
+// 敵の拳(球)の中心: 左手首から、前腕→手首の向きへ少し先
+function enemyFistWorldPos() {
+  const hand = opponentBonesByName.LeftHand, fore = opponentBonesByName.LeftForearm;
+  if (!hand || !fore) return null;
+  const h = hand.getWorldPosition(new THREE.Vector3()), f = fore.getWorldPosition(new THREE.Vector3());
+  return h.clone().add(h.clone().sub(f).normalize().multiplyScalar(FIST_FORWARD_OFFSET_M));
+}
+// 拳がプレイヤーの頭・胸の球に重なっているか。{ hit, box, distance } を返す
+function testFistAgainstPlayer(fist) {
+  let best = { hit: false, box: null, distance: Infinity };
+  for (const hb of PLAYER_HURTBOXES) {
+    const bone = allBonesByName[hb.bone];
+    if (!bone) continue;
+    const d = fist.distanceTo(bone.getWorldPosition(new THREE.Vector3()));
+    if (d < best.distance) best = { hit: d <= hb.radius + FIST_RADIUS_M, box: hb.bone, distance: d };
+    if (d <= hb.radius + FIST_RADIUS_M) return { hit: true, box: hb.bone, distance: d };
+  }
+  return best;
+}
+
+function startEnemyAttack() { enemyAttackResolved = false; }
+// 毎フレーム(ジャブ中だけ)呼ばれる。ジャブが伸びている間に拳が当たれば、1回だけダメージ
+function checkEnemyAttackHit(elapsedMs, now) {
+  if (enemyAttackResolved || elapsedMs < ENEMY_JAB_HIT_WINDOW_MS.from || elapsedMs > ENEMY_JAB_HIT_WINDOW_MS.to) return;
+  const fist = enemyFistWorldPos();
+  if (!fist) return;
+  const r = testFistAgainstPlayer(fist);
+  if (!r.hit) return;
+  enemyAttackResolved = true;
+  if (applyPlayerDamage(ENEMY_JAB_DAMAGE, now)) {
+    combatDebug(`Enemy Left Jab: HIT ${r.box} (-${ENEMY_JAB_DAMAGE}) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    updateHpDisplay(now);
+  }
+}
+// ジャブが終わった時点で、まだ当たっていなければMiss
+function endEnemyAttack() {
+  if (!enemyAttackResolved) {
+    enemyAttackResolved = true;
+    combatDebug(`Enemy Left Jab: MISS (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
   }
 }
 
@@ -430,6 +524,9 @@ function updateOpponent(nowMs) {
     if (bone) bone.quaternion.copy(sample.pose[name]);
   }
   opponent.position.set(OPPONENT_BASE.x + sample.modelPosition[0], OPPONENT_BASE.y + sample.modelPosition[1], OPPONENT_BASE.z + sample.modelPosition[2]);
+  // 敵のジャブの当たり判定(姿勢を反映した直後の、拳の位置で調べる)
+  if (enemyState && enemyState.phase === "jab") checkEnemyAttackHit(nowMs - enemyState.startAt, nowMs);
+  updateHpDisplay(nowMs);
 }
 
 // クリップのサンプル結果(pose: ボーン名→Quaternion、modelPosition)を、
@@ -765,4 +862,22 @@ window.__punch = {
   getStats: () => ({ ...punchStats }),
   getRange: (kind) => PUNCHES[kind].range,
   durationMs: (kind) => (PUNCHES[kind].range ? punchDurationMs(kind) : null),
+};
+
+// プレイヤーの被ダメージのテスト/デバッグ用
+window.__combat = {
+  MAX_HP: PLAYER_MAX_HP,
+  JAB_DAMAGE: ENEMY_JAB_DAMAGE,
+  getHp: () => playerHp,
+  isKO: () => playerKO,
+  isHit: () => isPlayerHit(performance.now()),
+  getLog: () => combatLog.slice(),
+  setHp: (v) => { playerHp = v; playerKO = v <= 0; updateHpDisplay(performance.now()); },
+  applyDamage: (n) => applyPlayerDamage(n, performance.now()),
+  // 敵の左ジャブを今すぐ始める(ランダムな待機を待たずに、当たり判定を試すため)
+  forceEnemyJab: () => { if (!enemyState || enemyState.phase === "jab") return false; enemyState = { phase: "jab", startAt: performance.now() }; enemyDebug("Left Jab (forced)"); startEnemyAttack(); return true; },
+  // テスト用: 敵の次のランダムな攻撃を、指定した時間だけ先へ延ばす(待機中のみ)
+  postponeEnemy: (ms) => { if (enemyState && enemyState.phase === null || enemyState && enemyState.phase === "idle") enemyState = { ...enemyState, nextAttackAt: performance.now() + ms }; },
+  enemyFistWorldPos: () => { const f = enemyFistWorldPos(); return f ? f.toArray() : null; },
+  testFistAgainstPlayer: () => { const f = enemyFistWorldPos(); return f ? testFistAgainstPlayer(f) : null; },
 };
