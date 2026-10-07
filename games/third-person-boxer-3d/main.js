@@ -424,13 +424,84 @@ fetch("./assets/fightIdleUsa.json")
   .then((json) => { opponentIdleClip = json; })
   .catch((err) => console.error("fightIdleUsa.json の読み込みに失敗しました", err));
 
-// 相手のアイドル(構えのループ)を、現在時刻で再生する。クリップの先頭と末尾の姿勢・位置が
-// 一致しているので、時刻を長さで割った余りを取るだけで継ぎ目なくループする
-function updateOpponentIdle(nowMs) {
+// ---------- 相手の攻撃遷移(Idle → 左ジャブ → Idle)のテスト ----------
+// まずは「Idleが再生される → 5〜10秒のランダム待機 → 左ジャブ → 最後まで再生 → Idleへ戻る →
+// また5〜10秒待機 → 左ジャブ」というループが正しく動くことだけを確認する(ダメージ判定・
+// プレイヤーへの追従・戦闘判断はしない)。状態機械はThree.js非依存の純粋関数
+// (createEnemyState/advanceEnemy)にしてあり、時刻と乱数を引数で受け取る。
+//  ・待機時間(次の攻撃を始めるまで)は、Idleに入るたびに5〜10秒から決め直す
+//  ・左ジャブの再生中は新しい攻撃タイマーを作らない。ジャブが最後まで再生されて
+//    Idleへ戻った時点から、次の5〜10秒を数え始める
+//  ・ジャブの長さは、クリップの最後のキーフレームの時刻(JSONのtotalFramesではない)
+const ENEMY_WAIT_MIN_MS = 5000;
+const ENEMY_WAIT_MAX_MS = 10000;
+const ENEMY_BLEND_IN_MS = 120; // Idle→ジャブの頭で、Idleの姿勢からジャブの姿勢へなじませる時間
+const ENEMY_BLEND_OUT_MS = 150; // ジャブの終わりで、ジャブの姿勢からIdleの姿勢へなじませる時間
+
+function pickEnemyWaitMs(rng) { return ENEMY_WAIT_MIN_MS + rng() * (ENEMY_WAIT_MAX_MS - ENEMY_WAIT_MIN_MS); }
+function createEnemyState(now, rng = Math.random) {
+  const waitMs = pickEnemyWaitMs(rng);
+  return { phase: "idle", nextAttackAt: now + waitMs, waitMs };
+}
+function advanceEnemy(state, now, jabDurationMs, rng = Math.random) {
+  if (state.phase === "idle" && now >= state.nextAttackAt) return { phase: "jab", startAt: now };
+  if (state.phase === "jab" && now - state.startAt >= jabDurationMs) return createEnemyState(now, rng); // ここで初めて次のタイマーを作る
+  return state;
+}
+
+let enemyState = null; // 2つのクリップ(idle・jab)が読み込まれてから作る
+let enemyJabClip = null; // assets/leftPunchUsa1.json(USAボクサーの左ジャブ。humanoid-gltf-exporterで作成)
+const enemyLog = []; // テスト用: ["Idle", "Next attack in 7.3s", "Left Jab", "Return to Idle", ...]
+function enemyDebug(message) {
+  enemyLog.push({ t: performance.now(), message });
+  console.log("[Enemy] " + message);
+}
+function enemyJabDurationMs() { return enemyJabClip.keyframes[enemyJabClip.keyframes.length - 1].time * 1000; }
+
+fetch("./assets/leftPunchUsa1.json")
+  .then((res) => res.json())
+  .then((json) => { enemyJabClip = json; })
+  .catch((err) => console.error("leftPunchUsa1.json の読み込みに失敗しました", err));
+
+function stepEnemyState(now) {
+  if (!opponentIdleClip || !enemyJabClip) return;
+  if (!enemyState) {
+    enemyState = createEnemyState(now);
+    enemyDebug("Idle");
+    enemyDebug(`Next attack in ${(enemyState.waitMs / 1000).toFixed(1)}s`);
+    return;
+  }
+  const prev = enemyState;
+  enemyState = advanceEnemy(prev, now, enemyJabDurationMs());
+  if (enemyState === prev) return;
+  if (enemyState.phase === "jab") {
+    enemyDebug("Left Jab");
+  } else {
+    enemyDebug("Return to Idle");
+    enemyDebug(`Next attack in ${(enemyState.waitMs / 1000).toFixed(1)}s`);
+  }
+}
+
+// 相手の姿勢を、現在時刻で更新する。Idle(構えのループ)は常に再生し続け、ジャブ中だけ
+// ジャブのクリップをその上に重ねる(頭と終わりの短い時間でIdleの姿勢と混ぜるので、
+// 遷移で姿勢が飛ばない)。Idleのクリップは先頭と末尾の姿勢・位置が一致しているので、
+// 時刻を長さで割った余りを取るだけで継ぎ目なくループする
+function updateOpponent(nowMs) {
   if (!opponentIdleClip) return;
+  stepEnemyState(nowMs);
   const keys = opponentIdleClip.keyframes;
   const duration = keys[keys.length - 1].time;
   const sample = sampleClip(opponentIdleClip, (nowMs / 1000) % duration);
+  if (enemyState && enemyState.phase === "jab" && enemyJabClip) {
+    const elapsedMs = nowMs - enemyState.startAt;
+    const jabMs = enemyJabDurationMs();
+    const w = clamp01(Math.min(elapsedMs / ENEMY_BLEND_IN_MS, (jabMs - elapsedMs) / ENEMY_BLEND_OUT_MS));
+    const jab = sampleClip(enemyJabClip, Math.min(elapsedMs / 1000, jabMs / 1000));
+    for (const name of Object.keys(jab.pose)) {
+      sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(jab.pose[name], w) : jab.pose[name];
+    }
+    sample.modelPosition = sample.modelPosition.map((v, i) => v + (jab.modelPosition[i] - v) * w);
+  }
   for (const name of Object.keys(sample.pose)) {
     const bone = opponentBonesByName[name];
     if (bone) bone.quaternion.copy(sample.pose[name]);
@@ -560,7 +631,7 @@ function render() {
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   }
 
-  updateOpponentIdle(now);
+  updateOpponent(now);
 
   renderer.render(scene, camera);
   requestAnimationFrame(render);
@@ -599,4 +670,16 @@ window.__idle = {
   computeIdleClipTime,
   sampleClip,
   isActive: () => !duckState.phase && !dodgeState.phase,
+};
+
+// 相手の攻撃遷移のテスト/デバッグ用
+window.__enemy = {
+  createEnemyState,
+  advanceEnemy,
+  pickEnemyWaitMs,
+  getState: () => enemyState,
+  getLog: () => enemyLog.slice(),
+  jabDurationMs: () => (enemyJabClip ? enemyJabDurationMs() : null),
+  WAIT_MIN_MS: ENEMY_WAIT_MIN_MS,
+  WAIT_MAX_MS: ENEMY_WAIT_MAX_MS,
 };
