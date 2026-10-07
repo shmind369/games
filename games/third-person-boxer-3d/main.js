@@ -424,6 +424,91 @@ function stepEnemyState(now) {
   }
 }
 
+// ---------- 効果音(Web Audioでコード合成。音声ファイルは使わない) ----------
+// 場面ごとに短い音をその場で作って鳴らす。後から音声ファイルへ差し替えるときは、
+// SFX_BUILDERS の該当の関数を、<audio>/AudioBufferの再生に置き換えればよい。
+// スマホのブラウザは最初のタップまで音を出せないので、最初の操作でAudioContextを開始する。
+// 右上の🔊/🔇ボタンでミュート(設定は保存)
+const SFX_MASTER_VOLUME = 0.7;
+function makeNoiseBuffer(ctx, sec = 1) {
+  const buf = ctx.createBuffer(1, Math.max(1, Math.floor(ctx.sampleRate * sec)), ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+// ノイズ: フィルタ(type, f0→f1)と音量エンベロープ(アタック→指数減衰)
+function sfxNoise(ctx, dest, t0, { dur, type, f0, f1 = f0, q = 1, gain, attack = 0.003 }) {
+  const src = ctx.createBufferSource(); src.buffer = makeNoiseBuffer(ctx, dur + 0.05);
+  const fil = ctx.createBiquadFilter(); fil.type = type; fil.Q.value = q;
+  fil.frequency.setValueAtTime(f0, t0); fil.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(gain, t0 + attack); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(fil).connect(g).connect(dest); src.start(t0); src.stop(t0 + dur + 0.05);
+}
+// トーン: 周波数 f0→f1 の下降/上昇(ドスッという低い打撃の芯など)
+function sfxTone(ctx, dest, t0, { dur, wave = "sine", f0, f1 = f0, gain, attack = 0.003 }) {
+  const o = ctx.createOscillator(); o.type = wave;
+  o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+  const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(gain, t0 + attack); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g).connect(dest); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+const SFX_BUILDERS = {
+  // プレイヤーが殴られた: 重いドスッ + 鈍い衝撃
+  playerHit(c, d, t) { sfxTone(c, d, t, { dur: 0.28, f0: 150, f1: 42, gain: 1.0 }); sfxNoise(c, d, t, { dur: 0.2, type: "lowpass", f0: 1400, f1: 200, gain: 0.9 }); sfxNoise(c, d, t, { dur: 0.05, type: "bandpass", f0: 2500, q: 0.8, gain: 0.35 }); },
+  // 敵が殴られた: 鋭いバシッ + 少し軽い芯
+  enemyHit(c, d, t) { sfxTone(c, d, t, { dur: 0.2, f0: 220, f1: 70, gain: 0.8 }); sfxNoise(c, d, t, { dur: 0.14, type: "bandpass", f0: 2200, f1: 600, q: 0.7, gain: 1.0 }); sfxNoise(c, d, t, { dur: 0.04, type: "highpass", f0: 4000, gain: 0.3 }); },
+  // ガード: 乾いたパンッ(短く、軽い)
+  guard(c, d, t) { sfxNoise(c, d, t, { dur: 0.07, type: "bandpass", f0: 1000, f1: 700, q: 1.4, gain: 0.8 }); sfxTone(c, d, t, { dur: 0.06, wave: "triangle", f0: 260, f1: 150, gain: 0.45 }); },
+  // かわした: 風切り(ヒュッ)
+  dodge(c, d, t) { sfxNoise(c, d, t, { dur: 0.24, type: "bandpass", f0: 500, f1: 2200, q: 1.2, gain: 1.4, attack: 0.08 }); },
+  // 敵の振りかぶり開始: 低い唸り(ゆっくり上がる)
+  windup(c, d, t) { sfxTone(c, d, t, { dur: 0.5, wave: "sawtooth", f0: 80, f1: 190, gain: 0.3, attack: 0.15 }); sfxNoise(c, d, t, { dur: 0.45, type: "bandpass", f0: 300, f1: 900, q: 1, gain: 0.5, attack: 0.2 }); },
+  // 敵の打ち出し: 鋭い風切り
+  strike(c, d, t) { sfxNoise(c, d, t, { dur: 0.14, type: "bandpass", f0: 3200, f1: 700, q: 1.0, gain: 1.3, attack: 0.02 }); },
+  // スリング発射: 弾ける風切り + 弦を離す音
+  release(c, d, t) { sfxNoise(c, d, t, { dur: 0.16, type: "bandpass", f0: 2800, f1: 600, q: 0.9, gain: 1.4, attack: 0.015 }); sfxTone(c, d, t, { dur: 0.1, wave: "triangle", f0: 700, f1: 200, gain: 0.25 }); },
+};
+const sfx = {
+  ctx: null, master: null, muted: false, log: [],
+  init() {
+    if (this.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    this.ctx = new AC();
+    this.master = this.ctx.createGain(); this.master.gain.value = this.muted ? 0 : SFX_MASTER_VOLUME;
+    this.master.connect(this.ctx.destination);
+  },
+  unlock() { try { this.init(); if (this.ctx && this.ctx.state === "suspended") this.ctx.resume(); } catch (_) {} },
+  play(name) {
+    this.log.push(name);
+    if (this.muted || !this.ctx || this.ctx.state !== "running") return;
+    try { SFX_BUILDERS[name](this.ctx, this.master, this.ctx.currentTime + 0.001); } catch (e) { console.warn("sfx", e); }
+  },
+  setMuted(m) {
+    this.muted = m;
+    if (this.master) this.master.gain.value = m ? 0 : SFX_MASTER_VOLUME;
+    try { localStorage.setItem("boxer3d-muted", m ? "1" : "0"); } catch (_) {}
+    muteBtn.textContent = m ? "🔇" : "🔊";
+  },
+  // テスト用: 音をオフラインで描画してサンプルを返す
+  async render(name, sec = 0.8) {
+    const oc = new OfflineAudioContext(1, Math.floor(44100 * sec), 44100);
+    const g = oc.createGain(); g.gain.value = SFX_MASTER_VOLUME; g.connect(oc.destination);
+    SFX_BUILDERS[name](oc, g, 0.01);
+    return (await oc.startRendering()).getChannelData(0);
+  },
+};
+const muteBtn = document.createElement("button");
+muteBtn.id = "muteBtn";
+muteBtn.style.cssText = "position:fixed;right:10px;top:max(10px,env(safe-area-inset-top));z-index:6;width:38px;height:38px;border-radius:19px;border:none;background:rgba(0,0,0,0.35);color:#fff;font-size:18px;line-height:38px;padding:0;";
+muteBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+muteBtn.addEventListener("click", () => { sfx.unlock(); sfx.setMuted(!sfx.muted); });
+document.body.appendChild(muteBtn);
+try { sfx.muted = localStorage.getItem("boxer3d-muted") === "1"; } catch (_) {}
+muteBtn.textContent = sfx.muted ? "🔇" : "🔊";
+window.addEventListener("pointerdown", () => sfx.unlock(), { capture: true });
+window.__sfx = { log: sfx.log, render: (n, s) => sfx.render(n, s), names: Object.keys(SFX_BUILDERS), state: () => (sfx.ctx ? sfx.ctx.state : "none"), unlock: () => sfx.unlock(), setMuted: (m) => sfx.setMuted(m), play: (n) => sfx.play(n) };
+
+
 // ---------- プレイヤーの被ダメージ(敵のジャブが当たったらHPが減る) ----------
 // 今回は被ダメージの処理だけを実装している(プレイヤーの攻撃・敵のパターン・やられモーション・
 // 試合時間・勝敗判定・コンボ・ガードは変更していない)。まだHPのしくみは無かったので新しく作った。
@@ -477,6 +562,7 @@ function applyPlayerDamage(amount, now) {
   playerHp = Math.max(0, playerHp - amount);
   playerHitUntil = now + HIT_STATE_MS;
   playerHitAt = now;
+  sfx.play("playerHit");
   if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); }
   return true;
 }
@@ -501,14 +587,14 @@ function testFistAgainstPlayer(fist) {
   return best;
 }
 
-function startEnemyAttack() { enemyAttackResolved = false; enemyAttackDodged = false; enemyStrikeLogged = false; }
+function startEnemyAttack() { sfx.play("windup"); enemyAttackResolved = false; enemyAttackDodged = false; enemyStrikeLogged = false; }
 // 毎フレーム(ジャブ中だけ)呼ばれる。ジャブが伸びている間に拳が当たれば、1回だけダメージ
 function checkEnemyAttackHit(elapsedMs, now) {
   const win = enemyHitWindow();
   if (enemyAttackResolved || elapsedMs < win.from || elapsedMs > win.to) return;
   // 回避(左右のスワイプ)の動作中は、ダメージを受けない(かわし成功)。回避が早すぎて終わってしまう/
   // 遅すぎて間に合わない場合は、このあとの判定で当たる
-  if (dodgeState.phase) { enemyAttackDodged = true; return; }
+  if (dodgeState.phase) { if (!enemyAttackDodged) sfx.play("dodge"); enemyAttackDodged = true; return; }
   const fist = enemyFistWorldPos();
   if (!fist) return;
   const r = testFistAgainstPlayer(fist);
@@ -546,13 +632,13 @@ function updateOpponent(nowMs) {
       atk = sampleClip(enemyWindupClip, elapsedMs / 1000); // 1) 振りかぶり+タメ
     } else if (elapsedMs < windMs + ENEMY_STRIKE_MS) {
       // 2) パンチ: 振りかぶりの最後の姿勢から、ジャブのインパクトの姿勢へ一気に(速く打ち出す)
-      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); }
+      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); sfx.play("strike"); }
       const from = sampleClip(enemyWindupClip, windMs / 1000), to = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T);
       const t = easeOutCubic((elapsedMs - windMs) / ENEMY_STRIKE_MS);
       atk = { pose: {}, modelPosition: from.modelPosition.map((v, i) => v + (to.modelPosition[i] - v) * t) };
       for (const name of Object.keys(to.pose)) atk.pose[name] = from.pose[name] ? from.pose[name].clone().slerp(to.pose[name], t) : to.pose[name];
     } else {
-      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); }
+      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); sfx.play("strike"); }
       atk = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T + (elapsedMs - windMs - ENEMY_STRIKE_MS) / 1000); // 3) 戻り
     }
     for (const name of Object.keys(atk.pose)) {
@@ -842,6 +928,7 @@ function slingRelease(now) {
   sling.releasedAnchor = slingAnchor;
   punchState = triggerPunch(punchState, sling.kind, now, Math.max(1, (t * 1000) / PUNCH_SPEED));
   punchStats.started++;
+  sfx.play("release");
   playerDebug(`Sling release (pull ${(sling.pull * 100).toFixed(0)}% = clip ${t.toFixed(3)}s) -> ${PUNCHES[sling.kind].label}`);
   return true;
 }
@@ -1115,6 +1202,7 @@ function resolvePlayerPunch(now) {
   const hit = enemyForcedResult ? enemyForcedResult === "hit" : Math.random() < enemyHitProbability;
   enemyReact = { kind: hit ? "hit" : "guard", at: now, side: punchState.phase === "leftJab" ? 1 : -1 };
   playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}`);
+  sfx.play(hit ? "enemyHit" : "guard");
   if (hit && enemyState && enemyState.phase === "jab") { enemyAttackResolved = true; enemyState = createEnemyState(now); enemyDebug("Attack interrupted by counter"); }
 }
 // 毎フレーム: パンチが始まった直後に判定をリセットし、グローブが届いた瞬間(届かなければ後半の途中)に1回だけ結果を出す
