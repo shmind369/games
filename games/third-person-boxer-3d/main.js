@@ -358,8 +358,17 @@ fetch("./assets/fightIdleUsa.json")
 //  ・ジャブの長さは、クリップの最後のキーフレームの時刻(JSONのtotalFramesではない)
 const ENEMY_WAIT_MIN_MS = 5000;
 const ENEMY_WAIT_MAX_MS = 10000;
-const ENEMY_BLEND_IN_MS = 120; // Idle→ジャブの頭で、Idleの姿勢からジャブの姿勢へなじませる時間
-const ENEMY_BLEND_OUT_MS = 150; // ジャブの終わりで、ジャブの姿勢からIdleの姿勢へなじませる時間
+const ENEMY_BLEND_IN_MS = 120; // Idle→振りかぶりの頭で、Idleの姿勢からなじませる時間
+const ENEMY_BLEND_OUT_MS = 150; // 攻撃の終わりで、攻撃の姿勢からIdleの姿勢へなじませる時間
+// 敵の左ジャブは「大きな予備動作(振りかぶり)→タメ→高速のパンチ→戻り」の順に再生する。
+// 敵の攻撃を「速さ」ではなく「予備動作」で見切れるようにするため(見てから避けられることを最優先)。
+//  1. 振りかぶり+タメ: assets/leftJabWindupUsa.json(新規。左肩・左腕を大きく引いて拳を頭より高く振り上げ、
+//     上体を反らす。0.3秒で振りかぶり、そこからさらに引いて約0.2秒タメる。合計約0.53秒)
+//  2. パンチ: 振りかぶりの姿勢から、leftPunchUsa1.jsonのインパクトの姿勢(7フレーム)へ ENEMY_STRIKE_MS で
+//     一気に打ち出す(元のジャブは構えからインパクトまで約0.23秒かかっていた。それが0.07秒になる)
+//  3. 戻り: leftPunchUsa1.jsonの、インパクトより後ろ(引き戻して構えへ戻る部分)をそのまま再生する
+const ENEMY_STRIKE_MS = 70; // 振りかぶり→インパクト。短いほど「パッ」と速い
+const ENEMY_JAB_IMPACT_T = 7 / 30; // leftPunchUsa1.json の、インパクトのキーフレーム(7フレーム)の時刻(秒)
 
 function pickEnemyWaitMs(rng) { return ENEMY_WAIT_MIN_MS + rng() * (ENEMY_WAIT_MAX_MS - ENEMY_WAIT_MIN_MS); }
 function createEnemyState(now, rng = Math.random) {
@@ -374,20 +383,28 @@ function advanceEnemy(state, now, jabDurationMs, rng = Math.random) {
 
 let enemyState = null; // 2つのクリップ(idle・jab)が読み込まれてから作る
 let enemyJabClip = null; // assets/leftPunchUsa1.json(USAボクサーの左ジャブ。humanoid-gltf-exporterで作成)
+let enemyWindupClip = null; // assets/leftJabWindupUsa.json(左ジャブの予備動作。同じくhumanoid-gltf-exporterで作成)
 const enemyLog = []; // テスト用: ["Idle", "Next attack in 7.3s", "Left Jab", "Return to Idle", ...]
 function enemyDebug(message) {
   enemyLog.push({ t: performance.now(), message });
   console.log("[Enemy] " + message);
 }
-function enemyJabDurationMs() { return enemyJabClip.keyframes[enemyJabClip.keyframes.length - 1].time * 1000; }
+const clipEndMs = (clip) => clip.keyframes[clip.keyframes.length - 1].time * 1000;
+function enemyWindupMs() { return clipEndMs(enemyWindupClip); }
+// 攻撃1回の長さ = 振りかぶり+タメ → パンチ → 戻り
+function enemyJabDurationMs() { return enemyWindupMs() + ENEMY_STRIKE_MS + (clipEndMs(enemyJabClip) - ENEMY_JAB_IMPACT_T * 1000); }
 
 fetch("./assets/leftPunchUsa1.json")
   .then((res) => res.json())
   .then((json) => { enemyJabClip = json; })
   .catch((err) => console.error("leftPunchUsa1.json の読み込みに失敗しました", err));
+fetch("./assets/leftJabWindupUsa.json")
+  .then((res) => res.json())
+  .then((json) => { enemyWindupClip = json; })
+  .catch((err) => console.error("leftJabWindupUsa.json の読み込みに失敗しました", err));
 
 function stepEnemyState(now) {
-  if (!opponentIdleClip || !enemyJabClip) return;
+  if (!opponentIdleClip || !enemyJabClip || !enemyWindupClip) return;
   if (!enemyState) {
     enemyState = createEnemyState(now);
     enemyDebug("Idle");
@@ -398,7 +415,7 @@ function stepEnemyState(now) {
   enemyState = advanceEnemy(prev, now, enemyJabDurationMs());
   if (enemyState === prev) return;
   if (enemyState.phase === "jab") {
-    enemyDebug("Left Jab");
+    enemyDebug("Left Jab (wind-up)");
     startEnemyAttack();
   } else {
     endEnemyAttack();
@@ -421,7 +438,10 @@ function stepEnemyState(now) {
 const PLAYER_MAX_HP = 100;
 const ENEMY_JAB_DAMAGE = 10;
 const HIT_STATE_MS = 400;
-const ENEMY_JAB_HIT_WINDOW_MS = { from: 100, to: 360 }; // 拳が伸びきるのは約0.23秒。引き戻しが始まる0.36秒までを判定する
+// パンチが当たる時間は、パンチを打ち出してからの短い間だけ(拳が伸びきる前後の約0.09秒)。
+// 振りかぶりの間は当たらない(見てから避ける時間)。打ち出し(振りかぶりの終わり)からの経過時間で数える
+const ENEMY_JAB_HIT_AFTER_STRIKE_MS = { from: 40, to: 130 };
+const enemyHitWindow = () => ({ from: enemyWindupMs() + ENEMY_JAB_HIT_AFTER_STRIKE_MS.from, to: enemyWindupMs() + ENEMY_JAB_HIT_AFTER_STRIKE_MS.to });
 const FIST_RADIUS_M = 0.1;
 const FIST_FORWARD_OFFSET_M = 0.12; // 手首から拳の中心までの距離(前腕の向きへ)
 const PLAYER_HURTBOXES = [{ bone: "Head", radius: 0.18 }, { bone: "Chest", radius: 0.24 }];
@@ -430,6 +450,8 @@ let playerHp = PLAYER_MAX_HP;
 let playerKO = false;
 let playerHitUntil = 0;
 let enemyAttackResolved = true; // 今のジャブの判定が終わっているか(ジャブごとにリセット)
+let enemyAttackDodged = false; // 判定の間に、回避の動作中だったか
+let enemyStrikeLogged = false;
 const combatLog = [];
 function combatDebug(message) {
   combatLog.push({ t: performance.now(), message });
@@ -477,10 +499,14 @@ function testFistAgainstPlayer(fist) {
   return best;
 }
 
-function startEnemyAttack() { enemyAttackResolved = false; }
+function startEnemyAttack() { enemyAttackResolved = false; enemyAttackDodged = false; enemyStrikeLogged = false; }
 // 毎フレーム(ジャブ中だけ)呼ばれる。ジャブが伸びている間に拳が当たれば、1回だけダメージ
 function checkEnemyAttackHit(elapsedMs, now) {
-  if (enemyAttackResolved || elapsedMs < ENEMY_JAB_HIT_WINDOW_MS.from || elapsedMs > ENEMY_JAB_HIT_WINDOW_MS.to) return;
+  const win = enemyHitWindow();
+  if (enemyAttackResolved || elapsedMs < win.from || elapsedMs > win.to) return;
+  // 回避(左右のスワイプ)の動作中は、ダメージを受けない(かわし成功)。回避が早すぎて終わってしまう/
+  // 遅すぎて間に合わない場合は、このあとの判定で当たる
+  if (dodgeState.phase) { enemyAttackDodged = true; return; }
   const fist = enemyFistWorldPos();
   if (!fist) return;
   const r = testFistAgainstPlayer(fist);
@@ -495,7 +521,7 @@ function checkEnemyAttackHit(elapsedMs, now) {
 function endEnemyAttack() {
   if (!enemyAttackResolved) {
     enemyAttackResolved = true;
-    combatDebug(`Enemy Left Jab: MISS (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    combatDebug(`Enemy Left Jab: MISS${enemyAttackDodged ? " (dodged)" : ""} (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
   }
 }
 
@@ -509,15 +535,28 @@ function updateOpponent(nowMs) {
   const keys = opponentIdleClip.keyframes;
   const duration = keys[keys.length - 1].time;
   const sample = sampleClip(opponentIdleClip, (nowMs / 1000) % duration);
-  if (enemyState && enemyState.phase === "jab" && enemyJabClip) {
+  if (enemyState && enemyState.phase === "jab" && enemyJabClip && enemyWindupClip) {
     const elapsedMs = nowMs - enemyState.startAt;
-    const jabMs = enemyJabDurationMs();
-    const w = clamp01(Math.min(elapsedMs / ENEMY_BLEND_IN_MS, (jabMs - elapsedMs) / ENEMY_BLEND_OUT_MS));
-    const jab = sampleClip(enemyJabClip, Math.min(elapsedMs / 1000, jabMs / 1000));
-    for (const name of Object.keys(jab.pose)) {
-      sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(jab.pose[name], w) : jab.pose[name];
+    const totalMs = enemyJabDurationMs(), windMs = enemyWindupMs();
+    const w = clamp01(Math.min(elapsedMs / ENEMY_BLEND_IN_MS, (totalMs - elapsedMs) / ENEMY_BLEND_OUT_MS));
+    let atk;
+    if (elapsedMs < windMs) {
+      atk = sampleClip(enemyWindupClip, elapsedMs / 1000); // 1) 振りかぶり+タメ
+    } else if (elapsedMs < windMs + ENEMY_STRIKE_MS) {
+      // 2) パンチ: 振りかぶりの最後の姿勢から、ジャブのインパクトの姿勢へ一気に(速く打ち出す)
+      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); }
+      const from = sampleClip(enemyWindupClip, windMs / 1000), to = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T);
+      const t = easeOutCubic((elapsedMs - windMs) / ENEMY_STRIKE_MS);
+      atk = { pose: {}, modelPosition: from.modelPosition.map((v, i) => v + (to.modelPosition[i] - v) * t) };
+      for (const name of Object.keys(to.pose)) atk.pose[name] = from.pose[name] ? from.pose[name].clone().slerp(to.pose[name], t) : to.pose[name];
+    } else {
+      if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); }
+      atk = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T + (elapsedMs - windMs - ENEMY_STRIKE_MS) / 1000); // 3) 戻り
     }
-    sample.modelPosition = sample.modelPosition.map((v, i) => v + (jab.modelPosition[i] - v) * w);
+    for (const name of Object.keys(atk.pose)) {
+      sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(atk.pose[name], w) : atk.pose[name];
+    }
+    sample.modelPosition = sample.modelPosition.map((v, i) => v + (atk.modelPosition[i] - v) * w);
   }
   for (const name of Object.keys(sample.pose)) {
     const bone = opponentBonesByName[name];
@@ -568,8 +607,9 @@ scene.add(opponentShadow);
 
 // ---------- 肩タップのパンチ(左肩=左ジャブ、右肩=右ストレート) ----------
 // Sling Kongのような「ゴムを弾く」感覚のパンチ入力のテストは、いったん終了した。
-// 今は、プレイヤーの肩付近をタップするだけで、次のパンチが1回出る:
-//    左肩をタップ → 左ジャブ     右肩をタップ → 右ストレート
+// 今は、プレイヤーのグローブ(拳)付近をタップするだけで、次のパンチが1回出る:
+//    左グローブをタップ → 左ジャブ     右グローブをタップ → 右ストレート
+// (以前は肩付近をタップしていたが、左右スワイプの「かわし」と競合するおそれがあるため、グローブへ移した)
 // (フック・アッパー・スワイプでの方向指定・攻撃判定・ダメージ・コンボ・引っ張り量による威力変化は
 //  作っていない。しゃがみ込み=下スワイプは、攻撃操作と競合するおそれがあるので廃止した)
 //  ・モーションは、humanoid-gltf-exporterで作ったボクサー用のものをそのまま使う(ファイルは変更しない)
@@ -580,19 +620,26 @@ scene.add(opponentShadow);
 //    ワールドでは x と z の符号を反転して適用する
 //  ・再生は、クリップの先頭から「構えに戻った時点」まで(末尾の、構えのまま止まっている区間は
 //    使わない)。キーフレームは変更せず、再生する範囲を決めるだけ
-//  ・入力は、タップした瞬間(pointerdown)に出す。指を離すまで待たないので、その分だけ速い。
-//    (肩から始まったスワイプは、回避ではなくパンチの入力として扱う)
+//  ・入力は「タップ」だけを受け付ける。グローブの円の中で指を置き、ほとんど動かさずに(PUNCH_TAP_MAX_MOVE_PX以内)
+//    すぐ(PUNCH_TAP_MAX_MS以内に)離したらパンチ。動かしたらスワイプ=かわしとして扱う。
+//    そのため、グローブの上から始めたスワイプでも、パンチではなく回避になる(競合しない)。
+//    離した瞬間に出るので、指を置いた瞬間に出す方式より、数十ミリ秒だけ遅い
 //  ・状態は IDLE ⇄ パンチ(1種類ずつ)。パンチ再生中のタップは、肩が左右どちらでも無視する
 //    (多重再生しない)。パンチが終わったら、必ずIDLEへ戻る
 const PUNCHES = {
-  leftJab: { label: "Left Jab", url: "./assets/leftPunch1.json", bone: "LeftUpperArm", clip: null, range: null },
-  rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightUpperArm", clip: null, range: null },
+  leftJab: { label: "Left Jab", url: "./assets/leftPunch1.json", bone: "LeftHand", forearm: "LeftForearm", clip: null, range: null },
+  rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightHand", forearm: "RightForearm", clip: null, range: null },
 };
 const PUNCH_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
 const PUNCH_BLEND_IN_MS = 60; // Idleの姿勢からパンチの最初の姿勢へなじませる時間(短いほど弾ける感じ)
 const PUNCH_BLEND_OUT_MS = 150; // パンチの最後の構えからIdleへなじませる時間
-const PUNCH_HIT_RADIUS_M = 0.17; // 肩のタップ判定の半径(ワールド単位。画面上ではこの大きさに投影する。大きすぎると体の中央まで入ってしまう)
+const PUNCH_HIT_RADIUS_M = 0.16; // グローブのタップ判定の半径(ワールド単位。グローブの大きさとほぼ同じ。画面上ではこの大きさに投影する)
+const PUNCH_GLOVE_FORWARD_M = 0.08; // 手首からグローブの中心までの距離(前腕の向きへ)
 const PUNCH_HIT_MIN_RADIUS_PX = 44; // 画面が小さいときでも、指で押せる最小の半径(CSSピクセル)
+// タップの判定: 指を離すまでに、この距離(px)より動かず、この時間(ms)以内なら「タップ」とみなす。
+// これを超えて動いたものはスワイプとして扱い、回避の判定へ回す(グローブの上から始めたスワイプでも回避できる)
+const PUNCH_TAP_MAX_MOVE_PX = 14;
+const PUNCH_TAP_MAX_MS = 350;
 
 function poseEquals(a, b) {
   for (const name of Object.keys(a)) {
@@ -641,25 +688,32 @@ let punchState = createPunchState();
 const punchStats = { started: 0, ignored: 0, finished: 0 };
 function playerDebug(message) { console.log("[Player] " + message); }
 
-// 肩(上腕の付け根)の画面上の位置と、タップ判定の半径(CSSピクセル)を求める。
+// グローブ(拳)の画面上の位置と、タップ判定の半径(CSSピクセル)を求める。グローブの中心は、
+// 手首のボーンから前腕の向きへ少し先。構えやパンチで手が動くと、判定もグローブについてくる。
 // プレイヤーは背中をカメラへ向けているので、モデルの「左」は画面の左側、「右」は右側に見える
-function shoulderScreenZone(kind) {
-  const bone = allBonesByName[PUNCHES[kind].bone];
-  if (!bone) return null;
+function gloveScreenZone(kind) {
+  const p = PUNCHES[kind];
+  const bone = allBonesByName[p.bone], fore = allBonesByName[p.forearm];
+  if (!bone || !fore) return null;
   const rect = canvas.getBoundingClientRect();
-  const p = bone.getWorldPosition(new THREE.Vector3());
+  const hand = bone.getWorldPosition(new THREE.Vector3());
+  const p3 = hand.clone().add(hand.clone().sub(fore.getWorldPosition(new THREE.Vector3())).normalize().multiplyScalar(PUNCH_GLOVE_FORWARD_M));
   const camRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
   const toScreen = (v) => { const n = v.clone().project(camera); return { x: rect.left + (n.x * 0.5 + 0.5) * rect.width, y: rect.top + (-n.y * 0.5 + 0.5) * rect.height }; };
-  const c = toScreen(p), e = toScreen(p.clone().addScaledVector(camRight, PUNCH_HIT_RADIUS_M));
+  const c = toScreen(p3), e = toScreen(p3.clone().addScaledVector(camRight, PUNCH_HIT_RADIUS_M));
   return { x: c.x, y: c.y, r: Math.max(PUNCH_HIT_MIN_RADIUS_PX, Math.hypot(e.x - c.x, e.y - c.y)) };
 }
-// タップ位置が、どの肩の円に入っているか("leftJab" / "rightStraight" / null)
+// タップ位置が、どのグローブの円に入っているか("leftJab" / "rightStraight" / null)。
+// 2つの円が重なっているときは、中心に近いほうを選ぶ
 function punchAtScreen(clientX, clientY) {
+  let best = null, bestD = Infinity;
   for (const kind of Object.keys(PUNCHES)) {
-    const z = shoulderScreenZone(kind);
-    if (z && Math.hypot(clientX - z.x, clientY - z.y) <= z.r) return kind;
+    const z = gloveScreenZone(kind);
+    if (!z) continue;
+    const d = Math.hypot(clientX - z.x, clientY - z.y);
+    if (d <= z.r && d < bestD) { best = kind; bestD = d; }
   }
-  return null;
+  return best;
 }
 
 // タップされたときにパンチを始める。IDLEのときだけ受け付ける(パンチ中・回避中は無視)
@@ -699,7 +753,7 @@ function samplePunchOverIdle(now) {
   return idle;
 }
 
-// 動作確認用: ?debug=1 を付けて開くと、左右の肩のタップ判定の範囲を半透明の円で表示する
+// 動作確認用: ?debug=1 を付けて開くと、左右のグローブのタップ判定の範囲を半透明の円で表示する
 const punchZoneDebugEls = {};
 if (new URLSearchParams(location.search).has("debug")) {
   for (const kind of Object.keys(PUNCHES)) {
@@ -711,7 +765,7 @@ if (new URLSearchParams(location.search).has("debug")) {
 }
 function updatePunchZoneDebug() {
   for (const [kind, el] of Object.entries(punchZoneDebugEls)) {
-    const z = shoulderScreenZone(kind);
+    const z = gloveScreenZone(kind);
     if (!z) continue;
     el.style.display = "block";
     el.style.left = `${z.x - z.r}px`;
@@ -725,21 +779,21 @@ let dodgeState = createDodgeState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 function onPointerDown(evt) {
-  // 肩付近へのタップは、パンチの入力として扱う(スワイプ・回避の判定には回さない)
-  const punchKind = punchAtScreen(evt.clientX, evt.clientY);
-  if (punchKind) {
-    gestureStart = null;
-    tryPunch(punchKind, performance.now());
-    return;
-  }
-  gestureStart = { ...pointerPos(evt), t: performance.now() };
+  // 指を置いた場所がグローブの円の中なら、タップだったときのパンチを覚えておく(出すのは離したとき)
+  gestureStart = { ...pointerPos(evt), t: performance.now(), punchKind: punchAtScreen(evt.clientX, evt.clientY) };
 }
 function onPointerUp(evt) {
   if (!gestureStart) return;
   const end = pointerPos(evt);
   const now = performance.now();
   const dx = end.x - gestureStart.x, dy = end.y - gestureStart.y, dt = now - gestureStart.t;
+  const punchKind = gestureStart.punchKind;
   gestureStart = null;
+  // グローブの上でのタップ(ほとんど動かさず、すぐ離した) → パンチ。動かした場合はスワイプ=かわしの判定へ
+  if (punchKind && Math.hypot(dx, dy) <= PUNCH_TAP_MAX_MOVE_PX && dt <= PUNCH_TAP_MAX_MS) {
+    tryPunch(punchKind, now);
+    return;
+  }
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
   // パンチ中は、回避の入力を受け付けない
@@ -844,7 +898,8 @@ window.__enemy = {
   pickEnemyWaitMs,
   getState: () => enemyState,
   getLog: () => enemyLog.slice(),
-  jabDurationMs: () => (enemyJabClip ? enemyJabDurationMs() : null),
+  jabDurationMs: () => (enemyJabClip && enemyWindupClip ? enemyJabDurationMs() : null),
+  windupMs: () => (enemyWindupClip ? enemyWindupMs() : null),
   WAIT_MIN_MS: ENEMY_WAIT_MIN_MS,
   WAIT_MAX_MS: ENEMY_WAIT_MAX_MS,
 };
@@ -856,7 +911,7 @@ window.__punch = {
   advancePunch,
   tryPunch,
   findPunchActiveRange,
-  shoulderScreenZone,
+  gloveScreenZone,
   punchAtScreen,
   getState: () => punchState,
   getStats: () => ({ ...punchStats }),
