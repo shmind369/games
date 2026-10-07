@@ -286,13 +286,13 @@ function computeDuckClipTime(state, now) {
 // 向かい合う相手(頭が画面の上のほう、プレイヤーの約半分の大きさ)が並んで見えるよう、
 // カメラを高めに置いて見下ろす。プレイヤーの頭・相手の頭・プレイヤーの腰の
 // 画面上の高さが参照画像に近づくよう、距離と高さと角度を計算して決めた
-// (縦FOV42°で、頭頂が画面の約49%・約20%の位置、プレイヤーの腰が約88%の位置。
-// 相手はプレイヤーの約1.7m先にいて、画面上の大きさはプレイヤーの約半分)。
+// (縦FOV42°で、頭頂が画面の約46%・約24%の位置、プレイヤーの腰が約82%の位置。
+// 相手はプレイヤーの約1.0m先にいて、左ジャブが届く距離。画面上の大きさはプレイヤーの約6割)。
 // キャラクターは原点に立ち、背中をカメラ側(+Z)に向けている(-Z方向を向く)。
 const CAMERA_FOV_DEG = 42;
-const CAMERA_HEIGHT = 2.55;
-const CAMERA_DISTANCE = 1.8;
-const LOOK_AT_HEIGHT = 1.67;
+const CAMERA_HEIGHT = 2.7;
+const CAMERA_DISTANCE = 1.7;
+const LOOK_AT_HEIGHT = 1.68;
 
 function computeCameraPose() {
   return {
@@ -377,7 +377,9 @@ scene.add(player);
 
 // 相手のボクサー(USA)。位置はOPPONENT_BASE(ワールド)で、プレイヤーと向かい合う
 // (モデルは+Z方向を向いて作られているので、回転なしでカメラ側を向く)
-const OPPONENT_BASE = new THREE.Vector3(0.1, 0, -1.7);
+// 左ジャブ(手首が相手の基準位置から約0.73m前へ伸びる)の拳が、プレイヤーの顔の前に
+// 届く距離(z=-1.0)と横位置(x=-0.12。相手の左手は+X側に伸びるため、その分左へずらす)
+const OPPONENT_BASE = new THREE.Vector3(-0.12, 0, -1.0);
 const opponent = new THREE.Group();
 opponent.position.copy(OPPONENT_BASE);
 scene.add(opponent);
