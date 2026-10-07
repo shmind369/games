@@ -661,6 +661,19 @@ function findPunchActiveRange(clip) {
   while (endIdx - 1 > startIdx && poseEquals(keys[endIdx - 1].pose, keys[keys.length - 1].pose)) endIdx--;
   return { start: keys[startIdx].time, end: keys[endIdx].time };
 }
+// 左ジャブの「最大テイクバックの時刻」: 前腕が伸び始める直前のキー(それまでが引き・構えの部分)
+function findTakebackTime(clip, forearmName) {
+  const keys = clip.keyframes;
+  const q0 = keys[0].pose[forearmName];
+  if (!q0) return 0.15;
+  for (let i = 1; i < keys.length; i++) {
+    const q = keys[i].pose[forearmName];
+    if (!q) continue;
+    const dot = Math.abs(q0[0] * q[0] + q0[1] * q[1] + q0[2] * q[2] + q0[3] * q[3]);
+    if (2 * Math.acos(Math.min(1, dot)) > 0.15) return keys[i - 1].time;
+  }
+  return 0.15;
+}
 const punchDurationMs = (kind) => ((PUNCHES[kind].range.end - PUNCHES[kind].range.start) * 1000) / PUNCH_SPEED;
 
 for (const [kind, p] of Object.entries(PUNCHES)) {
@@ -670,6 +683,7 @@ for (const [kind, p] of Object.entries(PUNCHES)) {
       p.clip = json;
       p.range = findPunchActiveRange(json);
       p.hasMove = json.keyframes.some((k) => k.modelPosition);
+      if (kind === "leftJab") p.takebackT = findTakebackTime(json, p.forearm);
       console.log(`[Player] ${p.label} clip ready (play ${p.range.start.toFixed(2)}s-${p.range.end.toFixed(2)}s, ${punchDurationMs(kind).toFixed(0)}ms)`);
     })
     .catch((err) => console.error(p.url + " の読み込みに失敗しました", err));
@@ -677,9 +691,10 @@ for (const [kind, p] of Object.entries(PUNCHES)) {
 
 // 状態機械(Three.js非依存の純粋関数): { phase: null(=IDLE) | "leftJab" | "rightStraight", startAt }
 function createPunchState() { return { phase: null, startAt: 0 }; }
-function triggerPunch(state, kind, now) {
+function triggerPunch(state, kind, now, startOffsetMs = 0) {
   if (state.phase) return state; // 再生中は無視(多重再生しない)
-  return { phase: kind, startAt: now };
+  // startOffsetMs>0 は、クリップの途中(スリングで引いた位置)から始める。その場合は姿勢がすでにクリップ上なので、なじませ(ブレンドイン)はしない
+  return { phase: kind, startAt: now - startOffsetMs, warm: startOffsetMs > 0 };
 }
 function advancePunch(state, now, durationMs) {
   if (state.phase && now - state.startAt >= durationMs) return createPunchState();
@@ -743,7 +758,7 @@ function samplePunchOverIdle(now) {
   const idle = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
   const elapsedMs = now - punchState.startAt;
   const totalMs = punchDurationMs(punchState.phase);
-  const w = clamp01(Math.min(elapsedMs / PUNCH_BLEND_IN_MS, (totalMs - elapsedMs) / PUNCH_BLEND_OUT_MS));
+  const w = clamp01(Math.min(punchState.warm ? 1 : elapsedMs / PUNCH_BLEND_IN_MS, (totalMs - elapsedMs) / PUNCH_BLEND_OUT_MS));
   const sample = sampleClip(p.clip, p.range.start + (elapsedMs * PUNCH_SPEED) / 1000);
   for (const name of Object.keys(sample.pose)) {
     idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(sample.pose[name], w) : sample.pose[name];
@@ -776,23 +791,111 @@ function updatePunchZoneDebug() {
   }
 }
 
-// ---------- 入力(左右スワイプ・肩タップ) ----------
+
+// ---------- スリング式・左ジャブ ----------
+// 左グローブを押さえて下へドラッグ → 左ジャブのクリップの「テイクバック部分(0〜最大テイクバック)」を
+// ドラッグ量に同期して手動で再生する(指を止めればアニメも止まる)。指を離すと、その位置から
+// パンチ→フォロースルー→構えへ通常の時間で再生する。ドラッグ量の上限は SLING_MAX_DRAG_PX。
+// 既存クリップの引きは小さいので、見た目で「引っ張っている」と分かるよう、ドラッグ量に比例した
+// 腕・肩の引きを上乗せ(離すと一瞬で消えるので、腕が前へ弾ける)。新しいモーションファイルは作らない
+const SLING_START_PX = 10;      // これ以上、下へ動いたらスリング開始(横に大きく動いたらスワイプ=かわし)
+const SLING_MAX_DRAG_PX = 160;  // この距離で最大テイクバック(100%)
+const SLING_MIN_PULL = 0.12;    // これ未満で離したらキャンセル(パンチを出さずIdleへ)
+const SLING_EXTRA_RELEASE_MS = 70; // 離したあと、上乗せの引きが消えるまでの時間
+const SLING_EXTRA = { LeftShoulder: -0.25, LeftUpperArm: -0.5, LeftForearm: -0.35, Chest: 0.12 }; // X軸回転(ラジアン)
+const sling = { active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
+function slingTakebackSec() { return PUNCHES.leftJab.takebackT || 0.15; }
+function slingStart(y, pointerId = null) {
+  const p = PUNCHES.leftJab;
+  if (!p.clip || !p.range || punchState.phase || dodgeState.phase || sling.active) return false;
+  Object.assign(sling, { active: true, pull: 0, pointerId, startY: y });
+  playerDebug("Sling pull start");
+  return true;
+}
+function slingSetPull(pull) { if (sling.active) sling.pull = clamp01(pull); }
+function slingDragTo(y) { slingSetPull((y - sling.startY) / SLING_MAX_DRAG_PX); }
+function slingCancel(reason = "cancel") {
+  if (!sling.active) return;
+  sling.active = false;
+  playerDebug(`Sling ${reason} (pull ${(sling.pull * 100).toFixed(0)}%) -> Idle`);
+}
+function slingRelease(now) {
+  if (!sling.active) return false;
+  if (sling.pull < SLING_MIN_PULL) { slingCancel("canceled: pull too small"); return false; }
+  const t = sling.pull * slingTakebackSec();
+  sling.active = false;
+  sling.releasedAt = now;
+  sling.releasedPull = sling.pull;
+  punchState = triggerPunch(punchState, "leftJab", now, Math.max(1, (t * 1000) / PUNCH_SPEED));
+  punchStats.started++;
+  playerDebug(`Sling release (pull ${(sling.pull * 100).toFixed(0)}% = clip ${t.toFixed(3)}s) -> Left Jab`);
+  return true;
+}
+// 引いている間の姿勢: クリップの 0〜takeback をドラッグ量で直接サンプルする(Idleからは最初の少しでなじませる)
+function sampleSlingPull(now) {
+  const p = PUNCHES.leftJab;
+  const idle = sampleClip(IDLE_CLIP, computeIdleClipTime(now));
+  const sample = sampleClip(p.clip, sling.pull * slingTakebackSec());
+  const w = clamp01(sling.pull / 0.15);
+  for (const name of Object.keys(sample.pose)) {
+    idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(sample.pose[name], w) : sample.pose[name];
+  }
+  if (p.hasMove) {
+    const worldPos = [-sample.modelPosition[0], sample.modelPosition[1], -sample.modelPosition[2]];
+    idle.modelPosition = idle.modelPosition.map((v, i) => v + (worldPos[i] - v) * w);
+  }
+  return idle;
+}
+function slingExtraAmount(now) {
+  if (sling.active) return sling.pull;
+  const e = now - sling.releasedAt;
+  if (e < 0 || e >= SLING_EXTRA_RELEASE_MS) return 0;
+  return sling.releasedPull * (1 - e / SLING_EXTRA_RELEASE_MS);
+}
+const _sQ = new THREE.Quaternion(), _sE = new THREE.Euler();
+function applySlingExtra(now) {
+  const k = slingExtraAmount(now);
+  if (k <= 0) return;
+  for (const name of Object.keys(SLING_EXTRA)) {
+    const bone = allBonesByName[name];
+    if (bone) bone.quaternion.premultiply(_sQ.setFromEuler(_sE.set(SLING_EXTRA[name] * k, 0, 0)));
+  }
+}
+
+// ---------- 入力(左右スワイプ・グローブ操作) ----------
 let dodgeState = createDodgeState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 function onPointerDown(evt) {
-  // 指を置いた場所がグローブの円の中なら、タップだったときのパンチを覚えておく(出すのは離したとき)
-  gestureStart = { ...pointerPos(evt), t: performance.now(), punchKind: punchAtScreen(evt.clientX, evt.clientY) };
+  // 指を置いた場所がグローブの円の中なら、その操作を覚えておく。
+  //  ・右グローブ: タップだったとき、離した時にパンチ
+  //  ・左グローブ: 下へドラッグするとスリング(離した時にジャブ)。タップだけでは何も出ない
+  if (sling.active) return; // 2本目の指は無視
+  gestureStart = { ...pointerPos(evt), t: performance.now(), punchKind: punchAtScreen(evt.clientX, evt.clientY), pointerId: evt.pointerId };
+}
+function onPointerMove(evt) {
+  if (sling.active) { if (evt.pointerId === sling.pointerId) slingDragTo(evt.clientY); return; }
+  if (!gestureStart || gestureStart.punchKind !== "leftJab" || evt.pointerId !== gestureStart.pointerId) return;
+  const dx = evt.clientX - gestureStart.x, dy = evt.clientY - gestureStart.y;
+  // 下向きの動きが主で、少し動いたらスリング開始(横の動きが主ならスリングにせず、離した時のスワイプ=かわしになる)
+  if (dy >= SLING_START_PX && dy > Math.abs(dx) && slingStart(gestureStart.y, evt.pointerId)) {
+    try { canvas.setPointerCapture(evt.pointerId); } catch (_) {}
+    slingDragTo(evt.clientY);
+  }
 }
 function onPointerUp(evt) {
+  if (sling.active) {
+    if (evt.pointerId === sling.pointerId) { slingRelease(performance.now()); gestureStart = null; }
+    return;
+  }
   if (!gestureStart) return;
   const end = pointerPos(evt);
   const now = performance.now();
   const dx = end.x - gestureStart.x, dy = end.y - gestureStart.y, dt = now - gestureStart.t;
   const punchKind = gestureStart.punchKind;
   gestureStart = null;
-  // グローブの上でのタップ(ほとんど動かさず、すぐ離した) → パンチ。動かした場合はスワイプ=かわしの判定へ
-  if (punchKind && Math.hypot(dx, dy) <= PUNCH_TAP_MAX_MOVE_PX && dt <= PUNCH_TAP_MAX_MS) {
+  // 右グローブの上でのタップ(ほとんど動かさず、すぐ離した) → 右ストレート。動かした場合はスワイプ=かわしの判定へ
+  if (punchKind === "rightStraight" && Math.hypot(dx, dy) <= PUNCH_TAP_MAX_MOVE_PX && dt <= PUNCH_TAP_MAX_MS) {
     tryPunch(punchKind, now);
     return;
   }
@@ -803,8 +906,9 @@ function onPointerUp(evt) {
   dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now));
 }
 canvas.addEventListener("pointerdown", onPointerDown);
+canvas.addEventListener("pointermove", onPointerMove);
 canvas.addEventListener("pointerup", onPointerUp);
-canvas.addEventListener("pointercancel", () => { gestureStart = null; });
+canvas.addEventListener("pointercancel", () => { gestureStart = null; slingCancel("canceled"); });
 
 // ---------- リサイズ ----------
 function resize() {
@@ -937,7 +1041,12 @@ function render() {
   if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
   if (punchState.phase && now - playerHitAt < HIT_RECOIL_MS) punchState = createPunchState(); // 被弾でパンチは中断
-  if (punchState.phase) {
+  if (sling.active) {
+    // スリングで引いている間: クリップのテイクバック部分を、ドラッグ量で直接再生
+    const sample = sampleSlingPull(now);
+    applyClipSample(sample);
+    shadowBlob.position.x = sample.modelPosition[0] + 0.05;
+  } else if (punchState.phase) {
     // 肩タップのパンチ(IDLEの上に重ねる)。回避はパンチが終わるまで始まらない
     const sample = samplePunchOverIdle(now);
     applyClipSample(sample);
@@ -971,6 +1080,7 @@ function render() {
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   }
 
+  applySlingExtra(now);
   applyHitRecoil(now);
   updateOpponent(now);
   applyEnemyReact(now);
@@ -1018,6 +1128,14 @@ window.__enemy = {
 };
 
 // 肩タップのパンチ(左ジャブ・右ストレート)のテスト/デバッグ用
+window.__sling = {
+  getState: () => ({ ...sling, takebackT: PUNCHES.leftJab.takebackT }),
+  start: (y = 0) => slingStart(y),
+  setPull: slingSetPull,
+  release: () => slingRelease(performance.now()),
+  cancel: () => slingCancel(),
+  extra: () => slingExtraAmount(performance.now()),
+};
 window.__punch = {
   createPunchState,
   triggerPunch,
