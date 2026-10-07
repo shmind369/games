@@ -815,12 +815,13 @@ const SLING_EXTRA = { // X軸回転(ラジアン)
   leftJab: { LeftShoulder: -0.25, LeftUpperArm: -0.5, LeftForearm: -0.35, Chest: 0.12 },
   rightStraight: { RightShoulder: -0.1, Chest: 0.12 }, // 右ストレートのクリップは引きが大きいので、上乗せは控えめ
 };
-const sling = { kind: "leftJab", active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
+let slingSeq = 0;
+const sling = { kind: "leftJab", startId: 0, releasedAnchor: null, active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
 function slingTakebackSec() { return PUNCHES[sling.kind].takebackT || 0.15; }
 function slingStart(y, pointerId = null, kind = "leftJab") {
   const p = PUNCHES[kind];
   if (!p.clip || !p.range || punchState.phase || dodgeState.phase || sling.active) return false;
-  Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y });
+  Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq });
   playerDebug(`Sling pull start (${p.label})`);
   return true;
 }
@@ -838,6 +839,7 @@ function slingRelease(now) {
   sling.active = false;
   sling.releasedAt = now;
   sling.releasedPull = sling.pull;
+  sling.releasedAnchor = slingAnchor;
   punchState = triggerPunch(punchState, sling.kind, now, Math.max(1, (t * 1000) / PUNCH_SPEED));
   punchStats.started++;
   playerDebug(`Sling release (pull ${(sling.pull * 100).toFixed(0)}% = clip ${t.toFixed(3)}s) -> ${PUNCHES[sling.kind].label}`);
@@ -872,6 +874,94 @@ function applySlingExtra(now) {
   for (const name of Object.keys(extra)) {
     const bone = allBonesByName[name];
     if (bone) bone.quaternion.premultiply(_sQ.setFromEuler(_sE.set(extra[name] * k, 0, 0)));
+  }
+}
+
+
+// ---------- スリングの演出(引っ張っているのが分かる表示) ----------
+// ・引いている間: グローブの位置から指までゴムのような帯が伸び、グローブの上(敵のいる奥の方向)へ
+//   「︿︿︿」のシェブロンが並ぶ。引くほど帯が太く・シェブロンが点灯し、色は黄→橙→赤へ。
+//   最大まで引くと全体が脈打って「離して発射!」と出る
+// ・離した瞬間: シェブロンが奥(上)へ勢いよく飛んで消える
+// ・何も操作していないとき: 各グローブの下に小さな「﹀」を薄く点滅(引っ張って遊ぶ操作のヒント)
+const SLING_HINT_ENABLED = true;
+const SLING_FX_RELEASE_MS = 260;
+const SVGNS = "http://www.w3.org/2000/svg";
+const slingFxSvg = document.createElementNS(SVGNS, "svg");
+slingFxSvg.style.cssText = "position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:4;pointer-events:none;overflow:visible;";
+document.body.appendChild(slingFxSvg);
+const mk = (tag, attrs) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); slingFxSvg.appendChild(e); return e; };
+const fxBand = mk("line", { "stroke-linecap": "round", opacity: 0 });
+const fxBandOuter = mk("line", { "stroke-linecap": "round", stroke: "rgba(0,0,0,0.35)", opacity: 0 });
+const fxHandle = mk("circle", { fill: "none", opacity: 0 });
+const fxRing = mk("circle", { fill: "none", opacity: 0 });
+const fxChevrons = Array.from({ length: 4 }, () => mk("polyline", { fill: "none", "stroke-linecap": "round", "stroke-linejoin": "round", opacity: 0 }));
+const fxLabel = mk("text", { "text-anchor": "middle", "font-size": "15", "font-weight": "800", fill: "#fff", stroke: "rgba(0,0,0,0.6)", "stroke-width": "3", "paint-order": "stroke", opacity: 0, "font-family": "system-ui,sans-serif" });
+fxLabel.textContent = "離して発射!";
+const fxHints = {};
+for (const kind of Object.keys(PUNCHES)) fxHints[kind] = [0, 1].map(() => mk("polyline", { fill: "none", stroke: "#fff", "stroke-width": "4", "stroke-linecap": "round", "stroke-linejoin": "round", opacity: 0 }));
+const fxColor = (k) => `hsl(${Math.round(55 - 55 * k)},100%,${Math.round(62 - 8 * k)}%)`; // 黄→橙→赤
+// 上向きシェブロン(先が奥=敵の方向を指す)。中心(cx,cy)、半幅w、高さh
+const chevronPts = (cx, cy, w, h) => `${cx - w},${cy + h / 2} ${cx},${cy - h / 2} ${cx + w},${cy + h / 2}`;
+const hide = (...els) => els.forEach((e) => e.setAttribute("opacity", 0));
+let slingAnchor = null; // 引き始めたときのグローブの画面位置
+function updateSlingFx(now) {
+  const idle = !sling.active && !punchState.phase && !dodgeState.phase;
+  // ヒント(何も操作していないとき)
+  for (const kind of Object.keys(PUNCHES)) {
+    const z = SLING_HINT_ENABLED && idle && !playerKO ? gloveScreenZone(kind) : null;
+    fxHints[kind].forEach((c, i) => {
+      if (!z) return c.setAttribute("opacity", 0);
+      const ph = (now / 900 + i * 0.25) % 1;
+      const y = z.y + z.r * 0.75 + ph * 22 + i * 12;
+      c.setAttribute("points", `${z.x - 9},${y - 5} ${z.x},${y + 4} ${z.x + 9},${y - 5}`);
+      c.setAttribute("opacity", (0.55 * Math.sin(Math.PI * ph)).toFixed(2));
+    });
+  }
+  if (sling.active) {
+    if (!slingAnchor || slingAnchor.id !== sling.startId) {
+      const z = gloveScreenZone(sling.kind) || { x: 195, y: 500, r: 60 };
+      slingAnchor = { id: sling.startId, x: z.x, y: z.y, r: z.r };
+    }
+    const a = slingAnchor, k = sling.pull, col = fxColor(k);
+    const ey = a.y + k * SLING_MAX_DRAG_PX; // 指(引いている端)の位置
+    const pulse = k >= 0.95 ? 0.5 + 0.5 * Math.sin(now / 55) : 0;
+    for (const [line, w, c] of [[fxBandOuter, 12 + 14 * k, "rgba(0,0,0,0.35)"], [fxBand, 7 + 12 * k, col]]) {
+      line.setAttribute("x1", a.x); line.setAttribute("y1", a.y); line.setAttribute("x2", a.x); line.setAttribute("y2", ey);
+      line.setAttribute("stroke", c); line.setAttribute("stroke-width", w.toFixed(1)); line.setAttribute("opacity", k > 0.02 ? 0.9 : 0);
+    }
+    fxHandle.setAttribute("cx", a.x); fxHandle.setAttribute("cy", ey); fxHandle.setAttribute("r", 14 + 8 * k + 4 * pulse);
+    fxHandle.setAttribute("stroke", col); fxHandle.setAttribute("stroke-width", 5); fxHandle.setAttribute("opacity", 0.95);
+    fxRing.setAttribute("cx", a.x); fxRing.setAttribute("cy", a.y); fxRing.setAttribute("r", a.r * (0.7 + 0.25 * k + 0.08 * pulse));
+    fxRing.setAttribute("stroke", col); fxRing.setAttribute("stroke-width", 3 + 4 * k); fxRing.setAttribute("opacity", 0.55 + 0.4 * k);
+    // シェブロン: グローブの上(奥)へ向かって並び、引くほど点灯。少しずつ奥へ流れる
+    const lit = k * fxChevrons.length;
+    fxChevrons.forEach((c, i) => {
+      const flow = ((now / 500) % 1) * 14 * k;
+      const cy = a.y - a.r * 0.9 - i * 26 - flow;
+      const on = clamp01(lit - i);
+      c.setAttribute("points", chevronPts(a.x, cy, 20 + 8 * k, 14));
+      c.setAttribute("stroke", col); c.setAttribute("stroke-width", 7 + 3 * k);
+      c.setAttribute("opacity", (0.18 + 0.82 * on).toFixed(2));
+    });
+    fxLabel.setAttribute("x", a.x); fxLabel.setAttribute("y", a.y - a.r * 0.9 - fxChevrons.length * 26 - 14);
+    fxLabel.setAttribute("opacity", k >= 0.95 ? 0.7 + 0.3 * pulse : 0);
+    return;
+  }
+  slingAnchor = null;
+  // 離した直後: シェブロンが奥へ飛んで消える
+  const e = now - sling.releasedAt;
+  hide(fxBand, fxBandOuter, fxHandle, fxRing, fxLabel);
+  if (e >= 0 && e < SLING_FX_RELEASE_MS && sling.releasedAnchor) {
+    const t = e / SLING_FX_RELEASE_MS, a = sling.releasedAnchor, col = fxColor(sling.releasedPull);
+    fxChevrons.forEach((c, i) => {
+      const cy = a.y - a.r * 0.9 - i * 26 - easeOutCubic(t) * 150;
+      c.setAttribute("points", chevronPts(a.x, cy, 24, 16));
+      c.setAttribute("stroke", col); c.setAttribute("stroke-width", 9);
+      c.setAttribute("opacity", ((1 - t) * 0.95).toFixed(2));
+    });
+  } else {
+    hide(...fxChevrons);
   }
 }
 
@@ -1088,6 +1178,7 @@ function render() {
   }
 
   applySlingExtra(now);
+  updateSlingFx(now);
   applyHitRecoil(now);
   updateOpponent(now);
   applyEnemyReact(now);
