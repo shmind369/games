@@ -629,7 +629,7 @@ scene.add(opponentShadow);
 //  ・状態は IDLE ⇄ パンチ(1種類ずつ)。パンチ再生中のタップは、肩が左右どちらでも無視する
 //    (多重再生しない)。パンチが終わったら、必ずIDLEへ戻る
 const PUNCHES = {
-  leftJab: { label: "Left Jab", url: "./assets/leftPunch1.json", bone: "LeftHand", forearm: "LeftForearm", clip: null, range: null },
+  leftJab: { label: "Left Jab", url: "./assets/leftJabInPlace.json", bone: "LeftHand", forearm: "LeftForearm", clip: null, range: null },
   rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightHand", forearm: "RightForearm", clip: null, range: null },
 };
 const PUNCH_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
@@ -692,7 +692,7 @@ for (const [kind, p] of Object.entries(PUNCHES)) {
       p.clip = json;
       p.range = findPunchActiveRange(json);
       p.hasMove = json.keyframes.some((k) => k.modelPosition);
-      p.takebackT = kind === "leftJab" ? findTakebackTime(json, p.forearm) : findTakebackByExtension(json, p.forearm);
+      p.takebackT = json.takebackTime || (kind === "leftJab" ? findTakebackTime(json, p.forearm) : findTakebackByExtension(json, p.forearm));
       console.log(`[Player] ${p.label} clip ready (play ${p.range.start.toFixed(2)}s-${p.range.end.toFixed(2)}s, ${punchDurationMs(kind).toFixed(0)}ms)`);
     })
     .catch((err) => console.error(p.url + " の読み込みに失敗しました", err));
@@ -812,7 +812,7 @@ const SLING_MAX_DRAG_PX = 160;  // この距離で最大テイクバック(100%)
 const SLING_MIN_PULL = 0.12;    // これ未満で離したらキャンセル(パンチを出さずIdleへ)
 const SLING_EXTRA_RELEASE_MS = 70; // 離したあと、上乗せの引きが消えるまでの時間
 const SLING_EXTRA = { // X軸回転(ラジアン)
-  leftJab: { LeftShoulder: -0.25, LeftUpperArm: -0.5, LeftForearm: -0.35, Chest: 0.12 },
+  leftJab: { LeftShoulder: -0.1, LeftUpperArm: -0.2, LeftForearm: -0.15 }, // 左ジャブのクリップ自体に振りかぶりがあるので、上乗せは控えめ
   rightStraight: { RightShoulder: -0.1, Chest: 0.12 }, // 右ストレートのクリップは引きが大きいので、上乗せは控えめ
 };
 let slingSeq = 0;
