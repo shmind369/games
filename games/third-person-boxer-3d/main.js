@@ -629,7 +629,7 @@ scene.add(opponentShadow);
 //  ・状態は IDLE ⇄ パンチ(1種類ずつ)。パンチ再生中のタップは、肩が左右どちらでも無視する
 //    (多重再生しない)。パンチが終わったら、必ずIDLEへ戻る
 const PUNCHES = {
-  leftJab: { label: "Left Jab", url: "./assets/leftJabInPlace.json", bone: "LeftHand", forearm: "LeftForearm", clip: null, range: null },
+  leftJab: { label: "Left Jab", url: "./assets/leftJabInPlace1.json", bone: "LeftHand", forearm: "LeftForearm", takebackSec: 5 / 30, clip: null, range: null },
   rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightHand", forearm: "RightForearm", clip: null, range: null },
 };
 const PUNCH_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
@@ -692,7 +692,7 @@ for (const [kind, p] of Object.entries(PUNCHES)) {
       p.clip = json;
       p.range = findPunchActiveRange(json);
       p.hasMove = json.keyframes.some((k) => k.modelPosition);
-      p.takebackT = json.takebackTime || (kind === "leftJab" ? findTakebackTime(json, p.forearm) : findTakebackByExtension(json, p.forearm));
+      p.takebackT = json.takebackTime || p.takebackSec || (kind === "leftJab" ? findTakebackTime(json, p.forearm) : findTakebackByExtension(json, p.forearm));
       console.log(`[Player] ${p.label} clip ready (play ${p.range.start.toFixed(2)}s-${p.range.end.toFixed(2)}s, ${punchDurationMs(kind).toFixed(0)}ms)`);
     })
     .catch((err) => console.error(p.url + " の読み込みに失敗しました", err));
