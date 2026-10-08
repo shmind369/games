@@ -370,7 +370,8 @@ const ENEMY_BLEND_OUT_MS = 150; // 攻撃の終わりで、攻撃の姿勢から
 const ENEMY_STRIKE_MS = 70; // 振りかぶり→インパクト。短いほど「パッ」と速い
 const ENEMY_JAB_IMPACT_T = 7 / 30; // leftPunchUsa1.json の、インパクトのキーフレーム(7フレーム)の時刻(秒)
 
-function pickEnemyWaitMs(rng) { return ENEMY_WAIT_MIN_MS + rng() * (ENEMY_WAIT_MAX_MS - ENEMY_WAIT_MIN_MS); }
+let enemyWaitScale = 1; // プレイヤーが疲労状態の間は 0.5(=攻撃頻度が倍)
+function pickEnemyWaitMs(rng) { return (ENEMY_WAIT_MIN_MS + rng() * (ENEMY_WAIT_MAX_MS - ENEMY_WAIT_MIN_MS)) * enemyWaitScale; }
 function createEnemyState(now, rng = Math.random) {
   const waitMs = pickEnemyWaitMs(rng);
   return { phase: "idle", nextAttackAt: now + waitMs, waitMs };
@@ -476,6 +477,8 @@ const SFX_BUILDERS = {
   dodge(c, d, t) { sfxNoise(c, d, t, { dur: 0.24, type: "bandpass", f0: 500, f1: 2200, q: 1.2, gain: 1.4, attack: 0.08 }); },
   // ノーガードのチャンス: 上がる2連のピン
   chance(c, d, t) { sfxTone(c, d, t, { dur: 0.12, f0: 880, gain: 0.5 }); sfxTone(c, d, t + 0.09, { dur: 0.2, f0: 1320, gain: 0.45 }); },
+  // 疲労状態に入った: 力が抜けるように下がる音
+  tired(c, d, t) { sfxTone(c, d, t, { dur: 0.7, f0: 320, f1: 80, gain: 0.7, attack: 0.02 }); sfxNoise(c, d, t, { dur: 0.5, type: "lowpass", f0: 600, f1: 150, gain: 0.35 }); },
   // 敵の振りかぶり開始: 低い唸り(ゆっくり上がる)
   windup(c, d, t) { sfxTone(c, d, t, { dur: 0.5, wave: "sawtooth", f0: 80, f1: 190, gain: 0.3, attack: 0.15 }); sfxNoise(c, d, t, { dur: 0.45, type: "bandpass", f0: 300, f1: 900, q: 1, gain: 0.5, attack: 0.2 }); },
   // 敵の打ち出し: 鋭い風切り
@@ -579,6 +582,7 @@ function applyPlayerDamage(amount, now) {
   playerHitUntil = now + HIT_STATE_MS;
   playerHitAt = now;
   sfx.play("playerHit");
+  if (amount > 0) addFatigue(FATIGUE_ON_HIT, "hit", now);
   if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); }
   return true;
 }
@@ -862,6 +866,7 @@ function punchAtScreen(clientX, clientY) {
 function tryPunch(kind, now) {
   const p = PUNCHES[kind];
   if (!p.clip || !p.range) return false;
+  if (fatigue.active) { punchStats.ignored++; playerDebug(`${p.label} input ignored (fatigued)`); return false; }
   if (punchState.phase || dodgeState.phase) {
     punchStats.ignored++;
     playerDebug(punchState.phase ? `${p.label} input ignored (${PUNCHES[punchState.phase].label} in progress)` : `${p.label} input ignored (busy)`);
@@ -938,6 +943,7 @@ function slingTakebackSec() { return PUNCHES[sling.kind].takebackT || 0.15; }
 function slingStart(y, pointerId = null, kind = "leftJab") {
   const p = PUNCHES[kind];
   const chain = canChainPunch(performance.now());
+  if (fatigue.active) return false; // 疲労状態は、かわし以外何もできない
   if (!p.clip || !p.range || (punchState.phase && !chain) || dodgeState.phase || sling.active) return false;
   if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
   Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq, t0: performance.now() });
@@ -1027,7 +1033,7 @@ const chevronPts = (cx, cy, w, h) => `${cx - w},${cy + h / 2} ${cx},${cy - h / 2
 const hide = (...els) => els.forEach((e) => e.setAttribute("opacity", 0));
 let slingAnchor = null; // 引き始めたときのグローブの画面位置
 function updateSlingFx(now) {
-  const idle = !sling.active && !punchState.phase && !dodgeState.phase;
+  const idle = !sling.active && !punchState.phase && !dodgeState.phase && !fatigue.active;
   // ヒント(何も操作していないとき)
   for (const kind of Object.keys(PUNCHES)) {
     const z = SLING_HINT_ENABLED && idle && !playerKO ? gloveScreenZone(kind) : null;
@@ -1239,6 +1245,7 @@ let punchTriggerAt = -1e9; // 直近のパンチを打ち出した(指を離し�
 let punchResolvedAt = -1e9;
 const isEnemyOpen = (t) => !enemyOpen.closed && t >= enemyOpen.at && t < enemyOpen.until;
 function startEnemyOpen(now) {
+  if (fatigue.active) { combatDebug("Enemy stays guarded (player is fatigued)"); return; } // 疲労中は、かわしても敵のガードは下がらない
   Object.assign(enemyOpen, { at: now, until: now + ENEMY_OPEN_MS, closed: false, jabsLeft: ENEMY_OPEN_JAB_HITS });
   combatDebug(`Enemy OPEN (guard down) for ${ENEMY_OPEN_MS}ms`);
   sfx.play("chance");
@@ -1271,6 +1278,85 @@ function canChainPunch(now) {
   return !!punchState.phase && isEnemyOpen(now) && punchResolved && now - punchResolvedAt >= ENEMY_OPEN_CHAIN_GAP_MS;
 }
 
+
+// ---------- FATIGUE(疲労)ゲージ(プレイヤーのみ) ----------
+// ・自分のパンチを敵にガードされる(FATIGUE_ON_GUARDED)/敵のパンチを喰らう(FATIGUE_ON_HIT)と、疲労ゲージがたまる
+// ・ゲージが満タン(FATIGUE_MAX)になると「疲労状態」(FATIGUE_MS の間)。プレイヤーは左右スワイプのかわし以外、
+//   何もできない(パンチ入力は無視)。ゲージは疲労状態の間に満タンから0へ減っていき、0に戻ると解除
+// ・疲労状態の間: 敵の攻撃頻度は倍(待機時間が半分)。かわしに成功しても敵のガードは下がらない
+// ・見た目: ガードがだらんと下まで下がり、体が赤く点滅する
+const FATIGUE_MAX = 100, FATIGUE_ON_GUARDED = 20, FATIGUE_ON_HIT = 20, FATIGUE_MS = 4000;
+const FATIGUE_ENEMY_WAIT_SCALE = 0.5;
+const FATIGUE_LOOK_IN_MS = 150, FATIGUE_LOOK_OUT_MS = 250;
+// 疲労の姿勢(X軸回転): 腕がだらんと下がり、背中が丸まって頭が下がる
+const FATIGUE_BONES = { LeftUpperArm: 0.6, RightUpperArm: 0.6, LeftForearm: 0.75, RightForearm: 0.75, Spine: 0.18, Neck: 0.15, Head: 0.2 };
+const fatigue = { value: 0, active: false, at: -1e9, until: -1e9 };
+function addFatigue(amount, reason, now) {
+  if (fatigue.active || playerKO) return;
+  fatigue.value = Math.min(FATIGUE_MAX, fatigue.value + amount);
+  playerDebug(`Fatigue +${amount} (${reason}) -> ${fatigue.value}/${FATIGUE_MAX}`);
+  if (fatigue.value >= FATIGUE_MAX) startFatigue(now);
+}
+function startFatigue(now) {
+  Object.assign(fatigue, { active: true, at: now, until: now + FATIGUE_MS, value: FATIGUE_MAX });
+  slingCancel("fatigue");
+  punchState = createPunchState(); // パンチ中だったら中断
+  closeEnemyOpen(now); // ノーガード中だったら、解除
+  enemyWaitScale = FATIGUE_ENEMY_WAIT_SCALE;
+  if (enemyState && enemyState.phase === "idle") enemyState = { ...enemyState, nextAttackAt: now + (enemyState.nextAttackAt - now) * FATIGUE_ENEMY_WAIT_SCALE };
+  sfx.play("tired");
+  playerDebug("FATIGUED (only dodge is possible)");
+}
+function updateFatigue(now) {
+  if (fatigue.active) {
+    if (now >= fatigue.until) {
+      Object.assign(fatigue, { active: false, value: 0 });
+      enemyWaitScale = 1;
+      playerDebug("Fatigue recovered (gauge 0)");
+    } else {
+      fatigue.value = FATIGUE_MAX * ((fatigue.until - now) / FATIGUE_MS); // 疲労状態の間に、満タンから0へ減っていく
+    }
+  }
+  updateFatigueHud(now);
+  applyFatigueLook(now);
+}
+const fatigueLookAmount = (now) => (fatigue.active ? clamp01(Math.min((now - fatigue.at) / FATIGUE_LOOK_IN_MS, (fatigue.until - now) / FATIGUE_LOOK_OUT_MS)) : 0);
+const _fQ = new THREE.Quaternion(), _fE = new THREE.Euler();
+let playerMaterials = null;
+function applyFatigueLook(now) {
+  const k = fatigueLookAmount(now);
+  if (k > 0) {
+    for (const name of Object.keys(FATIGUE_BONES)) {
+      const bone = allBonesByName[name];
+      if (bone) bone.quaternion.premultiply(_fQ.setFromEuler(_fE.set(FATIGUE_BONES[name] * k, 0, 0)));
+    }
+  }
+  // 体を赤く点滅(マテリアルの色/発光を赤へ)。モデルの読み込み後に一度だけ、マテリアルを集めておく
+  if (!playerMaterials) {
+    const list = [];
+    player.traverse((o) => { if (o.isMesh && o.material) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (!list.some((e) => e.m === m)) list.push({ m, color: m.color ? m.color.clone() : null }); });
+    if (!list.length) return;
+    playerMaterials = list;
+  }
+  const f = k * (0.5 + 0.5 * Math.sin(now / 90));
+  for (const e of playerMaterials) {
+    if (e.m.emissive) e.m.emissive.setRGB(0.9 * f, 0, 0);
+    else if (e.color) e.m.color.setRGB(e.color.r, e.color.g * (1 - 0.7 * f), e.color.b * (1 - 0.7 * f));
+  }
+}
+const fatigueHud = document.createElement("div");
+fatigueHud.id = "fatigueHud";
+fatigueHud.style.cssText = "position:fixed;left:10px;top:max(34px,calc(env(safe-area-inset-top) + 24px));z-index:5;pointer-events:none;font:700 11px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
+fatigueHud.innerHTML = '<div id="fatigueLabel">FATIGUE</div><div style="width:130px;height:9px;border-radius:5px;background:rgba(0,0,0,0.4);overflow:hidden;margin-top:2px"><div id="fatigueFill" style="height:100%;width:0%;background:#ffb020;border-radius:5px"></div></div>';
+document.body.appendChild(fatigueHud);
+const fatigueFillEl = fatigueHud.querySelector("#fatigueFill"), fatigueLabelEl = fatigueHud.querySelector("#fatigueLabel");
+function updateFatigueHud(now) {
+  fatigueFillEl.style.width = `${(fatigue.value / FATIGUE_MAX) * 100}%`;
+  fatigueFillEl.style.background = fatigue.active ? `hsl(0,90%,${50 + 10 * Math.sin(now / 90)}%)` : `hsl(${Math.round(40 - 30 * (fatigue.value / FATIGUE_MAX))},95%,55%)`;
+  fatigueLabelEl.textContent = fatigue.active ? "疲労! 避けるしかできない" : "FATIGUE";
+  fatigueLabelEl.style.color = fatigue.active ? "#ff6a6a" : "#fff";
+}
+
 // プレイヤーのグローブ(手首から前腕の向きへ少し先)が、敵の頭・胸の球に届いたか
 function playerGloveReachesEnemy() {
   const p = PUNCHES[punchState.phase];
@@ -1297,6 +1383,7 @@ function resolvePlayerPunch(now) {
   enemyReact = { kind: hit ? "hit" : "guard", at: now, side: punchState.phase === "leftJab" ? 1 : -1 };
   playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}${guaranteed ? " [OPEN: guaranteed]" : ""}`);
   sfx.play(hit ? "enemyHit" : "guard");
+  if (!hit) addFatigue(FATIGUE_ON_GUARDED, "guarded", now); // 攻撃をガードされると疲労がたまる
   if (hit && enemyState && enemyState.phase === "jab") { enemyAttackResolved = true; enemyState = createEnemyState(now); enemyDebug("Attack interrupted by counter"); }
 }
 // 毎フレーム: パンチが始まった直後に判定をリセットし、グローブが届いた瞬間(届かなければ後半の途中)に1回だけ結果を出す
@@ -1363,6 +1450,7 @@ function render() {
   updateSlingFx(now);
   applyHitRecoil(now);
   updateOpponent(now);
+  updateFatigue(now);
   applyEnemyOpen(now);
   applyEnemyReact(now);
   updatePunchResult(now);
@@ -1432,6 +1520,7 @@ window.__punch = {
 };
 
 // プレイヤーの被ダメージのテスト/デバッグ用
+window.__fatigue = { getState: () => ({ ...fatigue, enemyWaitScale }), add: (n) => addFatigue(n, "test", performance.now()), reset: () => { Object.assign(fatigue, { active: false, value: 0 }); enemyWaitScale = 1; } };
 window.__open = { getState: () => ({ ...enemyOpen, active: isEnemyOpen(performance.now()) }), start: () => startEnemyOpen(performance.now()) };
 window.__enemyReact = {
   getState: () => ({ ...enemyReact }),
