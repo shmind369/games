@@ -348,7 +348,7 @@ fetch("./assets/fightIdleUsa.json")
   .catch((err) => console.error("fightIdleUsa.json の読み込みに失敗しました", err));
 
 // ---------- 相手の攻撃遷移(Idle → 左ジャブ → Idle)のテスト ----------
-// まずは「Idleが再生される → 5〜10秒のランダム待機 → 左ジャブ → 最後まで再生 → Idleへ戻る →
+// まずは「Idleが再生される → 2〜4秒のランダム待機 → 左ジャブ → 最後まで再生 → Idleへ戻る →
 // また5〜10秒待機 → 左ジャブ」というループが正しく動くことだけを確認する(ダメージ判定・
 // プレイヤーへの追従・戦闘判断はしない)。状態機械はThree.js非依存の純粋関数
 // (createEnemyState/advanceEnemy)にしてあり、時刻と乱数を引数で受け取る。
@@ -356,8 +356,8 @@ fetch("./assets/fightIdleUsa.json")
 //  ・左ジャブの再生中は新しい攻撃タイマーを作らない。ジャブが最後まで再生されて
 //    Idleへ戻った時点から、次の5〜10秒を数え始める
 //  ・ジャブの長さは、クリップの最後のキーフレームの時刻(JSONのtotalFramesではない)
-const ENEMY_WAIT_MIN_MS = 5000;
-const ENEMY_WAIT_MAX_MS = 10000;
+const ENEMY_WAIT_MIN_MS = 2000; // 次の攻撃までの待機は2〜4秒(以前は5〜10秒)
+const ENEMY_WAIT_MAX_MS = 4000;
 const ENEMY_BLEND_IN_MS = 120; // Idle→振りかぶりの頭で、Idleの姿勢からなじませる時間
 const ENEMY_BLEND_OUT_MS = 150; // 攻撃の終わりで、攻撃の姿勢からIdleの姿勢へなじませる時間
 // 敵の左ジャブは「大きな予備動作(振りかぶり)→タメ→高速のパンチ→戻り」の順に再生する。
@@ -474,6 +474,8 @@ const SFX_BUILDERS = {
   guard(c, d, t) { sfxNoise(c, d, t, { dur: 0.07, type: "bandpass", f0: 1000, f1: 700, q: 1.4, gain: 0.8 }); sfxTone(c, d, t, { dur: 0.06, wave: "triangle", f0: 260, f1: 150, gain: 0.45 }); },
   // かわした: 風切り(ヒュッ)
   dodge(c, d, t) { sfxNoise(c, d, t, { dur: 0.24, type: "bandpass", f0: 500, f1: 2200, q: 1.2, gain: 1.4, attack: 0.08 }); },
+  // ノーガードのチャンス: 上がる2連のピン
+  chance(c, d, t) { sfxTone(c, d, t, { dur: 0.12, f0: 880, gain: 0.5 }); sfxTone(c, d, t + 0.09, { dur: 0.2, f0: 1320, gain: 0.45 }); },
   // 敵の振りかぶり開始: 低い唸り(ゆっくり上がる)
   windup(c, d, t) { sfxTone(c, d, t, { dur: 0.5, wave: "sawtooth", f0: 80, f1: 190, gain: 0.3, attack: 0.15 }); sfxNoise(c, d, t, { dur: 0.45, type: "bandpass", f0: 300, f1: 900, q: 1, gain: 0.5, attack: 0.2 }); },
   // 敵の打ち出し: 鋭い風切り
@@ -605,6 +607,13 @@ function startEnemyAttack() { sfx.play("windup"); enemyAttackResolved = false; e
 // 毎フレーム(ジャブ中だけ)呼ばれる。ジャブが伸びている間に拳が当たれば、1回だけダメージ
 function checkEnemyAttackHit(elapsedMs, now) {
   const win = enemyHitWindow();
+  // 当たり判定の時間が終わった時点で、かわし成功が確定していたら、すぐに「ノーガード」にする(攻撃が終わるのを待たない)
+  if (!enemyAttackResolved && elapsedMs > win.to && enemyAttackDodged) {
+    enemyAttackResolved = true;
+    combatDebug(`Enemy Left Jab: MISS (dodged) (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    startEnemyOpen(now);
+    return;
+  }
   if (enemyAttackResolved || elapsedMs < win.from || elapsedMs > win.to) return;
   // 回避(左右のスワイプ)の動作中は、ダメージを受けない(かわし成功)。回避が早すぎて終わってしまう/
   // 遅すぎて間に合わない場合は、このあとの判定で当たる
@@ -624,6 +633,7 @@ function endEnemyAttack() {
   if (!enemyAttackResolved) {
     enemyAttackResolved = true;
     combatDebug(`Enemy Left Jab: MISS${enemyAttackDodged ? " (dodged)" : ""} (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    if (enemyAttackDodged) startEnemyOpen(performance.now()); // かわし成功 → 敵はノーガード
   }
 }
 
@@ -858,6 +868,7 @@ function tryPunch(kind, now) {
     return false;
   }
   punchState = triggerPunch(punchState, kind, now);
+  punchTriggerAt = now;
   punchStats.started++;
   playerDebug(p.label);
   return true;
@@ -922,12 +933,14 @@ const SLING_EXTRA = { // X軸回転(ラジアン)
   rightStraight: { RightShoulder: -0.1, Chest: 0.12 }, // 右ストレートのクリップは引きが大きいので、上乗せは控えめ
 };
 let slingSeq = 0;
-const sling = { kind: "leftJab", startId: 0, releasedAnchor: null, active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
+const sling = { t0: 0, kind: "leftJab", startId: 0, releasedAnchor: null, active: false, pull: 0, pointerId: null, startY: 0, releasedAt: -1e9, releasedPull: 0 };
 function slingTakebackSec() { return PUNCHES[sling.kind].takebackT || 0.15; }
 function slingStart(y, pointerId = null, kind = "leftJab") {
   const p = PUNCHES[kind];
-  if (!p.clip || !p.range || punchState.phase || dodgeState.phase || sling.active) return false;
-  Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq });
+  const chain = canChainPunch(performance.now());
+  if (!p.clip || !p.range || (punchState.phase && !chain) || dodgeState.phase || sling.active) return false;
+  if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
+  Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq, t0: performance.now() });
   playerDebug(`Sling pull start (${p.label})`);
   return true;
 }
@@ -946,6 +959,7 @@ function slingRelease(now) {
   sling.releasedAt = now;
   sling.releasedPull = sling.pull;
   sling.releasedAnchor = slingAnchor;
+  punchTriggerAt = sling.t0; // ノーガードの判定は「引き始めた時刻」で行う(1秒以内に引き始めればOK)
   punchState = triggerPunch(punchState, sling.kind, now, Math.max(1, (t * 1000) / PUNCH_SPEED));
   punchStats.started++;
   sfx.play("release");
@@ -1178,6 +1192,8 @@ let enemyReact = { kind: null, at: -1e9, side: 1 };
 let enemyHitProbability = ENEMY_HIT_CHANCE;
 let enemyForcedResult = null; // テスト用
 let punchResolved = true;
+// グローブが敵に届かないとき、パンチの何割の時点(=腕が伸びきるあたり)で当たり/ガードを判定するか
+const PUNCH_IMPACT_FRACTION = { leftJab: 0.4, rightStraight: 0.55 };
 const enemyReactMs = (r) => r.inMs + r.holdMs + r.outMs;
 function enemyReactAmount(now) {
   if (!enemyReact.kind) return 0;
@@ -1205,6 +1221,56 @@ function applyEnemyReact(now) {
   opponent.position.z -= r.back * k; // 敵は+Zを向いているので、-Zが後ろ
   opponent.position.y -= r.drop * k;
 }
+
+// ---------- 敵のノーガード(かわし成功の隙) ----------
+// 敵のパンチをかわすことに成功したら(攻撃が終わった時点から)、敵のガードが下がって
+// ENEMY_OPEN_MS(=1秒)の間「ノーガード」になる。この間に打ち出した(指を離した)パンチは、
+// 乱数(10%)に関係なく無条件で当たる:
+//  ・左ジャブ: 最大 ENEMY_OPEN_JAB_HITS(=3)発まで連続で当たる。当たった直後(ENEMY_OPEN_CHAIN_GAP_MS後)から
+//    次のスリングを始められる(ジャブの戻りをキャンセルして連打できる)
+//  ・右ストレート: 1発当たるとノーガードは終わる
+// 1秒たつとノーガードは解除され、通常(10%だけ当たる)に戻る。
+const ENEMY_OPEN_MS = 1000, ENEMY_OPEN_JAB_HITS = 3, ENEMY_OPEN_CHAIN_GAP_MS = 50;
+const ENEMY_OPEN_IN_MS = 120, ENEMY_OPEN_OUT_MS = 150;
+// ガードが下がった姿勢(X軸回転)。両腕をだらりと下げ、顎が上がる
+const ENEMY_OPEN_BONES = { LeftUpperArm: 0.55, RightUpperArm: 0.55, LeftForearm: 0.7, RightForearm: 0.7, Head: -0.18, Neck: -0.12 };
+const enemyOpen = { at: -1e9, until: -1e9, closed: true, jabsLeft: 0 };
+let punchTriggerAt = -1e9; // 直近のパンチを打ち出した(指を離した)時刻
+let punchResolvedAt = -1e9;
+const isEnemyOpen = (t) => !enemyOpen.closed && t >= enemyOpen.at && t < enemyOpen.until;
+function startEnemyOpen(now) {
+  Object.assign(enemyOpen, { at: now, until: now + ENEMY_OPEN_MS, closed: false, jabsLeft: ENEMY_OPEN_JAB_HITS });
+  combatDebug(`Enemy OPEN (guard down) for ${ENEMY_OPEN_MS}ms`);
+  sfx.play("chance");
+}
+function closeEnemyOpen(now) {
+  enemyOpen.closed = true;
+  enemyOpen.until = Math.min(enemyOpen.until, now + ENEMY_OPEN_OUT_MS); // 姿勢はなじませながら戻す
+}
+function enemyOpenAmount(now) {
+  if (now < enemyOpen.at || now >= enemyOpen.until) return 0;
+  return clamp01(Math.min((now - enemyOpen.at) / ENEMY_OPEN_IN_MS, (enemyOpen.until - now) / ENEMY_OPEN_OUT_MS));
+}
+const _oQ = new THREE.Quaternion(), _oE = new THREE.Euler();
+function applyEnemyOpen(now) {
+  const k = enemyOpenAmount(now);
+  chanceEl.style.display = isEnemyOpen(now) ? "block" : "none";
+  chanceEl.style.opacity = String(0.7 + 0.3 * Math.sin(now / 60));
+  if (k <= 0) return;
+  for (const name of Object.keys(ENEMY_OPEN_BONES)) {
+    const bone = opponentBonesByName[name];
+    if (bone) bone.quaternion.premultiply(_oQ.setFromEuler(_oE.set(ENEMY_OPEN_BONES[name] * k, 0, 0)));
+  }
+}
+const chanceEl = document.createElement("div");
+chanceEl.textContent = "チャンス!";
+chanceEl.style.cssText = "position:fixed;left:50%;top:max(56px,calc(env(safe-area-inset-top) + 46px));transform:translateX(-50%);z-index:5;display:none;pointer-events:none;font:900 26px system-ui,sans-serif;color:#ffe14a;-webkit-text-stroke:2px #b00020;paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,0.6);letter-spacing:2px;";
+document.body.appendChild(chanceEl);
+// 連打: ノーガード中で、直前のパンチの判定が出たあと少したったら、戻りをキャンセルして次のスリングを始められる
+function canChainPunch(now) {
+  return !!punchState.phase && isEnemyOpen(now) && punchResolved && now - punchResolvedAt >= ENEMY_OPEN_CHAIN_GAP_MS;
+}
+
 // プレイヤーのグローブ(手首から前腕の向きへ少し先)が、敵の頭・胸の球に届いたか
 function playerGloveReachesEnemy() {
   const p = PUNCHES[punchState.phase];
@@ -1220,9 +1286,16 @@ function playerGloveReachesEnemy() {
 }
 function resolvePlayerPunch(now) {
   const p = PUNCHES[punchState.phase];
-  const hit = enemyForcedResult ? enemyForcedResult === "hit" : Math.random() < enemyHitProbability;
+  let hit = enemyForcedResult ? enemyForcedResult === "hit" : Math.random() < enemyHitProbability;
+  // ノーガード中に打ち出したパンチは、無条件で当たる(左ジャブは最大3発、右ストレートは1発でノーガード終了)
+  let guaranteed = false;
+  if (isEnemyOpen(punchTriggerAt)) {
+    guaranteed = hit = true;
+    if (punchState.phase === "rightStraight") closeEnemyOpen(now);
+    else if (--enemyOpen.jabsLeft <= 0) closeEnemyOpen(now);
+  }
   enemyReact = { kind: hit ? "hit" : "guard", at: now, side: punchState.phase === "leftJab" ? 1 : -1 };
-  playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}`);
+  playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}${guaranteed ? " [OPEN: guaranteed]" : ""}`);
   sfx.play(hit ? "enemyHit" : "guard");
   if (hit && enemyState && enemyState.phase === "jab") { enemyAttackResolved = true; enemyState = createEnemyState(now); enemyDebug("Attack interrupted by counter"); }
 }
@@ -1231,7 +1304,7 @@ function updatePunchResult(now) {
   if (!punchState.phase) { punchResolved = false; return; }
   if (punchResolved) return;
   const elapsed = now - punchState.startAt, total = punchDurationMs(punchState.phase);
-  if (playerGloveReachesEnemy() || elapsed > total * 0.6) { punchResolved = true; resolvePlayerPunch(now); }
+  if (playerGloveReachesEnemy() || elapsed > total * (PUNCH_IMPACT_FRACTION[punchState.phase] || 0.5)) { punchResolved = true; punchResolvedAt = now; resolvePlayerPunch(now); }
 }
 
 // ---------- レンダーループ ----------
@@ -1290,6 +1363,7 @@ function render() {
   updateSlingFx(now);
   applyHitRecoil(now);
   updateOpponent(now);
+  applyEnemyOpen(now);
   applyEnemyReact(now);
   updatePunchResult(now);
   updatePunchZoneDebug();
@@ -1358,6 +1432,7 @@ window.__punch = {
 };
 
 // プレイヤーの被ダメージのテスト/デバッグ用
+window.__open = { getState: () => ({ ...enemyOpen, active: isEnemyOpen(performance.now()) }), start: () => startEnemyOpen(performance.now()) };
 window.__enemyReact = {
   getState: () => ({ ...enemyReact }),
   amount: () => enemyReactAmount(performance.now()),
