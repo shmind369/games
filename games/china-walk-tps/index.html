@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="data:," />
+  <title>China Walk TPS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0; height: 100%; height: 100dvh; overflow: hidden; overscroll-behavior: none;
+      background: #030305; color: #eee; font-family: system-ui, sans-serif;
+      touch-action: none; -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%;
+      -webkit-touch-callout: none;
+    }
+    canvas { display: block; touch-action: none; }
+    #stickBase, #stickKnob { position: fixed; pointer-events: none; z-index: 10; border-radius: 50%; transform: translate(-50%, -50%); }
+    #stickBase { width: 120px; height: 120px; border: 2px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.08); }
+    #stickKnob { width: 52px; height: 52px; background: rgba(255,255,255,0.45); border: 2px solid rgba(255,255,255,0.7); }
+    #hint {
+      position: fixed; left: 50%; bottom: max(18px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+      z-index: 11; padding: 8px 16px; border-radius: 999px; background: rgba(0,0,0,0.5);
+      font-size: 13px; letter-spacing: 0.04em; text-align: center; pointer-events: none; transition: opacity 1s; white-space: nowrap;
+    }
+    #loading { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: #030305; font-size: 14px; letter-spacing: 0.1em; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <div id="stickBase"></div>
+  <div id="stickKnob"></div>
+  <div id="hint">左側ドラッグ: 歩く ／ 右側ドラッグ: 視点</div>
+  <div id="loading">LOADING...</div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
