@@ -578,9 +578,10 @@ let enemyKO = false;
 let matchResult = null; // null | "win" | "lose"(3カウント制などは後で)
 const hpDisplayEl = document.createElement("div");
 hpDisplayEl.id = "hpDisplay";
-hpDisplayEl.style.cssText = "position:fixed;left:10px;right:56px;top:max(12px,env(safe-area-inset-top));z-index:5;display:flex;gap:10px;pointer-events:none;";
-const hpBarHtml = (id, right) => `<div style="flex:1;height:14px;border-radius:7px;background:rgba(0,0,0,0.45);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.5);display:flex;justify-content:${right ? "flex-end" : "flex-start"}"><div id="${id}" style="height:100%;width:100%;border-radius:7px;background:#3ddc6a"></div></div>`;
-hpDisplayEl.innerHTML = hpBarHtml("playerHpFill", false) + hpBarHtml("enemyHpFill", true);
+hpDisplayEl.style.cssText = "position:fixed;left:10px;right:56px;top:max(8px,env(safe-area-inset-top));z-index:5;display:flex;gap:14px;pointer-events:none;font:800 12px system-ui,sans-serif;letter-spacing:1px;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
+// 左半分=プレイヤー、右半分=敵。それぞれ、ゲージの上に名前(PLAYER / ENEMY)を表示
+const hpBarHtml = (id, name, color, right) => `<div style="flex:1;min-width:0"><div style="color:${color};text-align:${right ? "right" : "left"};margin-bottom:2px">${name}</div><div style="height:14px;border-radius:7px;background:rgba(0,0,0,0.45);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.5);display:flex;justify-content:${right ? "flex-end" : "flex-start"}"><div id="${id}" style="height:100%;width:100%;border-radius:7px;background:#3ddc6a"></div></div></div>`;
+hpDisplayEl.innerHTML = hpBarHtml("playerHpFill", "PLAYER", "#8fd0ff", false) + hpBarHtml("enemyHpFill", "ENEMY", "#ff9a8f", true);
 document.body.appendChild(hpDisplayEl);
 const playerHpFillEl = hpDisplayEl.querySelector("#playerHpFill"), enemyHpFillEl = hpDisplayEl.querySelector("#enemyHpFill");
 const hpColor = (r) => `hsl(${Math.round(8 + 112 * r)},75%,50%)`; // 緑→黄→赤
@@ -1317,7 +1318,7 @@ function applyEnemyOpen(now) {
 }
 const chanceEl = document.createElement("div");
 chanceEl.textContent = "チャンス!";
-chanceEl.style.cssText = "position:fixed;left:50%;top:max(78px,calc(env(safe-area-inset-top) + 68px));transform:translateX(-50%);z-index:5;display:none;pointer-events:none;font:900 26px system-ui,sans-serif;color:#ffe14a;-webkit-text-stroke:2px #b00020;paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,0.6);letter-spacing:2px;";
+chanceEl.style.cssText = "position:fixed;left:50%;top:max(96px,calc(env(safe-area-inset-top) + 86px));transform:translateX(-50%);z-index:5;display:none;pointer-events:none;font:900 26px system-ui,sans-serif;color:#ffe14a;-webkit-text-stroke:2px #b00020;paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,0.6);letter-spacing:2px;";
 document.body.appendChild(chanceEl);
 // 連打: ノーガード中で、直前のパンチの判定が出たあと少したったら、戻りをキャンセルして次のスリングを始められる
 function canChainPunch(now) {
@@ -1392,7 +1393,7 @@ function applyFatigueLook(now) {
 }
 const fatigueHud = document.createElement("div");
 fatigueHud.id = "fatigueHud";
-fatigueHud.style.cssText = "position:fixed;left:10px;top:max(34px,calc(env(safe-area-inset-top) + 34px));z-index:5;pointer-events:none;font:700 11px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
+fatigueHud.style.cssText = "position:fixed;left:10px;top:max(50px,calc(env(safe-area-inset-top) + 50px));z-index:5;pointer-events:none;font:700 11px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
 fatigueHud.innerHTML = '<div id="fatigueLabel">FATIGUE</div><div style="width:130px;height:9px;border-radius:5px;background:rgba(0,0,0,0.4);overflow:hidden;margin-top:2px"><div id="fatigueFill" style="height:100%;width:0%;background:#ffb020;border-radius:5px"></div></div>';
 document.body.appendChild(fatigueHud);
 const fatigueFillEl = fatigueHud.querySelector("#fatigueFill"), fatigueLabelEl = fatigueHud.querySelector("#fatigueLabel");
@@ -1465,6 +1466,9 @@ function render() {
     applyClipSample(sample);
     shadowBlob.position.x = sample.modelPosition[0] + 0.05;
   } else if (dodgeState.phase) {
+    // まず、アイドルの構えを全ボーンに書き直す(毎フレーム、全ボーンを上書きする)。これをしないと、かわしが
+    // 触らないボーン(腕・頭など)に、疲労の姿勢・被弾のけぞりなどの「上乗せ」が毎フレーム積み重なって暴走する
+    applyClipSample(sampleClip(IDLE_CLIP, computeIdleClipTime(now)));
     const x = computeDodgeX(dodgeState, now);
     const progress = computeDodgeProgress(dodgeState, now);
     const posture = computeDodgePosture(progress);
@@ -1475,11 +1479,6 @@ function render() {
     shadowBlob.position.x = x + 0.05;
 
     if (bones.spine) {
-      // アイドル・パンチのクリップだけが操作するボーン(Hips・
-      // LeftForearm)は、回避姿勢には含まれないため、ここで明示的に
-      // 直立姿勢へ戻しておく(他のクリップの端数が残らないようにする)
-      if (bones.hips) bones.hips.quaternion.identity();
-      if (bones.leftForearm) bones.leftForearm.quaternion.identity();
       bones.spine.rotation.z = posture.leanZ;
       bones.spine.rotation.x = posture.leanX;
       bones.leftUpperLeg.rotation.x = posture.hipBend;
