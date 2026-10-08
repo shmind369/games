@@ -485,6 +485,8 @@ const SFX_BUILDERS = {
   chance(c, d, t) { sfxTone(c, d, t, { dur: 0.12, f0: 880, gain: 0.5 }); sfxTone(c, d, t + 0.09, { dur: 0.2, f0: 1320, gain: 0.45 }); },
   // 疲労状態に入った: 力が抜けるように下がる音
   tired(c, d, t) { sfxTone(c, d, t, { dur: 0.7, f0: 320, f1: 80, gain: 0.7, attack: 0.02 }); sfxNoise(c, d, t, { dur: 0.5, type: "lowpass", f0: 600, f1: 150, gain: 0.35 }); },
+  // ダウン(倒れた瞬間): 重く沈むドサッ
+  down(c, d, t) { sfxTone(c, d, t, { dur: 0.55, f0: 110, f1: 32, gain: 1.2 }); sfxNoise(c, d, t, { dur: 0.4, type: "lowpass", f0: 900, f1: 120, gain: 1.0 }); },
   // 敵の振りかぶり開始: 低い唸り(ゆっくり上がる)
   windup(c, d, t) { sfxTone(c, d, t, { dur: 0.5, wave: "sawtooth", f0: 80, f1: 190, gain: 0.3, attack: 0.15 }); sfxNoise(c, d, t, { dur: 0.45, type: "bandpass", f0: 300, f1: 900, q: 1, gain: 0.5, attack: 0.2 }); },
   // 敵の打ち出し: 鋭い風切り
@@ -620,9 +622,10 @@ function finishMatch(result) {
   matchResult = result;
   combatDebug(`MATCH OVER: ${result === "win" ? "PLAYER WINS" : "PLAYER LOSES"}`);
   slingCancel("match over");
+  startDown(result === "win" ? "enemy" : "player", performance.now()); // 負けた側がダウン
   matchOverlayEl.querySelector("#matchText").textContent = result === "win" ? "YOU WIN!" : "YOU LOSE";
   matchOverlayEl.querySelector("#matchText").style.color = result === "win" ? "#ffe14a" : "#ff6a6a";
-  matchOverlayEl.style.display = "flex";
+  setTimeout(() => { matchOverlayEl.style.display = "flex"; }, DOWN_RESULT_DELAY_MS); // ダウンが終わってから結果を出す
 }
 const matchOverlayEl = document.createElement("div");
 matchOverlayEl.style.cssText = "position:fixed;inset:0;z-index:8;display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(0,0,0,0.35);font-family:system-ui,sans-serif;";
@@ -695,8 +698,9 @@ function updateOpponent(nowMs) {
   stepEnemyState(nowMs);
   const keys = opponentIdleClip.keyframes;
   const duration = keys[keys.length - 1].time;
-  const sample = sampleClip(opponentIdleClip, (nowMs / 1000) % duration);
-  if (enemyState && enemyState.phase === "jab" && enemyClipsReady()) {
+  const enemyDown = !!downState && downState.who === "enemy";
+  const sample = sampleClip(opponentIdleClip, enemyDown ? 0 : (nowMs / 1000) % duration);
+  if (!enemyDown && enemyState && enemyState.phase === "jab" && enemyClipsReady()) {
     const kind = enemyState.kind || "leftJab", A = ENEMY_ATTACKS[kind];
     const elapsedMs = nowMs - enemyState.startAt;
     const totalMs = enemyJabDurationMs(kind), windMs = enemyWindupMs(kind);
@@ -720,7 +724,7 @@ function updateOpponent(nowMs) {
     }
     sample.modelPosition = sample.modelPosition.map((v, i) => v + (atk.modelPosition[i] - v) * w);
   }
-  const gw = enemyGuardClipWeight(nowMs);
+  const gw = enemyDown ? 0 : enemyGuardClipWeight(nowMs);
   if (gw > 0) {
     const g = sampleClip(enemyGuardClip, (nowMs - enemyReact.at) / 1000);
     for (const name of Object.keys(g.pose)) sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(g.pose[name], gw) : g.pose[name];
@@ -1404,6 +1408,61 @@ function updateFatigueHud(now) {
   fatigueLabelEl.style.color = fatigue.active ? "#ff6a6a" : "#fff";
 }
 
+
+// ---------- ダウン(体力が0になったときの倒れるモーション。コードで動かす) ----------
+// 負けた側がダウンする。①膝が折れて崩れ(DOWN_BUCKLE_MS) ②そのまま倒れ(DOWN_FALL_MS。だんだん速く) ③地面で軽く弾む。
+//  ・敵(勝ったとき): 頭をのけぞらせ、両腕を広げて、後ろ(奥)へ大の字に倒れる
+//  ・プレイヤー(負けたとき): 膝が折れて沈み、頭と腕を垂らして、前(奥)へ崩れ落ちる(敵に重ならないよう、倒れ込みは浅め)
+// 倒れたあとはそのまま(3カウントは後で)。既存の姿勢の上に「上乗せ」する方式なので、毎フレーム全ボーンを書き直している
+const DOWN_BUCKLE_MS = 300, DOWN_FALL_MS = 600, DOWN_BOUNCE_MS = 180, DOWN_RESULT_DELAY_MS = 1500;
+const DOWN_SPEC = {
+  enemy: { pitch: 0.95, roll: 0.55, drop: 0.2, bones: {
+    Spine: [-0.5, 0, 0], Chest: [-0.3, 0, 0], Neck: [-0.4, 0, 0], Head: [-0.5, 0, 0],
+    LeftUpperArm: [-0.4, 0, 0.9], RightUpperArm: [-0.4, 0, -0.9], LeftForearm: [0.4, 0, 0], RightForearm: [0.4, 0, 0],
+    LeftUpperLeg: [-0.35, 0, 0], RightUpperLeg: [-0.35, 0, 0], LeftLowerLeg: [0.7, 0, 0], RightLowerLeg: [0.7, 0, 0] } },
+  player: { pitch: 0.8, roll: 0, drop: 0.5, bones: {
+    Spine: [0.5, 0, 0], Chest: [0.2, 0, 0], Neck: [0.3, 0, 0], Head: [0.4, 0, 0],
+    LeftUpperArm: [0.6, 0, 0], RightUpperArm: [0.6, 0, 0], LeftForearm: [0.7, 0, 0], RightForearm: [0.7, 0, 0],
+    LeftUpperLeg: [-0.6, 0, 0], RightUpperLeg: [-0.6, 0, 0], LeftLowerLeg: [0.9, 0, 0], RightLowerLeg: [0.9, 0, 0] } },
+};
+let downState = null; // { who: "player" | "enemy", at }
+function startDown(who, now) {
+  downState = { who, at: now };
+  if (who === "player") {
+    punchState = createPunchState(); dodgeState = createDodgeState();
+    Object.assign(fatigue, { active: false, value: 0 }); enemyWaitScale = 1;
+  } else {
+    enemyReact = { kind: null, at: -1e9, side: 1 }; closeEnemyOpen(now);
+  }
+  combatDebug(`DOWN: ${who}`);
+  setTimeout(() => sfx.play("down"), DOWN_BUCKLE_MS * 0.5 + DOWN_FALL_MS); // 倒れきった瞬間
+}
+const _dQ = new THREE.Quaternion(), _dE = new THREE.Euler();
+// 負けた側の、膝の崩れ具合(buckle)・倒れ具合(pitch, ラジアン)・沈み込み(drop)
+function downAmounts(now) {
+  const spec = DOWN_SPEC[downState.who], e = now - downState.at;
+  const buckle = easeOutCubic(clamp01(e / DOWN_BUCKLE_MS));
+  const t = clamp01((e - DOWN_BUCKLE_MS * 0.5) / DOWN_FALL_MS);
+  const bounceT = clamp01((e - DOWN_BUCKLE_MS * 0.5 - DOWN_FALL_MS) / DOWN_BOUNCE_MS);
+  const roll = spec.roll * t * t;
+  const pitch = spec.pitch * t * t - (e > DOWN_BUCKLE_MS * 0.5 + DOWN_FALL_MS ? 0.07 * Math.sin(Math.PI * bounceT) : 0);
+  return { buckle, pitch, roll, drop: spec.drop * buckle, spec };
+}
+function applyDownPose(now) {
+  if (!downState) return;
+  const a = downAmounts(now), isPlayer = downState.who === "player";
+  const byName = isPlayer ? allBonesByName : opponentBonesByName, root = isPlayer ? player : opponent;
+  for (const name of Object.keys(a.spec.bones)) {
+    const bone = byName[name];
+    if (!bone) continue;
+    const [x, y, z] = a.spec.bones[name];
+    bone.quaternion.premultiply(_dQ.setFromEuler(_dE.set(x * a.buckle, y * a.buckle, z * a.buckle)));
+  }
+  root.rotation.x = -a.pitch; // 奥(-Z)へ倒れる
+  root.rotation.z = a.roll; // 画面の左へ傾く(敵が、プレイヤーの体に隠れないよう斜めに倒れる)
+  root.position.y -= a.drop;
+}
+
 // プレイヤーのグローブ(手首から前腕の向きへ少し先)が、敵の頭・胸の球に届いたか
 function playerGloveReachesEnemy() {
   const p = PUNCHES[punchState.phase];
@@ -1455,7 +1514,9 @@ function render() {
   if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
   if (punchState.phase && now - playerHitAt < HIT_RECOIL_MS) punchState = createPunchState(); // 被弾でパンチは中断
-  if (sling.active) {
+  if (downState && downState.who === "player") {
+    applyClipSample(sampleClip(IDLE_CLIP, 0)); // ダウン中は、構えを固定した上に倒れる動きを重ねる
+  } else if (sling.active) {
     // スリングで引いている間: クリップのテイクバック部分を、ドラッグ量で直接再生
     const sample = sampleSlingPull(now);
     applyClipSample(sample);
@@ -1497,8 +1558,8 @@ function render() {
   applyHitRecoil(now);
   updateOpponent(now);
   updateFatigue(now);
-  applyEnemyOpen(now);
-  applyEnemyReact(now);
+  if (!(downState && downState.who === "enemy")) { applyEnemyOpen(now); applyEnemyReact(now); }
+  applyDownPose(now);
   updatePunchResult(now);
   updatePunchZoneDebug();
 
@@ -1567,6 +1628,7 @@ window.__punch = {
 
 // プレイヤーの被ダメージのテスト/デバッグ用
 window.__fatigue = { getState: () => ({ ...fatigue, enemyWaitScale }), add: (n) => addFatigue(n, "test", performance.now()), reset: () => { Object.assign(fatigue, { active: false, value: 0 }); enemyWaitScale = 1; } };
+window.__down = { start: (who) => startDown(who, performance.now()), getState: () => downState && ({ ...downState }) };
 window.__open = { getState: () => ({ ...enemyOpen, active: isEnemyOpen(performance.now()) }), start: () => startEnemyOpen(performance.now()) };
 window.__enemyReact = {
   getState: () => ({ ...enemyReact }),
