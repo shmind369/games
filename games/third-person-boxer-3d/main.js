@@ -371,38 +371,43 @@ const ENEMY_STRIKE_MS = 70; // 振りかぶり→インパクト。短いほど�
 const ENEMY_JAB_IMPACT_T = 7 / 30; // leftPunchUsa1.json の、インパクトのキーフレーム(7フレーム)の時刻(秒)
 
 let enemyWaitScale = 1; // プレイヤーが疲労状態の間は 0.5(=攻撃頻度が倍)
+// 敵の攻撃は2種類: 左ジャブ(ダメージ10)と右ストレート(ダメージ15)。どちらも
+// 「大きな予備動作(windup) → タメ → 高速のパンチ → 戻り(follow)」の同じ流れで再生する
+//  ・windup: 振りかぶり+タメのクリップ。follow: インパクトの姿勢(impactT秒)から後ろをそのまま再生するクリップ
+const ENEMY_RIGHT_STRAIGHT_RATE = 0.4; // 攻撃のうち右ストレートの割合(残りは左ジャブ)
+const ENEMY_ATTACKS = {
+  leftJab: { label: "Left Jab", damage: 10, impactT: 7 / 30, fist: ["LeftHand", "LeftForearm"], windupUrl: "./assets/leftJabWindupUsa.json", followUrl: "./assets/leftPunchUsa1.json", windup: null, follow: null },
+  rightStraight: { label: "Right Straight", damage: 15, impactT: 11 / 30, fist: ["RightHand", "RightForearm"], windupUrl: "./assets/rightStraightWindupUsa.json", followUrl: "./assets/rightStraight.json", windup: null, follow: null },
+};
+function pickEnemyAttackKind(rng) { return rng() < ENEMY_RIGHT_STRAIGHT_RATE ? "rightStraight" : "leftJab"; }
 function pickEnemyWaitMs(rng) { return (ENEMY_WAIT_MIN_MS + rng() * (ENEMY_WAIT_MAX_MS - ENEMY_WAIT_MIN_MS)) * enemyWaitScale; }
 function createEnemyState(now, rng = Math.random) {
   const waitMs = pickEnemyWaitMs(rng);
   return { phase: "idle", nextAttackAt: now + waitMs, waitMs };
 }
-function advanceEnemy(state, now, jabDurationMs, rng = Math.random) {
-  if (state.phase === "idle" && now >= state.nextAttackAt) return { phase: "jab", startAt: now };
-  if (state.phase === "jab" && now - state.startAt >= jabDurationMs) return createEnemyState(now, rng); // ここで初めて次のタイマーを作る
+function advanceEnemy(state, now, attackDurationMs, rng = Math.random) {
+  if (state.phase === "idle" && now >= state.nextAttackAt) return { phase: "jab", startAt: now, kind: pickEnemyAttackKind(rng) };
+  const dur = typeof attackDurationMs === "function" ? attackDurationMs(state.kind || "leftJab") : attackDurationMs;
+  if (state.phase === "jab" && now - state.startAt >= dur) return createEnemyState(now, rng); // ここで初めて次のタイマーを作る
   return state;
 }
 
 let enemyState = null; // 2つのクリップ(idle・jab)が読み込まれてから作る
-let enemyJabClip = null; // assets/leftPunchUsa1.json(USAボクサーの左ジャブ。humanoid-gltf-exporterで作成)
-let enemyWindupClip = null; // assets/leftJabWindupUsa.json(左ジャブの予備動作。同じくhumanoid-gltf-exporterで作成)
 const enemyLog = []; // テスト用: ["Idle", "Next attack in 7.3s", "Left Jab", "Return to Idle", ...]
 function enemyDebug(message) {
   enemyLog.push({ t: performance.now(), message });
   console.log("[Enemy] " + message);
 }
 const clipEndMs = (clip) => clip.keyframes[clip.keyframes.length - 1].time * 1000;
-function enemyWindupMs() { return clipEndMs(enemyWindupClip); }
+const enemyWindupMs = (kind = "leftJab") => clipEndMs(ENEMY_ATTACKS[kind].windup);
 // 攻撃1回の長さ = 振りかぶり+タメ → パンチ → 戻り
-function enemyJabDurationMs() { return enemyWindupMs() + ENEMY_STRIKE_MS + (clipEndMs(enemyJabClip) - ENEMY_JAB_IMPACT_T * 1000); }
+function enemyJabDurationMs(kind = "leftJab") { const a = ENEMY_ATTACKS[kind]; return enemyWindupMs(kind) + ENEMY_STRIKE_MS + (clipEndMs(a.follow) - a.impactT * 1000); }
+const enemyClipsReady = () => Object.values(ENEMY_ATTACKS).every((a) => a.windup && a.follow);
 
-fetch("./assets/leftPunchUsa1.json")
-  .then((res) => res.json())
-  .then((json) => { enemyJabClip = json; })
-  .catch((err) => console.error("leftPunchUsa1.json の読み込みに失敗しました", err));
-fetch("./assets/leftJabWindupUsa.json")
-  .then((res) => res.json())
-  .then((json) => { enemyWindupClip = json; })
-  .catch((err) => console.error("leftJabWindupUsa.json の読み込みに失敗しました", err));
+for (const a of Object.values(ENEMY_ATTACKS)) {
+  fetch(a.windupUrl).then((res) => res.json()).then((json) => { a.windup = json; }).catch((err) => console.error(a.windupUrl + " の読み込みに失敗しました", err));
+  fetch(a.followUrl).then((res) => res.json()).then((json) => { a.follow = json; }).catch((err) => console.error(a.followUrl + " の読み込みに失敗しました", err));
+}
 // 敵のガード(プレイヤーのパンチをガードしたとき)のモーション。攻撃中でなければ、これを再生する
 let enemyGuardClip = null; // assets/guardUsa1.json
 const ENEMY_GUARD_BLEND_IN_MS = 40, ENEMY_GUARD_BLEND_OUT_MS = 100;
@@ -419,7 +424,7 @@ function enemyGuardClipWeight(nowMs) {
 }
 
 function stepEnemyState(now) {
-  if (!opponentIdleClip || !enemyJabClip || !enemyWindupClip) return;
+  if (!opponentIdleClip || !enemyClipsReady()) return;
   if (!enemyState) {
     enemyState = createEnemyState(now);
     enemyDebug("Idle");
@@ -427,11 +432,12 @@ function stepEnemyState(now) {
     return;
   }
   const prev = enemyState;
-  enemyState = advanceEnemy(prev, now, enemyJabDurationMs());
+  if (matchResult && prev.phase === "idle") return; // 勝敗が決まったら、新しい攻撃はしない
+  enemyState = advanceEnemy(prev, now, enemyJabDurationMs);
   if (enemyState === prev) return;
   if (enemyState.phase === "jab") {
-    enemyDebug("Left Jab (wind-up)");
-    startEnemyAttack();
+    enemyDebug(`${ENEMY_ATTACKS[enemyState.kind].label} (wind-up)`);
+    startEnemyAttack(enemyState.kind);
   } else {
     endEnemyAttack();
     enemyDebug("Return to Idle");
@@ -545,7 +551,7 @@ const HIT_STATE_MS = 400;
 // パンチが当たる時間は、パンチを打ち出してからの短い間だけ(拳が伸びきる前後の約0.09秒)。
 // 振りかぶりの間は当たらない(見てから避ける時間)。打ち出し(振りかぶりの終わり)からの経過時間で数える
 const ENEMY_JAB_HIT_AFTER_STRIKE_MS = { from: 40, to: 130 };
-const enemyHitWindow = () => ({ from: enemyWindupMs() + ENEMY_JAB_HIT_AFTER_STRIKE_MS.from, to: enemyWindupMs() + ENEMY_JAB_HIT_AFTER_STRIKE_MS.to });
+const enemyHitWindow = (kind = "leftJab") => ({ from: enemyWindupMs(kind) + ENEMY_JAB_HIT_AFTER_STRIKE_MS.from, to: enemyWindupMs(kind) + ENEMY_JAB_HIT_AFTER_STRIKE_MS.to });
 const FIST_RADIUS_M = 0.1;
 const FIST_FORWARD_OFFSET_M = 0.12; // 手首から拳の中心までの距離(前腕の向きへ)
 const PLAYER_HURTBOXES = [{ bone: "Head", radius: 0.18 }, { bone: "Chest", radius: 0.24 }];
@@ -564,14 +570,26 @@ function combatDebug(message) {
 }
 
 // HP表示(小さな文字だけ。UIのデザインは変えていない)
+// 体力ゲージ(数字は画面に出さない。裏では動いている): 左=プレイヤー、右=敵(右から減る)
+const ENEMY_MAX_HP = 100;
+const PUNCH_DAMAGE = { leftJab: 10, rightStraight: 15 }; // プレイヤーのパンチの威力(敵に当たったとき)
+let enemyHp = ENEMY_MAX_HP;
+let enemyKO = false;
+let matchResult = null; // null | "win" | "lose"(3カウント制などは後で)
 const hpDisplayEl = document.createElement("div");
 hpDisplayEl.id = "hpDisplay";
-hpDisplayEl.style.cssText = "position:fixed;left:10px;top:max(10px,env(safe-area-inset-top));z-index:5;font:600 14px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);pointer-events:none;transition:color 0.1s;";
+hpDisplayEl.style.cssText = "position:fixed;left:10px;right:56px;top:max(12px,env(safe-area-inset-top));z-index:5;display:flex;gap:10px;pointer-events:none;";
+const hpBarHtml = (id, right) => `<div style="flex:1;height:14px;border-radius:7px;background:rgba(0,0,0,0.45);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.5);display:flex;justify-content:${right ? "flex-end" : "flex-start"}"><div id="${id}" style="height:100%;width:100%;border-radius:7px;background:#3ddc6a"></div></div>`;
+hpDisplayEl.innerHTML = hpBarHtml("playerHpFill", false) + hpBarHtml("enemyHpFill", true);
 document.body.appendChild(hpDisplayEl);
+const playerHpFillEl = hpDisplayEl.querySelector("#playerHpFill"), enemyHpFillEl = hpDisplayEl.querySelector("#enemyHpFill");
+const hpColor = (r) => `hsl(${Math.round(8 + 112 * r)},75%,50%)`; // 緑→黄→赤
 function updateHpDisplay(now) {
-  hpDisplayEl.textContent = `HP ${Math.max(0, Math.round(playerHp))} / ${PLAYER_MAX_HP}`;
-  hpDisplayEl.style.color = now < playerHitUntil ? "#ff5a5a" : "#fff";
+  const pr = clamp01(playerHp / PLAYER_MAX_HP), er = clamp01(enemyHp / ENEMY_MAX_HP);
+  playerHpFillEl.style.width = `${pr * 100}%`; playerHpFillEl.style.background = now < playerHitUntil ? "#fff" : hpColor(pr);
+  enemyHpFillEl.style.width = `${er * 100}%`; enemyHpFillEl.style.background = now < enemyHitFlashUntil ? "#fff" : hpColor(er);
 }
+let enemyHitFlashUntil = 0;
 updateHpDisplay(0);
 const isPlayerHit = (now) => now < playerHitUntil;
 
@@ -583,13 +601,37 @@ function applyPlayerDamage(amount, now) {
   playerHitAt = now;
   sfx.play("playerHit");
   if (amount > 0) addFatigue(FATIGUE_ON_HIT, "hit", now);
-  if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); }
+  if (playerHp <= 0) { playerKO = true; combatDebug("Player HP is 0 (KO detected)"); finishMatch("lose"); }
   return true;
 }
+// 敵にダメージ。0以下になったらプレイヤーの勝ち
+function applyEnemyDamage(amount, now, label) {
+  if (enemyKO || matchResult) return false;
+  enemyHp = Math.max(0, enemyHp - amount);
+  enemyHitFlashUntil = now + 150;
+  combatDebug(`Player ${label}: HIT enemy (-${amount}) Enemy HP ${enemyHp}/${ENEMY_MAX_HP}`);
+  if (enemyHp <= 0) { enemyKO = true; combatDebug("Enemy HP is 0 (KO detected)"); finishMatch("win"); }
+  return true;
+}
+// 勝敗が決まった: 敵は新しい攻撃をしない/プレイヤーの操作は受け付けない。結果を表示(3カウント制などは後で)
+function finishMatch(result) {
+  if (matchResult) return;
+  matchResult = result;
+  combatDebug(`MATCH OVER: ${result === "win" ? "PLAYER WINS" : "PLAYER LOSES"}`);
+  slingCancel("match over");
+  matchOverlayEl.querySelector("#matchText").textContent = result === "win" ? "YOU WIN!" : "YOU LOSE";
+  matchOverlayEl.querySelector("#matchText").style.color = result === "win" ? "#ffe14a" : "#ff6a6a";
+  matchOverlayEl.style.display = "flex";
+}
+const matchOverlayEl = document.createElement("div");
+matchOverlayEl.style.cssText = "position:fixed;inset:0;z-index:8;display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:rgba(0,0,0,0.35);font-family:system-ui,sans-serif;";
+matchOverlayEl.innerHTML = '<div id="matchText" style="font-weight:900;font-size:48px;letter-spacing:3px;-webkit-text-stroke:2px #000;paint-order:stroke fill;text-shadow:0 4px 10px rgba(0,0,0,0.6)"></div><button id="matchRetry" style="font:700 18px system-ui,sans-serif;padding:10px 28px;border-radius:24px;border:none;background:#fff;color:#222">もう一度</button>';
+matchOverlayEl.querySelector("#matchRetry").addEventListener("click", () => location.reload());
+document.body.appendChild(matchOverlayEl);
 
 // 敵の拳(球)の中心: 左手首から、前腕→手首の向きへ少し先
-function enemyFistWorldPos() {
-  const hand = opponentBonesByName.LeftHand, fore = opponentBonesByName.LeftForearm;
+function enemyFistWorldPos(kind = "leftJab") {
+  const hand = opponentBonesByName[ENEMY_ATTACKS[kind].fist[0]], fore = opponentBonesByName[ENEMY_ATTACKS[kind].fist[1]];
   if (!hand || !fore) return null;
   const h = hand.getWorldPosition(new THREE.Vector3()), f = fore.getWorldPosition(new THREE.Vector3());
   return h.clone().add(h.clone().sub(f).normalize().multiplyScalar(FIST_FORWARD_OFFSET_M));
@@ -607,14 +649,16 @@ function testFistAgainstPlayer(fist) {
   return best;
 }
 
-function startEnemyAttack() { sfx.play("windup"); enemyAttackResolved = false; enemyAttackDodged = false; enemyStrikeLogged = false; }
+let enemyAttackKind = "leftJab";
+function startEnemyAttack(kind = "leftJab") { enemyAttackKind = kind; sfx.play("windup"); enemyAttackResolved = false; enemyAttackDodged = false; enemyStrikeLogged = false; }
 // 毎フレーム(ジャブ中だけ)呼ばれる。ジャブが伸びている間に拳が当たれば、1回だけダメージ
 function checkEnemyAttackHit(elapsedMs, now) {
-  const win = enemyHitWindow();
+  const kind = enemyAttackKind, atk = ENEMY_ATTACKS[kind];
+  const win = enemyHitWindow(kind);
   // 当たり判定の時間が終わった時点で、かわし成功が確定していたら、すぐに「ノーガード」にする(攻撃が終わるのを待たない)
   if (!enemyAttackResolved && elapsedMs > win.to && enemyAttackDodged) {
     enemyAttackResolved = true;
-    combatDebug(`Enemy Left Jab: MISS (dodged) (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    combatDebug(`Enemy ${atk.label}: MISS (dodged) (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
     startEnemyOpen(now);
     return;
   }
@@ -622,13 +666,13 @@ function checkEnemyAttackHit(elapsedMs, now) {
   // 回避(左右のスワイプ)の動作中は、ダメージを受けない(かわし成功)。回避が早すぎて終わってしまう/
   // 遅すぎて間に合わない場合は、このあとの判定で当たる
   if (dodgeState.phase) { if (!enemyAttackDodged) sfx.play("dodge"); enemyAttackDodged = true; return; }
-  const fist = enemyFistWorldPos();
+  const fist = enemyFistWorldPos(kind);
   if (!fist) return;
   const r = testFistAgainstPlayer(fist);
   if (!r.hit) return;
   enemyAttackResolved = true;
-  if (applyPlayerDamage(ENEMY_JAB_DAMAGE, now)) {
-    combatDebug(`Enemy Left Jab: HIT ${r.box} (-${ENEMY_JAB_DAMAGE}) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+  if (applyPlayerDamage(atk.damage, now)) {
+    combatDebug(`Enemy ${atk.label}: HIT ${r.box} (-${atk.damage}) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
     updateHpDisplay(now);
   }
 }
@@ -636,7 +680,7 @@ function checkEnemyAttackHit(elapsedMs, now) {
 function endEnemyAttack() {
   if (!enemyAttackResolved) {
     enemyAttackResolved = true;
-    combatDebug(`Enemy Left Jab: MISS${enemyAttackDodged ? " (dodged)" : ""} (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
+    combatDebug(`Enemy ${ENEMY_ATTACKS[enemyAttackKind].label}: MISS${enemyAttackDodged ? " (dodged)" : ""} (no damage) Player HP ${playerHp}/${PLAYER_MAX_HP}`);
     if (enemyAttackDodged) startEnemyOpen(performance.now()); // かわし成功 → 敵はノーガード
   }
 }
@@ -651,23 +695,24 @@ function updateOpponent(nowMs) {
   const keys = opponentIdleClip.keyframes;
   const duration = keys[keys.length - 1].time;
   const sample = sampleClip(opponentIdleClip, (nowMs / 1000) % duration);
-  if (enemyState && enemyState.phase === "jab" && enemyJabClip && enemyWindupClip) {
+  if (enemyState && enemyState.phase === "jab" && enemyClipsReady()) {
+    const kind = enemyState.kind || "leftJab", A = ENEMY_ATTACKS[kind];
     const elapsedMs = nowMs - enemyState.startAt;
-    const totalMs = enemyJabDurationMs(), windMs = enemyWindupMs();
+    const totalMs = enemyJabDurationMs(kind), windMs = enemyWindupMs(kind);
     const w = clamp01(Math.min(elapsedMs / ENEMY_BLEND_IN_MS, (totalMs - elapsedMs) / ENEMY_BLEND_OUT_MS));
     let atk;
     if (elapsedMs < windMs) {
-      atk = sampleClip(enemyWindupClip, elapsedMs / 1000); // 1) 振りかぶり+タメ
+      atk = sampleClip(A.windup, elapsedMs / 1000); // 1) 振りかぶり+タメ
     } else if (elapsedMs < windMs + ENEMY_STRIKE_MS) {
-      // 2) パンチ: 振りかぶりの最後の姿勢から、ジャブのインパクトの姿勢へ一気に(速く打ち出す)
+      // 2) パンチ: 振りかぶりの最後の姿勢から、インパクトの姿勢へ一気に(速く打ち出す)
       if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); sfx.play("strike"); }
-      const from = sampleClip(enemyWindupClip, windMs / 1000), to = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T);
+      const from = sampleClip(A.windup, windMs / 1000), to = sampleClip(A.follow, A.impactT);
       const t = easeOutCubic((elapsedMs - windMs) / ENEMY_STRIKE_MS);
       atk = { pose: {}, modelPosition: from.modelPosition.map((v, i) => v + (to.modelPosition[i] - v) * t) };
       for (const name of Object.keys(to.pose)) atk.pose[name] = from.pose[name] ? from.pose[name].clone().slerp(to.pose[name], t) : to.pose[name];
     } else {
       if (!enemyStrikeLogged) { enemyStrikeLogged = true; enemyDebug("Strike"); sfx.play("strike"); }
-      atk = sampleClip(enemyJabClip, ENEMY_JAB_IMPACT_T + (elapsedMs - windMs - ENEMY_STRIKE_MS) / 1000); // 3) 戻り
+      atk = sampleClip(A.follow, A.impactT + (elapsedMs - windMs - ENEMY_STRIKE_MS) / 1000); // 3) 戻り
     }
     for (const name of Object.keys(atk.pose)) {
       sample.pose[name] = sample.pose[name] ? sample.pose[name].clone().slerp(atk.pose[name], w) : atk.pose[name];
@@ -866,6 +911,7 @@ function punchAtScreen(clientX, clientY) {
 function tryPunch(kind, now) {
   const p = PUNCHES[kind];
   if (!p.clip || !p.range) return false;
+  if (matchResult) return false;
   if (fatigue.active) { punchStats.ignored++; playerDebug(`${p.label} input ignored (fatigued)`); return false; }
   if (punchState.phase || dodgeState.phase) {
     punchStats.ignored++;
@@ -943,7 +989,7 @@ function slingTakebackSec() { return PUNCHES[sling.kind].takebackT || 0.15; }
 function slingStart(y, pointerId = null, kind = "leftJab") {
   const p = PUNCHES[kind];
   const chain = canChainPunch(performance.now());
-  if (fatigue.active) return false; // 疲労状態は、かわし以外何もできない
+  if (fatigue.active || matchResult) return false; // 疲労状態は、かわし以外何もできない(勝敗が決まったあとも操作不可)
   if (!p.clip || !p.range || (punchState.phase && !chain) || dodgeState.phase || sling.active) return false;
   if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
   Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq, t0: performance.now() });
@@ -1125,8 +1171,8 @@ function onPointerUp(evt) {
   gestureStart = null;
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
-  // パンチ中は、回避の入力を受け付けない
-  if (punchState.phase) return;
+  // パンチ中は、回避の入力を受け付けない(勝敗が決まったあとも)
+  if (punchState.phase || matchResult) return;
   dodgeState = onSwipe(dodgeState, direction, now, computeDodgeX(dodgeState, now));
 }
 canvas.addEventListener("pointerdown", onPointerDown);
@@ -1271,7 +1317,7 @@ function applyEnemyOpen(now) {
 }
 const chanceEl = document.createElement("div");
 chanceEl.textContent = "チャンス!";
-chanceEl.style.cssText = "position:fixed;left:50%;top:max(56px,calc(env(safe-area-inset-top) + 46px));transform:translateX(-50%);z-index:5;display:none;pointer-events:none;font:900 26px system-ui,sans-serif;color:#ffe14a;-webkit-text-stroke:2px #b00020;paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,0.6);letter-spacing:2px;";
+chanceEl.style.cssText = "position:fixed;left:50%;top:max(78px,calc(env(safe-area-inset-top) + 68px));transform:translateX(-50%);z-index:5;display:none;pointer-events:none;font:900 26px system-ui,sans-serif;color:#ffe14a;-webkit-text-stroke:2px #b00020;paint-order:stroke fill;text-shadow:0 2px 6px rgba(0,0,0,0.6);letter-spacing:2px;";
 document.body.appendChild(chanceEl);
 // 連打: ノーガード中で、直前のパンチの判定が出たあと少したったら、戻りをキャンセルして次のスリングを始められる
 function canChainPunch(now) {
@@ -1285,8 +1331,8 @@ function canChainPunch(now) {
 //   何もできない(パンチ入力は無視)。ゲージは疲労状態の間に満タンから0へ減っていき、0に戻ると解除
 // ・疲労状態の間: 敵の攻撃頻度は倍(待機時間が半分)。かわしに成功しても敵のガードは下がらない
 // ・見た目: ガードがだらんと下まで下がり、体が赤く点滅する
-const FATIGUE_MAX = 100, FATIGUE_ON_GUARDED = 20, FATIGUE_ON_HIT = 20, FATIGUE_MS = 4000;
-const FATIGUE_ENEMY_WAIT_SCALE = 0.5;
+const FATIGUE_MAX = 100, FATIGUE_ON_GUARDED = 20, FATIGUE_ON_HIT = 20, FATIGUE_MS = 4800; // 回復(疲労状態の長さ)は4秒の1.2倍
+const FATIGUE_ENEMY_WAIT_SCALE = 1 / 3; // 通常の3倍の頻度(以前は2倍=0.5。その1.5倍)
 const FATIGUE_LOOK_IN_MS = 150, FATIGUE_LOOK_OUT_MS = 250;
 // 疲労の姿勢(X軸回転): 腕がだらんと下がり、背中が丸まって頭が下がる
 const FATIGUE_BONES = { LeftUpperArm: 0.6, RightUpperArm: 0.6, LeftForearm: 0.75, RightForearm: 0.75, Spine: 0.18, Neck: 0.15, Head: 0.2 };
@@ -1346,7 +1392,7 @@ function applyFatigueLook(now) {
 }
 const fatigueHud = document.createElement("div");
 fatigueHud.id = "fatigueHud";
-fatigueHud.style.cssText = "position:fixed;left:10px;top:max(34px,calc(env(safe-area-inset-top) + 24px));z-index:5;pointer-events:none;font:700 11px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
+fatigueHud.style.cssText = "position:fixed;left:10px;top:max(34px,calc(env(safe-area-inset-top) + 34px));z-index:5;pointer-events:none;font:700 11px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.7);";
 fatigueHud.innerHTML = '<div id="fatigueLabel">FATIGUE</div><div style="width:130px;height:9px;border-radius:5px;background:rgba(0,0,0,0.4);overflow:hidden;margin-top:2px"><div id="fatigueFill" style="height:100%;width:0%;background:#ffb020;border-radius:5px"></div></div>';
 document.body.appendChild(fatigueHud);
 const fatigueFillEl = fatigueHud.querySelector("#fatigueFill"), fatigueLabelEl = fatigueHud.querySelector("#fatigueLabel");
@@ -1383,6 +1429,7 @@ function resolvePlayerPunch(now) {
   enemyReact = { kind: hit ? "hit" : "guard", at: now, side: punchState.phase === "leftJab" ? 1 : -1 };
   playerDebug(`${p.label}: ${hit ? "HIT (enemy staggers)" : "GUARDED"}${guaranteed ? " [OPEN: guaranteed]" : ""}`);
   sfx.play(hit ? "enemyHit" : "guard");
+  if (hit) applyEnemyDamage(PUNCH_DAMAGE[punchState.phase], now, p.label);
   if (!hit) addFatigue(FATIGUE_ON_GUARDED, "guarded", now); // 攻撃をガードされると疲労がたまる
   if (hit && enemyState && enemyState.phase === "jab") { enemyAttackResolved = true; enemyState = createEnemyState(now); enemyDebug("Attack interrupted by counter"); }
 }
@@ -1490,8 +1537,8 @@ window.__enemy = {
   pickEnemyWaitMs,
   getState: () => enemyState,
   getLog: () => enemyLog.slice(),
-  jabDurationMs: () => (enemyJabClip && enemyWindupClip ? enemyJabDurationMs() : null),
-  windupMs: () => (enemyWindupClip ? enemyWindupMs() : null),
+  jabDurationMs: (kind = "leftJab") => (enemyClipsReady() ? enemyJabDurationMs(kind) : null),
+  windupMs: (kind = "leftJab") => (enemyClipsReady() ? enemyWindupMs(kind) : null),
   WAIT_MIN_MS: ENEMY_WAIT_MIN_MS,
   WAIT_MAX_MS: ENEMY_WAIT_MAX_MS,
 };
@@ -1537,12 +1584,15 @@ window.__combat = {
   isHit: () => isPlayerHit(performance.now()),
   recoilAmount: () => hitRecoilAmount(performance.now()),
   getLog: () => combatLog.slice(),
+  getEnemyHp: () => enemyHp,
+  setEnemyHp: (v) => { enemyHp = v; enemyKO = v <= 0; },
+  getMatchResult: () => matchResult,
   setHp: (v) => { playerHp = v; playerKO = v <= 0; updateHpDisplay(performance.now()); },
   applyDamage: (n) => applyPlayerDamage(n, performance.now()),
   // 敵の左ジャブを今すぐ始める(ランダムな待機を待たずに、当たり判定を試すため)
-  forceEnemyJab: () => { if (!enemyState || enemyState.phase === "jab") return false; enemyState = { phase: "jab", startAt: performance.now() }; enemyDebug("Left Jab (forced)"); startEnemyAttack(); return true; },
+  forceEnemyJab: (kind = "leftJab") => { if (!enemyState || enemyState.phase === "jab") return false; enemyState = { phase: "jab", startAt: performance.now(), kind }; enemyDebug(`${ENEMY_ATTACKS[kind].label} (forced)`); startEnemyAttack(kind); return true; },
   // テスト用: 敵の次のランダムな攻撃を、指定した時間だけ先へ延ばす(待機中のみ)
   postponeEnemy: (ms) => { if (enemyState && enemyState.phase === null || enemyState && enemyState.phase === "idle") enemyState = { ...enemyState, nextAttackAt: performance.now() + ms }; },
-  enemyFistWorldPos: () => { const f = enemyFistWorldPos(); return f ? f.toArray() : null; },
-  testFistAgainstPlayer: () => { const f = enemyFistWorldPos(); return f ? testFistAgainstPlayer(f) : null; },
+  enemyFistWorldPos: (kind) => { const f = enemyFistWorldPos(kind); return f ? f.toArray() : null; },
+  testFistAgainstPlayer: (kind) => { const f = enemyFistWorldPos(kind); return f ? testFistAgainstPlayer(f) : null; },
 };
