@@ -11,15 +11,17 @@ import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 // ============================================================
 
 // ---------- 設定 ----------
-const STAGE_Z = 1.0;          // 奥行き(Z軸)の移動範囲 (-1.0〜+1.0 m。+Zが手前)
-const STAGE_HALF = 2.6;       // ステージの端 (-2.6〜+2.6 m)。カメラは2人の中間を追う
-const MAX_GAP = 2.4;          // 2人がこれ以上離れない(両方が画面に映るように。鉄拳と同じ)
+const RING_R = 2.5;           // リング(円形の台)の半径(m)。中心はXZの原点
+const RING_OUT_MARGIN = 0.1;  // 足元(体の中心)がリングの縁からこれだけ外へ出たら「リングアウト」
+const WORLD_LIM = 7.5;        // 場外へ落ちる前に、これ以上は遠くへ行けない(安全装置)
 const BODY_GAP = 0.7;         // 2人の体が重ならない最小距離(m)
 const WALK_SPEED = 1.7;       // 最大の移動速度 (m/s)
 const BACK_SPEED_SCALE = 0.85; // 後ろへ下がるときは少し遅い
 const SWIPE_DEADZONE_PX = 6;  // これ以下の動きは無視
 const SWIPE_FULL_PX = 55;     // これだけ動かすと最大速度
-const VISIBLE_WIDTH = 3.5;    // 画面に映すステージの幅(m)。縦画面でもこの幅が収まる距離にカメラを置く
+const VISIBLE_WIDTH_MIN = 3.5; // 画面に映す幅(m)の最小。2人が近いときの、寄った画面
+const VISIBLE_WIDTH_MAX = 10;  // 同じく最大(離れたときに、ここまで引く)
+const CAM_MARGIN = 2.4;        // 2人の間隔に足す余白(m)。映す幅 = 間隔 + 余白
 const VFOV = 40;
 const ATTACK_SPEED = 1.3;     // 攻撃モーションの再生速度(1.0=ファイルのまま。大きいほどキビキビ)
 const ATTACK_BLEND_IN_MS = 60, ATTACK_BLEND_OUT_MS = 150; // 構えとの、なじませ
@@ -40,15 +42,18 @@ const camera = new THREE.PerspectiveCamera(VFOV, 1, 0.1, 100);
 const CAM_LOOK = new THREE.Vector3(0, 0.85, 0);
 let camDist = 8;
 // カメラ: 真横から。x は2人の中間を追う
-function placeCamera(x) { CAM_LOOK.x = x; camera.position.set(x, 1.45, camDist); camera.lookAt(CAM_LOOK); }
+let aspectNow = 0.46, camWidth = VISIBLE_WIDTH_MIN;
+// 映したい幅(m)が、縦画面でも横画面でも収まる距離にカメラを置く(2人が離れるほど、遠く・広く映す)
+function placeCamera(x, width = camWidth) {
+  const t = Math.tan(THREE.MathUtils.degToRad(VFOV / 2));
+  camDist = Math.max(width / 2 / (t * aspectNow), 1.7 / t);
+  CAM_LOOK.x = x; camera.position.set(x, 1.45, camDist); camera.lookAt(CAM_LOOK);
+}
 function resize() {
   const w = window.innerWidth, h = window.innerHeight, aspect = w / h;
   renderer.setSize(w, h);
   camera.aspect = aspect; camera.updateProjectionMatrix();
-  // 幅 VISIBLE_WIDTH が収まる距離(縦画面では遠く、横画面では高さ3.4mが収まる距離)
-  const t = Math.tan(THREE.MathUtils.degToRad(VFOV / 2));
-  const dist = Math.max(VISIBLE_WIDTH / 2 / (t * aspect), 1.7 / t);
-  camDist = dist; placeCamera(CAM_LOOK.x);
+  aspectNow = aspect; placeCamera(CAM_LOOK.x);
 }
 window.addEventListener("resize", resize);
 if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
@@ -61,39 +66,45 @@ function canvasTex(w, h, draw, rx = 1, ry = 1) {
 }
 scene.background = new THREE.Color(0x0b0d18);
 scene.fog = new THREE.Fog(0x0b0d18, 14, 40);
-// 床: 暗い石畳 + 中央の円と線(格闘ステージ風)
-const floorTex = canvasTex(1024, 512, (ctx, w, h) => {
+// リング(円形の台): 上面は暗い石畳。縁の外は深い闇(落ちたらリングアウト)
+const topTex = canvasTex(1024, 1024, (ctx, w, h) => {
   ctx.fillStyle = "#2c2d36"; ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = "rgba(0,0,0,0.45)"; ctx.lineWidth = 2;
   for (let x = 0; x <= w; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
   for (let y = 0; y <= h; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-  for (let i = 0; i < 400; i++) { ctx.fillStyle = `rgba(${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},255,${Math.random() * 0.04})`; ctx.fillRect(Math.random() * w, Math.random() * h, 6 + Math.random() * 30, 6 + Math.random() * 30); }
-}, 10, 6);
-// 中央の円と線(格闘ステージの目印)
-const ringTex = canvasTex(512, 512, (ctx, w, h) => { ctx.strokeStyle = "rgba(255,200,90,0.8)"; ctx.lineWidth = 8; ctx.beginPath(); ctx.arc(w / 2, h / 2, 240, 0, 7); ctx.stroke(); ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(w / 2, h / 2 - 240); ctx.lineTo(w / 2, h / 2 + 240); ctx.stroke(); });
-const ring = new THREE.Mesh(new THREE.PlaneGeometry(5.2, 5.2), new THREE.MeshBasicMaterial({ map: ringTex, transparent: true }));
-ring.rotation.x = -Math.PI / 2; ring.position.set(0, 0.012, 0); scene.add(ring);
-const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 22), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.75, metalness: 0.1 }));
-floor.rotation.x = -Math.PI / 2; floor.position.z = 4.0; floor.receiveShadow = true; scene.add(floor);
-// 奥の壁: 暗い赤の布と金のライン
+  for (let i = 0; i < 500; i++) { ctx.fillStyle = `rgba(${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},255,${Math.random() * 0.04})`; ctx.fillRect(Math.random() * w, Math.random() * h, 6 + Math.random() * 30, 6 + Math.random() * 30); }
+}, 1, 1);
+const platform = new THREE.Mesh(new THREE.CylinderGeometry(RING_R + 0.12, RING_R + 0.12, 0.9, 72), [
+  new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.55, metalness: 0.4 }), // 側面
+  new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.75, metalness: 0.1 }),    // 上面
+  new THREE.MeshStandardMaterial({ color: 0x111116 }),                                 // 底
+]);
+platform.position.y = -0.45; platform.receiveShadow = true; scene.add(platform);
+// 縁のライン(これより外へ出るとリングアウト)と、中央の線
+const rimLine = new THREE.Mesh(new THREE.RingGeometry(RING_R - 0.07, RING_R + 0.04, 96), new THREE.MeshBasicMaterial({ color: 0xffc860 }));
+rimLine.rotation.x = -Math.PI / 2; rimLine.position.y = 0.012; scene.add(rimLine);
+const centerLine = new THREE.Mesh(new THREE.PlaneGeometry(0.05, RING_R * 2 - 0.2), new THREE.MeshBasicMaterial({ color: 0xffc860, transparent: true, opacity: 0.55 }));
+centerLine.rotation.x = -Math.PI / 2; centerLine.position.y = 0.011; scene.add(centerLine);
+// 下の闇の床(落ちたあとの地面)
+const pit = new THREE.Mesh(new THREE.PlaneGeometry(80, 60), new THREE.MeshStandardMaterial({ color: 0x141a30, emissive: 0x0a1230, roughness: 1 }));
+pit.rotation.x = -Math.PI / 2; pit.position.set(0, -4, 0); scene.add(pit);
+// 奥の壁: 暗い赤の布と金のライン(下まで届く)
 const wallTex = canvasTex(512, 512, (ctx, w, h) => {
   const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, "#1a0f18"); g.addColorStop(0.55, "#3a1520"); g.addColorStop(1, "#1d1018");
   ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
   ctx.strokeStyle = "rgba(255,190,80,0.18)"; ctx.lineWidth = 2;
   for (let x = 0; x < w; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
   ctx.fillStyle = "rgba(255,190,80,0.35)"; ctx.fillRect(0, h * 0.78, w, 4);
-}, 6, 1);
-const wall = new THREE.Mesh(new THREE.PlaneGeometry(40, 14), new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.9 }));
-wall.position.set(0, 7, -4.2); wall.receiveShadow = true; scene.add(wall);
-// 柱(装飾。当たり判定なし。ステージの外側)
+}, 8, 1);
+const wall = new THREE.Mesh(new THREE.PlaneGeometry(60, 20), new THREE.MeshStandardMaterial({ map: wallTex, roughness: 0.9 }));
+wall.position.set(0, 4, -5.2); wall.receiveShadow = true; scene.add(wall);
+// 柱(装飾。当たり判定なし。リングの外側)
 const pillarMat = new THREE.MeshStandardMaterial({ color: 0x3b2a2a, roughness: 0.8 });
-for (const x of [-3.6, 3.6, -8, 8]) {
-  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 8, 20), pillarMat); p.position.set(x, 4, -3.6); p.castShadow = true; scene.add(p);
-  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffb860 })); lamp.position.set(x, 2.6, -3.2); scene.add(lamp);
-  if (Math.abs(x) < 5) { const l = new THREE.PointLight(0xffa850, 9, 7, 1.8); l.position.set(x * 0.9, 2.6, -2.6); scene.add(l); }
+for (const x of [-4.2, 4.2, -9, 9]) {
+  const p = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 14, 20), pillarMat); p.position.set(x, 1, -4.4); p.castShadow = true; scene.add(p);
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffb860 })); lamp.position.set(x, 2.6, -4.0); scene.add(lamp);
+  if (Math.abs(x) < 6) { const l = new THREE.PointLight(0xffa850, 9, 7, 1.8); l.position.set(x * 0.9, 2.6, -3.4); scene.add(l); }
 }
-// ステージの端のマーク(移動できる範囲)
-for (const sx of [-1, 1]) { const m = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.02, 2.2), new THREE.MeshBasicMaterial({ color: 0xffc860 })); m.position.set(sx * (STAGE_HALF + 0.35), 0.011, -0.2); scene.add(m); }
 // ライト
 scene.add(new THREE.HemisphereLight(0x8090c8, 0x1a1418, 0.7));
 const key = new THREE.DirectionalLight(0xfff0dc, 2.2);
@@ -167,7 +178,7 @@ function sampleOnce(clip, t) {
 let attack = null; // { kind, startAt }
 const attackLog = [];
 function startAttack(kind, now) {
-  if (attack) return false; // 攻撃中は受け付けない
+  if (attack || match.over) return false; // 攻撃中・試合終了後は受け付けない
   attack = { kind, startAt: now }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
   return true;
 }
@@ -204,24 +215,54 @@ const readDir = () => {
 // ---------- 毎フレーム ----------
 const state = { phase: 0, w: 0, vx: 0, vz: 0, lastX: null, lastZ: null };
 const clock = new THREE.Clock();
+// ---------- リングアウト ----------
+const match = { over: false, loser: null, fall: null };
+const resultEl = document.createElement("div");
+resultEl.style.cssText = "position:fixed;inset:0;z-index:8;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(0,0,0,0.35);font-family:system-ui,sans-serif;text-align:center;";
+resultEl.innerHTML = '<div id="roTitle" style="font-weight:900;font-size:44px;letter-spacing:3px;color:#fff;-webkit-text-stroke:2px #000;paint-order:stroke fill;text-shadow:0 4px 10px rgba(0,0,0,0.6)">RING OUT!</div><div id="roResult" style="font-weight:900;font-size:34px;letter-spacing:2px;-webkit-text-stroke:2px #000;paint-order:stroke fill"></div><button id="roRetry" style="margin-top:10px;font:700 18px system-ui,sans-serif;padding:10px 28px;border-radius:24px;border:none;background:#fff;color:#222">もう一度</button>';
+resultEl.querySelector("#roRetry").addEventListener("click", () => location.reload());
+document.body.appendChild(resultEl);
+function ringOut(who, now) {
+  if (match.over) return;
+  const f = who === "player" ? player : cpu, r = Math.hypot(f.x, f.z) || 1;
+  match.over = true; match.loser = who;
+  match.fall = { who, x: f.x, z: f.z, y: 0, vx: (f.x / r) * 1.4, vz: (f.z / r) * 1.4, vy: 1.2, tx: (Math.random() - 0.5) * 3, tz: 2.5 + Math.random() };
+  attack = null; input.x = input.z = 0;
+  console.log("[Match] RING OUT: " + who + " loses");
+  resultEl.querySelector("#roResult").textContent = who === "player" ? "YOU LOSE" : "YOU WIN!";
+  resultEl.querySelector("#roResult").style.color = who === "player" ? "#ff6a6a" : "#ffe14a";
+  setTimeout(() => { resultEl.style.display = "flex"; }, 1400);
+}
+// 毎フレーム: 場外に出たらリングアウト。負けた側は縁から外へ放り出されて落ちる(重力+回転)
+function updateRingOut(dt, now) {
+  if (!match.over) {
+    if (Math.hypot(player.x, player.z) > RING_R + RING_OUT_MARGIN) ringOut("player", now);
+    else if (Math.hypot(cpu.x, cpu.z) > RING_R + RING_OUT_MARGIN) ringOut("cpu", now);
+    return;
+  }
+  const F = match.fall, f = F.who === "player" ? player : cpu;
+  if (F.y < -6) return; // 落ちきったら止める
+  F.vy -= 14 * dt; F.y += F.vy * dt; F.x += F.vx * dt; F.z += F.vz * dt;
+  f.x = F.x; f.z = F.z;
+  f.root.position.set(F.x, F.y, F.z);
+  f.root.rotation.x += F.tx * dt; f.root.rotation.z += F.tz * dt; // 倒れながら落ちる
+}
 const angleDiff = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 function update(dt, now) {
   // CPUのほうを向く(向いている方向 f)。移動の前進/後退は、この向きが基準
   let fx = cpu.x - player.x, fz = cpu.z - player.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
   // 移動(X・Z軸)。攻撃中は移動できない
-  const mv = attack ? { x: 0, z: 0 } : readDir();
+  const mv = attack || match.over ? { x: 0, z: 0 } : readDir();
   const mag = Math.min(1, Math.hypot(mv.x, mv.z));
   const back = mv.x * fx + mv.z * fz < -0.3 ? BACK_SPEED_SCALE : 1; // CPUから離れる向きは、少し遅い
   const dist = mag * WALK_SPEED * back * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
   const ux = mag > 0 ? mv.x / Math.hypot(mv.x, mv.z) : 0, uz = mag > 0 ? mv.z / Math.hypot(mv.x, mv.z) : 0;
   for (let i = 0; i < steps; i++) {
     player.x += (ux * dist) / steps; player.z += (uz * dist) / steps;
-    player.x = Math.max(-STAGE_HALF, Math.min(STAGE_HALF, player.x)); player.z = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z));
-    // CPUに食い込まない(円どうし) / 離れすぎない(画面から出ない)
+    // CPUに食い込まない(円どうし)。リングの外へも出られる(出たらリングアウト)が、遠くへは行きすぎない
     let dx = player.x - cpu.x, dz = player.z - cpu.z, d = Math.hypot(dx, dz) || 1e-6;
     if (d < BODY_GAP) { player.x = cpu.x + (dx / d) * BODY_GAP; player.z = cpu.z + (dz / d) * BODY_GAP; }
-    else if (d > MAX_GAP) { player.x = cpu.x + (dx / d) * MAX_GAP; player.z = cpu.z + (dz / d) * MAX_GAP; }
-    player.z = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z));
+    const pr = Math.hypot(player.x, player.z); if (pr > WORLD_LIM) { player.x *= WORLD_LIM / pr; player.z *= WORLD_LIM / pr; }
   }
   // 実際に動けた速さ(壁・CPUに当たって止まっているときは歩きアニメも止める)
   const mx = (player.x - (state.lastX ?? player.x)) / Math.max(dt, 1e-4), mz = (player.z - (state.lastZ ?? player.z)) / Math.max(dt, 1e-4);
@@ -235,7 +276,7 @@ function update(dt, now) {
   // 体の向き: お互いを向く(なめらかに)
   player.yaw += angleDiff(player.yaw, Math.atan2(fx, fz)) * Math.min(1, 12 * dt);
   cpu.yaw += angleDiff(cpu.yaw, Math.atan2(-fx, -fz)) * Math.min(1, 12 * dt);
-  player.root.rotation.y = player.yaw; cpu.root.rotation.y = cpu.yaw;
+  if (!match.over) { player.root.rotation.y = player.yaw; cpu.root.rotation.y = cpu.yaw; }
 
   // プレイヤーのポーズ: 構え(アイドル) ⇔ 歩き
   const idleP = sampleClip(idleJson, idleDur, now / 1000), walkP = sampleClip(walkJson, walkDur, state.phase * walkDur);
@@ -257,16 +298,20 @@ function update(dt, now) {
       player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
     }
   }
-  let rx = Math.max(-STAGE_HALF, Math.min(STAGE_HALF, player.x + fx * step)), rz = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z + fz * step));
+  let rx = player.x + fx * step, rz = player.z + fz * step;
   { const dx = rx - cpu.x, dz = rz - cpu.z, d = Math.hypot(dx, dz) || 1e-6; if (d < 0.55) { rx = cpu.x + (dx / d) * 0.55; rz = cpu.z + (dz / d) * 0.55; } } // 踏み込みでも、CPUに食い込まない
   player.root.position.x = rx; player.root.position.z = rz;
   // CPU: 構えのアイドルのループ
   const cpuP = sampleClip(idleJson, idleDur, now / 1000 + 0.7);
   for (const n of Object.keys(cpuP.pose)) { const b = cpu.bones[n]; if (b) b.quaternion.copy(cpuP.pose[n]); }
   cpu.root.position.set(cpu.x, cpuP.y, cpu.z);
-  // カメラは2人の中間(X)を、なめらかに追う(ステージの外側は映さない)
-  const mid = (player.x + cpu.x) / 2, lim = STAGE_HALF - 0.4;
-  placeCamera(CAM_LOOK.x + (Math.max(-lim, Math.min(lim, mid)) - CAM_LOOK.x) * Math.min(1, 6 * dt));
+  // リングアウト: 判定 → 負けた側が場外へ落ちる
+  updateRingOut(dt, now);
+  // カメラ: 2人の中間(X)を追い、2人が離れるほど自然に引く(寄る/引くはなめらかに)
+  const mid = (player.x + cpu.x) / 2, sep = Math.hypot(player.x - cpu.x, (player.z - cpu.z) * 0.5);
+  const wantW = Math.max(VISIBLE_WIDTH_MIN, Math.min(VISIBLE_WIDTH_MAX, sep + CAM_MARGIN));
+  camWidth += (wantW - camWidth) * Math.min(1, 3.5 * dt);
+  placeCamera(CAM_LOOK.x + (Math.max(-RING_R, Math.min(RING_R, mid)) - CAM_LOOK.x) * Math.min(1, 6 * dt), camWidth);
 }
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
@@ -281,8 +326,8 @@ requestAnimationFrame(frame);
 // テスト用
 window.__fight = {
   startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
-  player, cpu, STAGE_HALF, BODY_GAP, MAX_GAP, camera,
+  player, cpu, RING_R, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
-  getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, dir: readDir(), yaw: player.yaw }),
+  getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, dir: readDir(), yaw: player.yaw, camWidth, camDist, camX: CAM_LOOK.x, over: match.over, loser: match.loser, fy: match.fall ? match.fall.y : 0 }),
 };
