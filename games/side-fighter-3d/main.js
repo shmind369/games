@@ -4,13 +4,14 @@ import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 // ============================================================
 // Side Fighter 3D — 鉄拳のようなサイドビュー視点の3D格闘ゲーム(第1段階)
 //  ・左: 中華娘(プレイヤー) / 右: USAボクサー(CPU) が向かい合って立つ
-//  ・スマホ縦画面。画面の左右スワイプ(ドラッグ)で、プレイヤーが横(X軸)へ移動する
+//  ・スマホ縦画面。画面の左右スワイプ(ドラッグ)で横(X軸)、上下スワイプで奥(上)・手前(下)(Z軸)へ移動する
 //  ・画面のタップで攻撃: 画面の左半分をタップ=左ジャブ(踏み込み)、右半分をタップ=右ローキック
 //  ・まだダメージ・CPUの動きはない(CPUは構えのアイドルのみ)
 // 座標: X軸が左右(右が+)。カメラは+Z側から、ステージを真横に見る。Y軸が上
 // ============================================================
 
 // ---------- 設定 ----------
+const STAGE_Z = 1.0;          // 奥行き(Z軸)の移動範囲 (-1.0〜+1.0 m。+Zが手前)
 const STAGE_HALF = 2.6;       // ステージの端 (-2.6〜+2.6 m)。カメラは2人の中間を追う
 const MAX_GAP = 2.4;          // 2人がこれ以上離れない(両方が画面に映るように。鉄拳と同じ)
 const BODY_GAP = 0.7;         // 2人の体が重ならない最小距離(m)
@@ -116,13 +117,14 @@ function makeFighter(gltf, facing) {
   const model = gltf.scene; root.add(model);
   const bones = {};
   model.traverse((o) => { if (o.isBone) { bones[o.name] = o; o.quaternion.identity(); } if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-  root.rotation.y = facing > 0 ? Math.PI / 2 : -Math.PI / 2; // モデルは+Zを向いている。+X(右)を向く=+90°
+  const yaw = facing > 0 ? Math.PI / 2 : -Math.PI / 2; // モデルは+Zを向いている。+X(右)を向く=+90°
+  root.rotation.y = yaw;
   scene.add(root);
-  return { root, bones, facing };
+  return { root, bones, facing, yaw, z: 0 };
 }
 const player = makeFighter(chinaGltf, +1); // 左で、右(CPU)を向く
 const cpu = makeFighter(usaGltf, -1);      // 右で、左(プレイヤー)を向く
-player.x = -0.8; cpu.x = 0.8;
+player.x = -0.8; cpu.x = 0.8; player.z = 0; cpu.z = 0;
 player.root.position.set(player.x, 0, 0); cpu.root.position.set(cpu.x, 0, 0);
 
 const walkDur = walkJson.keyframes[walkJson.keyframes.length - 1].time || 1, walkStride = walkJson.strideLengthPerCycle || 0.9;
@@ -172,50 +174,68 @@ function startAttack(kind, now) {
 
 // ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
 // 押した位置から横へ動かした量で、移動の向きと速さが決まる(離すと止まる)。縦の動きは無視
-const input = { dir: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0 }; // dir: -1(左)〜+1(右)
+const input = { x: 0, z: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0 }; // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
 const keys = new Set();
-canvas.addEventListener("pointerdown", (e) => { if (input.id === null) { input.id = e.pointerId; input.ox = e.clientX; input.oy = e.clientY; input.t0 = performance.now(); input.maxMove = 0; input.dir = 0; canvas.setPointerCapture(e.pointerId); document.getElementById("hint").style.opacity = 0; } });
+const axis = (d, dead, full) => { const a = Math.abs(d); return a < dead ? 0 : Math.sign(d) * Math.min(1, (a - dead) / (full - dead)); };
+canvas.addEventListener("pointerdown", (e) => { if (input.id === null) { input.id = e.pointerId; input.ox = e.clientX; input.oy = e.clientY; input.t0 = performance.now(); input.maxMove = 0; input.x = input.z = 0; canvas.setPointerCapture(e.pointerId); document.getElementById("hint").style.opacity = 0; } });
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== input.id) return;
-  const dx = e.clientX - input.ox, a = Math.abs(dx);
-  input.maxMove = Math.max(input.maxMove, Math.hypot(dx, e.clientY - input.oy));
-  input.dir = a < SWIPE_DEADZONE_PX ? 0 : Math.sign(dx) * Math.min(1, (a - SWIPE_DEADZONE_PX) / (SWIPE_FULL_PX - SWIPE_DEADZONE_PX));
+  const dx = e.clientX - input.ox, dy = e.clientY - input.oy;
+  input.maxMove = Math.max(input.maxMove, Math.hypot(dx, dy));
+  input.x = axis(dx, SWIPE_DEADZONE_PX, SWIPE_FULL_PX);
+  input.z = axis(dy, SWIPE_DEADZONE_PX, SWIPE_FULL_PX); // 上へ=奥、下へ=手前
 });
 const endPtr = (e) => {
   if (e.pointerId !== input.id) return;
   // ほとんど動かさず、すぐ離した = タップ → 攻撃(画面の左半分=左ジャブ、右半分=右ローキック)
   const isTap = e.type === "pointerup" && input.maxMove <= TAP_MAX_MOVE_PX && performance.now() - input.t0 <= TAP_MAX_MS;
   if (isTap) startAttack(e.clientX < window.innerWidth / 2 ? "jab" : "kick", performance.now());
-  input.id = null; input.dir = 0;
+  input.id = null; input.x = input.z = 0;
 };
 canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 window.addEventListener("keydown", (e) => { keys.add(e.code); if (e.code === "KeyJ") startAttack("jab", performance.now()); if (e.code === "KeyK") startAttack("kick", performance.now()); }); window.addEventListener("keyup", (e) => keys.delete(e.code));
-const readDir = () => { const k = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0); return k || input.dir; };
+const readDir = () => {
+  const kx = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
+  const kz = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
+  return kx || kz ? { x: kx, z: kz } : { x: input.x, z: input.z };
+};
 
 // ---------- 毎フレーム ----------
-const state = { phase: 0, w: 0, vx: 0 };
+const state = { phase: 0, w: 0, vx: 0, vz: 0, lastX: null, lastZ: null };
 const clock = new THREE.Clock();
+const angleDiff = (a, b) => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 function update(dt, now) {
-  // 移動(X軸のみ)。CPUとは BODY_GAP 以上離れる/ステージの端で止まる
-  const dir = attack ? 0 : readDir(); // 攻撃中は移動できない
-  const forward = dir > 0; // プレイヤーは右(CPU)を向いているので、右へ=前進、左へ=後退
-  const speed = Math.abs(dir) * WALK_SPEED * (dir < 0 ? BACK_SPEED_SCALE : 1);
-  const dist = speed * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
+  // CPUのほうを向く(向いている方向 f)。移動の前進/後退は、この向きが基準
+  let fx = cpu.x - player.x, fz = cpu.z - player.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
+  // 移動(X・Z軸)。攻撃中は移動できない
+  const mv = attack ? { x: 0, z: 0 } : readDir();
+  const mag = Math.min(1, Math.hypot(mv.x, mv.z));
+  const back = mv.x * fx + mv.z * fz < -0.3 ? BACK_SPEED_SCALE : 1; // CPUから離れる向きは、少し遅い
+  const dist = mag * WALK_SPEED * back * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
+  const ux = mag > 0 ? mv.x / Math.hypot(mv.x, mv.z) : 0, uz = mag > 0 ? mv.z / Math.hypot(mv.x, mv.z) : 0;
   for (let i = 0; i < steps; i++) {
-    player.x += (Math.sign(dir) * dist) / steps;
-    player.x = Math.max(-STAGE_HALF, Math.min(STAGE_HALF, player.x));
-    if (player.x > cpu.x - BODY_GAP) player.x = cpu.x - BODY_GAP; // CPUに食い込まない
-    if (player.x < cpu.x - MAX_GAP) player.x = cpu.x - MAX_GAP;   // 離れすぎない(画面から出ない)
+    player.x += (ux * dist) / steps; player.z += (uz * dist) / steps;
+    player.x = Math.max(-STAGE_HALF, Math.min(STAGE_HALF, player.x)); player.z = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z));
+    // CPUに食い込まない(円どうし) / 離れすぎない(画面から出ない)
+    let dx = player.x - cpu.x, dz = player.z - cpu.z, d = Math.hypot(dx, dz) || 1e-6;
+    if (d < BODY_GAP) { player.x = cpu.x + (dx / d) * BODY_GAP; player.z = cpu.z + (dz / d) * BODY_GAP; }
+    else if (d > MAX_GAP) { player.x = cpu.x + (dx / d) * MAX_GAP; player.z = cpu.z + (dz / d) * MAX_GAP; }
+    player.z = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z));
   }
   // 実際に動けた速さ(壁・CPUに当たって止まっているときは歩きアニメも止める)
-  const moved = (player.x - (state.lastX ?? player.x)) / Math.max(dt, 1e-4); state.lastX = player.x;
-  state.vx += (moved - state.vx) * Math.min(1, 14 * dt);
-  const walkAmt = Math.min(1, Math.abs(state.vx) / (WALK_SPEED * 0.6));
+  const mx = (player.x - (state.lastX ?? player.x)) / Math.max(dt, 1e-4), mz = (player.z - (state.lastZ ?? player.z)) / Math.max(dt, 1e-4);
+  state.lastX = player.x; state.lastZ = player.z;
+  state.vx += (mx - state.vx) * Math.min(1, 14 * dt); state.vz += (mz - state.vz) * Math.min(1, 14 * dt);
+  const along = state.vx * fx + state.vz * fz, lateral = Math.abs(state.vx * fz - state.vz * fx), spd = Math.hypot(state.vx, state.vz);
+  const walkAmt = Math.min(1, spd / (WALK_SPEED * 0.6));
   state.w += (walkAmt - state.w) * Math.min(1, 12 * dt);
-  // 歩きの再生: 前進は順再生、後退は逆再生(体の向きは変えずに後ろへ歩く)。足が滑らない速さ
-  state.phase += (state.vx / walkStride) * dt;
-  player.root.position.x = player.x;
+  // 歩きの再生: CPUへ近づく=順再生、離れる=逆再生、横(奥・手前)へのステップは順再生。足が滑らない速さ
+  state.phase += ((Math.abs(along) >= lateral ? along : lateral) / walkStride) * dt;
+  // 体の向き: お互いを向く(なめらかに)
+  player.yaw += angleDiff(player.yaw, Math.atan2(fx, fz)) * Math.min(1, 12 * dt);
+  cpu.yaw += angleDiff(cpu.yaw, Math.atan2(-fx, -fz)) * Math.min(1, 12 * dt);
+  player.root.rotation.y = player.yaw; cpu.root.rotation.y = cpu.yaw;
 
   // プレイヤーのポーズ: 構え(アイドル) ⇔ 歩き
   const idleP = sampleClip(idleJson, idleDur, now / 1000), walkP = sampleClip(walkJson, walkDur, state.phase * walkDur);
@@ -224,8 +244,8 @@ function update(dt, now) {
     b.quaternion.copy(idleP.pose[n]).slerp(walkP.pose[n] || idleP.pose[n], state.w);
   }
   player.root.position.y = idleP.y + ((walkP.y - idleP.y) * state.w);
-  // 攻撃: 構えの上にクリップを重ねる(頭と終わりでなじませる)。踏み込み(modelPosition)は、向いている方向(+X)へ
-  let stepX = 0;
+  // 攻撃: 構えの上にクリップを重ねる(頭と終わりでなじませる)。踏み込み(modelPosition)は、向いている方向へ
+  let step = 0;
   if (attack) {
     const A = ATTACKS[attack.kind], el = now - attack.startAt;
     if (el >= A.durMs) { attack = null; }
@@ -233,17 +253,18 @@ function update(dt, now) {
       const w = Math.max(0, Math.min(1, Math.min(el / ATTACK_BLEND_IN_MS, (A.durMs - el) / ATTACK_BLEND_OUT_MS)));
       const c = sampleOnce(A.clip, A.range.start + (el * ATTACK_SPEED) / 1000);
       for (const n of Object.keys(c.pose)) { const b = player.bones[n]; if (b) b.quaternion.copy(idleP.pose[n] || c.pose[n]).slerp(c.pose[n], w); }
-      stepX = c.mp[2] * w; // モデルの前方(+Z) = 右(+X)
+      step = c.mp[2] * w; // モデルの前方(+Z) = CPUのいる方向
       player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
     }
   }
-  player.root.position.x = Math.min(Math.max(-STAGE_HALF, player.x + stepX), cpu.x - 0.55); // 踏み込みでも、CPUに食い込まない
+  let rx = Math.max(-STAGE_HALF, Math.min(STAGE_HALF, player.x + fx * step)), rz = Math.max(-STAGE_Z, Math.min(STAGE_Z, player.z + fz * step));
+  { const dx = rx - cpu.x, dz = rz - cpu.z, d = Math.hypot(dx, dz) || 1e-6; if (d < 0.55) { rx = cpu.x + (dx / d) * 0.55; rz = cpu.z + (dz / d) * 0.55; } } // 踏み込みでも、CPUに食い込まない
+  player.root.position.x = rx; player.root.position.z = rz;
   // CPU: 構えのアイドルのループ
   const cpuP = sampleClip(idleJson, idleDur, now / 1000 + 0.7);
   for (const n of Object.keys(cpuP.pose)) { const b = cpu.bones[n]; if (b) b.quaternion.copy(cpuP.pose[n]); }
-  cpu.root.position.y = cpuP.y;
-  cpu.root.position.x = cpu.x;
-  // カメラは2人の中間を、なめらかに追う(ステージの外側は映さない)
+  cpu.root.position.set(cpu.x, cpuP.y, cpu.z);
+  // カメラは2人の中間(X)を、なめらかに追う(ステージの外側は映さない)
   const mid = (player.x + cpu.x) / 2, lim = STAGE_HALF - 0.4;
   placeCamera(CAM_LOOK.x + (Math.max(-lim, Math.min(lim, mid)) - CAM_LOOK.x) * Math.min(1, 6 * dt));
 }
@@ -261,7 +282,7 @@ requestAnimationFrame(frame);
 window.__fight = {
   startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
   player, cpu, STAGE_HALF, BODY_GAP, MAX_GAP, camera,
-  setDir: (d) => { input.dir = d; },
-  teleport: (x) => { player.x = x; player.root.position.x = x; },
-  getState: () => ({ attack: attack && attack.kind, px: player.x, cx: cpu.x, vx: state.vx, w: state.w, dir: readDir() }),
+  setDir: (x, z = 0) => { input.x = x; input.z = z; },
+  teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
+  getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, dir: readDir(), yaw: player.yaw }),
 };
