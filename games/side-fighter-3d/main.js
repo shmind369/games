@@ -134,7 +134,7 @@ const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, st
   fetch("./assets/rightBackSpinKick.json").then((r) => r.json()),
   fetch("./assets/rightFlyingBackSpinKick.json").then((r) => r.json()),
   fetch("./assets/leftLungeSideKick.json").then((r) => r.json()),
-  fetch("./assets/leftSlideLowKick.json").then((r) => r.json()),
+  fetch("./assets/leftSlideLowKick1.json").then((r) => r.json()),
 ]);
 function makeFighter(gltf, facing) {
   const root = new THREE.Group(); // 位置(X)と向き(yaw)
@@ -205,7 +205,7 @@ const ATTACKS = {
   low_near: { zone: "legs", label: "下段(近接) 右ローキック", clip: kickJson },
   high_far: { zone: "head", label: "上段(遠間) 右飛び後ろ回し蹴り", clip: flySpinJson, hit: [0.4, 0.62], lunge: [0.1, 0.5, 1.4] },
   mid_far: { zone: "body", label: "中段(遠間) 飛び込み左サイドキック", clip: sideKickJson, hit: [0.33, 0.6], lunge: [0.06, 0.38, 1.2] },
-  low_far: { zone: "legs", label: "下段(遠間) 左スライドローキック", clip: slideKickJson, hit: [0.45, 0.72], lunge: [0.05, 0.48, 1.2] },
+  low_far: { zone: "legs", label: "下段(遠間) 左スライドローキック", clip: slideKickJson, hit: [0.36, 0.64], lunge: [0.0, 0.36, 1.2] },
 };
 for (const a of Object.values(ATTACKS)) a.range = activeRange(a.clip);
 for (const a of Object.values(ATTACKS)) a.durMs = ((a.range.end - a.range.start) * 1000) / ATTACK_SPEED;
