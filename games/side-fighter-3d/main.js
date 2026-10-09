@@ -119,7 +119,7 @@ const rim = new THREE.DirectionalLight(0x6f8cff, 0.9); rim.position.set(3, 3, -4
 
 // ---------- キャラクターとモーション ----------
 const loader = new GLTFLoader();
-const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson] = await Promise.all([
+const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson, spinJson, flySpinJson, sideKickJson, slideKickJson] = await Promise.all([
   loader.loadAsync("./assets/china_rigged.glb"),
   loader.loadAsync("./assets/box_usa_rigged.glb"),
   fetch("./assets/stepForward.json").then((r) => r.json()),
@@ -131,6 +131,10 @@ const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, st
   fetch("./assets/cpuJab.json").then((r) => r.json()),
   fetch("./assets/cpuBodyStraight.json").then((r) => r.json()),
   fetch("./assets/cpuLowHook.json").then((r) => r.json()),
+  fetch("./assets/rightBackSpinKick.json").then((r) => r.json()),
+  fetch("./assets/rightFlyingBackSpinKick.json").then((r) => r.json()),
+  fetch("./assets/leftLungeSideKick.json").then((r) => r.json()),
+  fetch("./assets/leftSlideLowKick.json").then((r) => r.json()),
 ]);
 function makeFighter(gltf, facing) {
   const root = new THREE.Group(); // 位置(X)と向き(yaw)
@@ -192,12 +196,18 @@ function activeRange(clip) {
   let end = keys.length - 1; while (end - 1 > 0 && same(keys[end - 1].pose, keys[keys.length - 1].pose)) end--;
   return { start: keys[0].time, end: keys[end].time };
 }
+// 画面右側をタップした高さで 上段/中段/下段 を選び、さらに「相手との距離」で近接/遠間の技に切り替える
+//  zone: 当たったときのリアクション(head/body/legs) / hit: 技の長さの何割〜何割の間だけ当たる / lunge: 前へ踏み込む(開始・終了の割合, 距離m)
+const NEAR_DIST = 1.4; // これより近い(2人の中心の距離, m) = 近接 / 以上 = 遠間
 const ATTACKS = {
-  // 画面の左側をタップした高さで使い分ける: 上(頭より上) = 上段 / キャラの体のあたり = 中段 / 足元より下 = 下段
-  high: { label: "上段 Left Jab", clip: jabJson, range: activeRange(jabJson) },            // 上段: 左ジャブ(頭の高さ)
-  mid: { label: "中段 Right Straight", clip: straightJson, range: activeRange(straightJson) }, // 中段: 右ストレート(胸の高さ)
-  low: { label: "下段 Right Low Kick", clip: kickJson, range: activeRange(kickJson) },      // 下段: 右ローキック(足元)
+  high_near: { zone: "head", label: "上段(近接) 右後ろ回し蹴り", clip: spinJson, hit: [0.4, 0.62], lunge: null },
+  mid_near: { zone: "body", label: "中段(近接) 右ストレート", clip: straightJson },
+  low_near: { zone: "legs", label: "下段(近接) 右ローキック", clip: kickJson },
+  high_far: { zone: "head", label: "上段(遠間) 右飛び後ろ回し蹴り", clip: flySpinJson, hit: [0.4, 0.62], lunge: [0.1, 0.5, 1.4] },
+  mid_far: { zone: "body", label: "中段(遠間) 飛び込み左サイドキック", clip: sideKickJson, hit: [0.33, 0.6], lunge: [0.06, 0.38, 1.2] },
+  low_far: { zone: "legs", label: "下段(遠間) 左スライドローキック", clip: slideKickJson, hit: [0.45, 0.72], lunge: [0.05, 0.48, 1.2] },
 };
+for (const a of Object.values(ATTACKS)) a.range = activeRange(a.clip);
 for (const a of Object.values(ATTACKS)) a.durMs = ((a.range.end - a.range.start) * 1000) / ATTACK_SPEED;
 // クリップを時刻t(秒, ループしない)でサンプル。modelPosition(前進・沈み込み)も返す
 function sampleOnce(clip, t) {
@@ -209,11 +219,16 @@ function sampleOnce(clip, t) {
   const am = a.modelPosition || [0, 0, 0], bm = b.modelPosition || [0, 0, 0];
   return { pose, mp: [0, 1, 2].map((k) => am[k] + (bm[k] - am[k]) * f) };
 }
-let attack = null; // { kind, startAt }
+let attack = null; // { kind(=ATTACKSのキー), startAt, hit, lunged }
 const attackLog = [];
-function startAttack(kind, now) {
+function attackIdFor(zone) { // 高さ(zone)と、相手との距離から、使う技を決める
+  if (ATTACKS[zone]) return zone;
+  return zone + (Math.hypot(cpu.x - player.x, cpu.z - player.z) < NEAR_DIST ? "_near" : "_far");
+}
+function startAttack(zone, now) {
+  const kind = attackIdFor(zone);
   if (attack || match.over || performance.now() < playerState.stunUntil) return false; // 攻撃中・のけぞり中・試合終了後は受け付けない
-  attack = { kind, startAt: now, hit: false }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
+  attack = { kind, startAt: now, hit: false, lunged: 0 }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
   return true;
 }
 
@@ -413,7 +428,10 @@ function applyPlayerReaction(dt, now) {
 //  ・当たった場所で、リアクションが変わる: 頭=のけぞる(上段) / 胸・腹=体がくの字に折れる(中段) / すね=膝が崩れる(下段)
 //  ・CPUは、攻撃の向きへノックバックする(場外まで押し出せばリングアウト)
 const HIT_WINDOW = [0.15, 0.72]; // 攻撃の長さの何割〜何割の間だけ当たる(振り出し〜伸びきり)
-const LIMBS = { high: { bone: "LeftHand", fore: "LeftForearm", r: 0.16, kb: 0.45, label: "Left Jab" }, mid: { bone: "RightHand", fore: "RightForearm", r: 0.17, kb: 0.7, label: "Right Straight" }, low: { bone: "RightFoot", fore: null, r: 0.2, kb: 0.55, label: "Right Low Kick" } };
+const LIMBS = {
+  high_near: { bone: "RightFoot", fore: null, r: 0.24, kb: 0.8 }, mid_near: { bone: "RightHand", fore: "RightForearm", r: 0.17, kb: 0.7 }, low_near: { bone: "RightFoot", fore: null, r: 0.2, kb: 0.55 },
+  high_far: { bone: "RightFoot", fore: null, r: 0.26, kb: 0.9 }, mid_far: { bone: "LeftFoot", fore: null, r: 0.22, kb: 0.9 }, low_far: { bone: "LeftFoot", fore: null, r: 0.22, kb: 0.6 },
+};
 const HURTBOXES = [{ bone: "Head", r: 0.2, zone: "head" }, { bone: "Chest", r: 0.3, zone: "body" }, { bone: "Hips", r: 0.27, zone: "body" }, { bone: "LeftUpperLeg", r: 0.2, zone: "legs" }, { bone: "RightUpperLeg", r: 0.2, zone: "legs" }, { bone: "LeftLowerLeg", r: 0.19, zone: "legs" }, { bone: "RightLowerLeg", r: 0.19, zone: "legs" }];
 const REACT = {
   head: { in: 60, hold: 70, out: 300, drop: 0.02, bones: { Head: [-0.75, 0, 0], Neck: [-0.5, 0, 0], Spine: [-0.35, 0, 0], Chest: [-0.2, 0, 0], LeftUpperArm: [-0.4, 0, 0.3], RightUpperArm: [-0.4, 0, -0.3] } },
@@ -432,7 +450,7 @@ function limbCenter(kind) {
 function checkHit(now) {
   if (!attack || attack.hit || match.over) return;
   const A = ATTACKS[attack.kind], f = (now - attack.startAt) / A.durMs;
-  if (f < HIT_WINDOW[0] || f > HIT_WINDOW[1]) return;
+  const hw = A.hit || HIT_WINDOW; if (f < hw[0] || f > hw[1]) return;
   const c = limbCenter(attack.kind); if (!c) return;
   const L = LIMBS[attack.kind];
   let best = null;
@@ -445,7 +463,7 @@ function checkHit(now) {
   if (!best) return;
   attack.hit = true; cpuState.hits++;
   // リアクションは、攻撃の高さに合わせる(上段=頭がのけぞる / 中段=体が折れる / 下段=膝が崩れる)。どこに当たっても、その高さの反応
-  const zone = { high: "head", mid: "body", low: "legs" }[attack.kind];
+  const zone = A.zone;
   cpuState.react = { zone, at: now };
   cpuState.flashUntil = now + 110;
   cpuState.stunUntil = now + 450; if (cpuAI.mode === "windup" || cpuAI.mode === "attack") { cpuAI.mode = "recover"; cpuAI.until = now + 450; } // CPUの攻撃は、当てられたら中断
@@ -560,6 +578,12 @@ function update(dt, now) {
       const c = sampleOnce(A.clip, A.range.start + (el * ATTACK_SPEED) / 1000);
       for (const n of Object.keys(c.pose)) { const b = player.bones[n]; if (b) b.quaternion.copy(idleP.pose[n] || c.pose[n]).slerp(c.pose[n], w); }
       step = c.mp[2] * w; // モデルの前方(+Z) = CPUのいる方向
+      if (A.lunge) { // 遠間の技: 本当に前へ踏み込む(CPUの手前で止まる。技のあとも、その位置のまま)
+        const [l0, l1, dist] = A.lunge, u = Math.max(0, Math.min(1, (el / A.durMs - l0) / (l1 - l0))), want = dist * u * u * (3 - 2 * u);
+        const inc = Math.max(0, Math.min(want - attack.lunged, Math.hypot(cpu.x - player.x, cpu.z - player.z) - BODY_GAP - 0.1));
+        attack.lunged += inc; player.x += fx * inc; player.z += fz * inc;
+        const pr = Math.hypot(player.x, player.z); if (pr > WORLD_LIM) { player.x *= WORLD_LIM / pr; player.z *= WORLD_LIM / pr; }
+      }
       player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
     }
   }

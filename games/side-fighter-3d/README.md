@@ -100,3 +100,9 @@ python3 -m http.server 8080
 - 結果（キー数 / 元の動きとの最大ずれ）: `leftPunch1`(上段・左ジャブ) 45→**10** (17°) ／ `rightLowKick`(下段) 33→**10** (21°) ／ `rightStraight`(中段) **8**（元のまま）／ `cpuJab` **6**（元のまま）／ `cpuBodyStraight` 21→**9** (3.7°) ／ `cpuLowHook` 20→**9** (6.5°) ／ `stepForward` 21→**7** (6.2°) ／ `stepSide` 21→**7** (4.6°) ／ `fightIdleUsa`(構え) 11→**6** (2.5°)
 - 攻撃のモーション(`leftPunch1`・`rightLowKick`)は、末尾の「構えに戻って止まっている」部分も切り落とした（最後のキー = 動きの終わり）。ゲームでの長さ・当たり判定のタイミングは変わらない
 - 使い方: `python3 tools/reduce_keyframes.py assets/foo.json --keys 5 --max-keys 10 --tol 0.06 [--trim-tail]`
+
+## 距離で技が変わる（近接 / 遠間）
+- 右側タップの高さ（上段・中段・下段）に加えて、**タップした瞬間の相手との距離**で技が変わる。境目は `NEAR_DIST = 1.4`（2人の中心の距離, m）。`main.js` の `ATTACKS` の表で定義（`hit` = 当たる区間、`lunge` = 前へ踏み込む区間と距離）
+- 近接（1.4m未満）: 上段 **右後ろ回し蹴り**（`rightBackSpinKick`） / 中段 右ストレート（`rightStraight`） / 下段 右ローキック（`rightLowKick`）
+- 遠間（1.4m以上）: 上段 **右飛び後ろ回し蹴り**（`rightFlyingBackSpinKick`） / 中段 **飛び込み左サイドキック**（`leftLungeSideKick`） / 下段 **左スライドローキック**（`leftSlideLowKick`）。遠間の技は、実際に前へ踏み込む（CPUの手前で止まる）ので、空振りすると隙になる
+- 新しい4技のキーフレームは各8個。`leftPunch1`（左ジャブ）は今は使っていない
