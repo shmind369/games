@@ -15,7 +15,7 @@ const RING_HALF = 3.4;        // リング(四角い台)の一辺の半分(m)。
 const RING_OUT_MARGIN = 0.1;  // 足元(体の中心)がリングの縁からこれだけ外へ出たら「リングアウト」
 const WORLD_LIM = 9;        // 場外へ落ちる前に、これ以上は遠くへ行けない(安全装置)
 const BODY_GAP = 0.7;         // 2人の体が重ならない最小距離(m)
-const WALK_SPEED = 1.7;       // 最大の移動速度 (m/s)
+const WALK_SPEED = 2.38;       // 最大の移動速度 (m/s)
 const BACK_SPEED_SCALE = 0.85; // 後ろへ下がるときは少し遅い
 const SWIPE_DEADZONE_PX = 6;  // これ以下の動きは無視
 const SWIPE_FULL_PX = 55;     // これだけ動かすと最大速度
@@ -289,7 +289,7 @@ const CPU_ATTACKS = {
     tell: { y: 0.3, bones: { Spine: [0.5, 0.2, 0], Chest: [0, 0.35, 0], LeftUpperLeg: [-0.55, 0, 0], RightUpperLeg: [-0.55, 0, 0], LeftLowerLeg: [1.0, 0, 0], RightLowerLeg: [1.0, 0, 0], RightUpperArm: [-0.2, 0, 1.0] } } },
 };
 for (const a of Object.values(CPU_ATTACKS)) { a.range = activeRange(a.clip); a.durMs = ((a.range.end - a.range.start) * 1000) / a.speed; }
-const CPU_APPROACH_SPEED = 1.5, CPU_RETREAT_SPEED = 1.3;
+const CPU_APPROACH_SPEED = 2.1, CPU_RETREAT_SPEED = 1.82;
 const cpuAI = { enabled: true, auto: true, mode: "idle", t0: 0, until: 800, kind: null, dir: [-1, 0], lungeDist: 0, lunged: 0, hit: false, log: [], recent: [], range: 1.7, retreatLeft: 0, lastX: null, lastZ: null, vx: 0, vz: 0, w: 0, phase: 0 };
 if (new URLSearchParams(location.search).get("ai") === "0") cpuAI.auto = false; // ?ai=0 でCPUが自分からは攻撃しない(練習・動作確認用)
 const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
