@@ -201,7 +201,7 @@ function activeRange(clip) {
 const NEAR_DIST = 1.4; // これより近い(2人の中心の距離, m) = 近接 / 以上 = 遠間
 const ATTACKS = {
   high_near: { zone: "head", label: "上段(近接) 右後ろ回し蹴り", clip: spinJson, hit: [0.4, 0.62], lunge: null },
-  mid_near: { zone: "body", label: "中段(近接) 右ストレート", clip: straightJson },
+  mid_near: { zone: "body", label: "中段(近接) 左ジャブ", clip: jabJson },
   low_near: { zone: "legs", label: "下段(近接) 右ローキック", clip: kickJson },
   high_far: { zone: "head", label: "上段(遠間) 右飛び後ろ回し蹴り", clip: flySpinJson, hit: [0.4, 0.62], lunge: [0.1, 0.5, 1.4] },
   mid_far: { zone: "body", label: "中段(遠間) 飛び込み左サイドキック", clip: sideKickJson, hit: [0.33, 0.6], lunge: [0.06, 0.38, 1.2] },
@@ -429,7 +429,7 @@ function applyPlayerReaction(dt, now) {
 //  ・CPUは、攻撃の向きへノックバックする(場外まで押し出せばリングアウト)
 const HIT_WINDOW = [0.15, 0.72]; // 攻撃の長さの何割〜何割の間だけ当たる(振り出し〜伸びきり)
 const LIMBS = {
-  high_near: { bone: "RightFoot", fore: null, r: 0.24, kb: 0.8 }, mid_near: { bone: "RightHand", fore: "RightForearm", r: 0.17, kb: 0.7 }, low_near: { bone: "RightFoot", fore: null, r: 0.2, kb: 0.55 },
+  high_near: { bone: "RightFoot", fore: null, r: 0.24, kb: 0.8 }, mid_near: { bone: "LeftHand", fore: "LeftForearm", r: 0.16, kb: 0.45 }, low_near: { bone: "RightFoot", fore: null, r: 0.2, kb: 0.55 },
   high_far: { bone: "RightFoot", fore: null, r: 0.26, kb: 0.9 }, mid_far: { bone: "LeftFoot", fore: null, r: 0.22, kb: 0.9 }, low_far: { bone: "LeftFoot", fore: null, r: 0.22, kb: 0.6 },
 };
 const HURTBOXES = [{ bone: "Head", r: 0.2, zone: "head" }, { bone: "Chest", r: 0.3, zone: "body" }, { bone: "Hips", r: 0.27, zone: "body" }, { bone: "LeftUpperLeg", r: 0.2, zone: "legs" }, { bone: "RightUpperLeg", r: 0.2, zone: "legs" }, { bone: "LeftLowerLeg", r: 0.19, zone: "legs" }, { bone: "RightLowerLeg", r: 0.19, zone: "legs" }];
