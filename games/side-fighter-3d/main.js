@@ -11,9 +11,9 @@ import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 // ============================================================
 
 // ---------- 設定 ----------
-const RING_R = 2.5;           // リング(円形の台)の半径(m)。中心はXZの原点
+const RING_HALF = 3.4;        // リング(四角い台)の一辺の半分(m)。一辺 6.8m。中心はXZの原点
 const RING_OUT_MARGIN = 0.1;  // 足元(体の中心)がリングの縁からこれだけ外へ出たら「リングアウト」
-const WORLD_LIM = 7.5;        // 場外へ落ちる前に、これ以上は遠くへ行けない(安全装置)
+const WORLD_LIM = 9;        // 場外へ落ちる前に、これ以上は遠くへ行けない(安全装置)
 const BODY_GAP = 0.7;         // 2人の体が重ならない最小距離(m)
 const WALK_SPEED = 1.7;       // 最大の移動速度 (m/s)
 const BACK_SPEED_SCALE = 0.85; // 後ろへ下がるときは少し遅い
@@ -74,16 +74,20 @@ const topTex = canvasTex(1024, 1024, (ctx, w, h) => {
   for (let y = 0; y <= h; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
   for (let i = 0; i < 500; i++) { ctx.fillStyle = `rgba(${Math.random() < 0.5 ? 255 : 0},${Math.random() < 0.5 ? 255 : 0},255,${Math.random() * 0.04})`; ctx.fillRect(Math.random() * w, Math.random() * h, 6 + Math.random() * 30, 6 + Math.random() * 30); }
 }, 1, 1);
-const platform = new THREE.Mesh(new THREE.CylinderGeometry(RING_R + 0.12, RING_R + 0.12, 0.9, 72), [
-  new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.55, metalness: 0.4 }), // 側面
-  new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.75, metalness: 0.1 }),    // 上面
-  new THREE.MeshStandardMaterial({ color: 0x111116 }),                                 // 底
+const sideMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.55, metalness: 0.4 });
+const platform = new THREE.Mesh(new THREE.BoxGeometry((RING_HALF + 0.12) * 2, 0.9, (RING_HALF + 0.12) * 2), [
+  sideMat, sideMat,                                                                  // +X, -X 側面
+  new THREE.MeshStandardMaterial({ map: topTex, roughness: 0.75, metalness: 0.1 }),  // 上面
+  new THREE.MeshStandardMaterial({ color: 0x111116 }),                               // 底
+  sideMat, sideMat,                                                                  // +Z, -Z 側面
 ]);
 platform.position.y = -0.45; platform.receiveShadow = true; scene.add(platform);
 // 縁のライン(これより外へ出るとリングアウト)と、中央の線
-const rimLine = new THREE.Mesh(new THREE.RingGeometry(RING_R - 0.07, RING_R + 0.04, 96), new THREE.MeshBasicMaterial({ color: 0xffc860 }));
-rimLine.rotation.x = -Math.PI / 2; rimLine.position.y = 0.012; scene.add(rimLine);
-const centerLine = new THREE.Mesh(new THREE.PlaneGeometry(0.05, RING_R * 2 - 0.2), new THREE.MeshBasicMaterial({ color: 0xffc860, transparent: true, opacity: 0.55 }));
+const rimMat = new THREE.MeshBasicMaterial({ color: 0xffc860 });
+for (const [w, h, x, z] of [[RING_HALF * 2 + 0.11, 0.11, 0, -RING_HALF], [RING_HALF * 2 + 0.11, 0.11, 0, RING_HALF], [0.11, RING_HALF * 2 + 0.11, -RING_HALF, 0], [0.11, RING_HALF * 2 + 0.11, RING_HALF, 0]]) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), rimMat); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.012, z); scene.add(m);
+}
+const centerLine = new THREE.Mesh(new THREE.PlaneGeometry(0.05, RING_HALF * 2 - 0.2), new THREE.MeshBasicMaterial({ color: 0xffc860, transparent: true, opacity: 0.55 }));
 centerLine.rotation.x = -Math.PI / 2; centerLine.position.y = 0.011; scene.add(centerLine);
 // 下の闇の床(落ちたあとの地面)
 const pit = new THREE.Mesh(new THREE.PlaneGeometry(80, 60), new THREE.MeshStandardMaterial({ color: 0x141a30, emissive: 0x0a1230, roughness: 1 }));
@@ -236,8 +240,9 @@ function ringOut(who, now) {
 // 毎フレーム: 場外に出たらリングアウト。負けた側は縁から外へ放り出されて落ちる(重力+回転)
 function updateRingOut(dt, now) {
   if (!match.over) {
-    if (Math.hypot(player.x, player.z) > RING_R + RING_OUT_MARGIN) ringOut("player", now);
-    else if (Math.hypot(cpu.x, cpu.z) > RING_R + RING_OUT_MARGIN) ringOut("cpu", now);
+    const out = (f) => Math.max(Math.abs(f.x), Math.abs(f.z)) > RING_HALF + RING_OUT_MARGIN; // 四角の縁(いちばん外へ出ている軸で判定)
+    if (out(player)) ringOut("player", now);
+    else if (out(cpu)) ringOut("cpu", now);
     return;
   }
   const F = match.fall, f = F.who === "player" ? player : cpu;
@@ -311,7 +316,7 @@ function update(dt, now) {
   const mid = (player.x + cpu.x) / 2, sep = Math.hypot(player.x - cpu.x, (player.z - cpu.z) * 0.5);
   const wantW = Math.max(VISIBLE_WIDTH_MIN, Math.min(VISIBLE_WIDTH_MAX, sep + CAM_MARGIN));
   camWidth += (wantW - camWidth) * Math.min(1, 3.5 * dt);
-  placeCamera(CAM_LOOK.x + (Math.max(-RING_R, Math.min(RING_R, mid)) - CAM_LOOK.x) * Math.min(1, 6 * dt), camWidth);
+  placeCamera(CAM_LOOK.x + (Math.max(-RING_HALF, Math.min(RING_HALF, mid)) - CAM_LOOK.x) * Math.min(1, 6 * dt), camWidth);
 }
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
@@ -326,7 +331,7 @@ requestAnimationFrame(frame);
 // テスト用
 window.__fight = {
   startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
-  player, cpu, RING_R, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
+  player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
   getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, dir: readDir(), yaw: player.yaw, camWidth, camDist, camX: CAM_LOOK.x, over: match.over, loser: match.loser, fy: match.fall ? match.fall.y : 0 }),
