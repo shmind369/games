@@ -119,7 +119,7 @@ const rim = new THREE.DirectionalLight(0x6f8cff, 0.9); rim.position.set(3, 3, -4
 
 // ---------- キャラクターとモーション ----------
 const loader = new GLTFLoader();
-const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson, straightJson] = await Promise.all([
+const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson] = await Promise.all([
   loader.loadAsync("./assets/china_rigged.glb"),
   loader.loadAsync("./assets/box_usa_rigged.glb"),
   fetch("./assets/walk.json").then((r) => r.json()),
@@ -127,6 +127,9 @@ const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson, straightJson] 
   fetch("./assets/leftPunch1.json").then((r) => r.json()),
   fetch("./assets/rightLowKick.json").then((r) => r.json()),
   fetch("./assets/rightStraight.json").then((r) => r.json()),
+  fetch("./assets/cpuJab.json").then((r) => r.json()),
+  fetch("./assets/cpuBodyStraight.json").then((r) => r.json()),
+  fetch("./assets/cpuLowHook.json").then((r) => r.json()),
 ]);
 function makeFighter(gltf, facing) {
   const root = new THREE.Group(); // 位置(X)と向き(yaw)
@@ -185,7 +188,7 @@ function sampleOnce(clip, t) {
 let attack = null; // { kind, startAt }
 const attackLog = [];
 function startAttack(kind, now) {
-  if (attack || match.over) return false; // 攻撃中・試合終了後は受け付けない
+  if (attack || match.over || performance.now() < playerState.stunUntil) return false; // 攻撃中・のけぞり中・試合終了後は受け付けない
   attack = { kind, startAt: now, hit: false }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
   return true;
 }
@@ -248,19 +251,154 @@ const readDir = () => {
 // ---------- 毎フレーム ----------
 const state = { phase: 0, w: 0, vx: 0, vz: 0, lastX: null, lastZ: null };
 const clock = new THREE.Clock();
+// ---------- CPUのAIと攻撃(飛び込み) ----------
+// 状態: idle(構えて様子見) → approach(間合いまで歩いて近づく) → windup(予備動作。ここで攻撃の種類が分かる) →
+//        attack(飛び込み。向きと距離は予備動作の終わりで決まる=その後は動けないので、よけられる) → recover(隙) → idle/retreat
+//  ・上段: 飛び込み左リードジャブ / 中段: 飛び込み右ボディストレート(低く沈んで胴へ) / 下段: 飛び込み右フック(足を刈る)
+//  ・飛び込みは、CPUの位置そのものを前へ動かす(攻撃が終わっても元に戻らない)。リングの外へは自分から飛び出さない
+const CPU_ATTACKS = {
+  high: { label: "上段 飛び込み左リードジャブ", clip: cpuJabJson, speed: 1.35, windupMs: 420, lunge: [0.04, 0.42], hit: [0.28, 0.7], limb: ["LeftHand", "LeftForearm", 0.15], kb: 0.5,
+    tell: { y: 0.02, bones: { Spine: [-0.2, 0, 0], Head: [-0.1, 0, 0], LeftShoulder: [-0.15, 0, 0], LeftUpperArm: [-0.35, 0, 0.15], RightUpperLeg: [0.2, 0, 0] } } },
+  mid: { label: "中段 飛び込み右ボディストレート", clip: cpuBodyJson, speed: 1.3, windupMs: 480, lunge: [0.0, 0.5], hit: [0.4, 0.8], limb: ["RightHand", "RightForearm", 0.16], kb: 0.7,
+    tell: { y: 0.16, bones: { Spine: [0.4, 0, 0], Chest: [0.15, 0, 0], Head: [-0.25, 0, 0], LeftUpperLeg: [-0.35, 0, 0], RightUpperLeg: [-0.35, 0, 0], LeftLowerLeg: [0.65, 0, 0], RightLowerLeg: [0.65, 0, 0], RightUpperArm: [-0.3, 0, -0.2] } } },
+  low: { label: "下段 飛び込み右フック(足狩り)", clip: cpuHookJson, speed: 1.2, windupMs: 540, lunge: [0.0, 0.45], hit: [0.28, 0.62], limb: ["RightHand", "RightForearm", 0.3], kb: 0.55,
+    tell: { y: 0.3, bones: { Spine: [0.5, 0.2, 0], Chest: [0, 0.35, 0], LeftUpperLeg: [-0.55, 0, 0], RightUpperLeg: [-0.55, 0, 0], LeftLowerLeg: [1.0, 0, 0], RightLowerLeg: [1.0, 0, 0], RightUpperArm: [-0.2, 0, 1.0] } } },
+};
+for (const a of Object.values(CPU_ATTACKS)) { a.range = activeRange(a.clip); a.durMs = ((a.range.end - a.range.start) * 1000) / a.speed; }
+const CPU_APPROACH_SPEED = 1.5, CPU_RETREAT_SPEED = 1.3;
+const cpuAI = { enabled: true, auto: true, mode: "idle", t0: 0, until: 800, kind: null, dir: [-1, 0], lungeDist: 0, lunged: 0, hit: false, log: [], recent: [], range: 1.7, retreatLeft: 0, lastX: null, lastZ: null, vx: 0, vz: 0, w: 0, phase: 0 };
+const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+const cpuRand = (a, b) => a + Math.random() * (b - a);
+function cpuPickKind() { // 同じ技が3回続かないように、重み付きで選ぶ(上段40・中段35・下段25)
+  const w = { high: 40, mid: 35, low: 25 }; const rc = cpuAI.recent; if (rc.length >= 2 && rc[0] === rc[1]) w[rc[0]] = 0;
+  let r = Math.random() * Object.values(w).reduce((a, b) => a + b, 0);
+  for (const k of Object.keys(w)) { if ((r -= w[k]) < 0) return k; } return "high";
+}
+function cpuStartWindup(kind, now) {
+  cpuAI.mode = "windup"; cpuAI.kind = kind; cpuAI.t0 = now; cpuAI.hit = false; cpuAI.until = now + CPU_ATTACKS[kind].windupMs;
+  // 飛び込みの向きと距離は、予備動作の「はじめ」に確定する(狙った位置へ飛び込む)。予備動作の間にプレイヤーが動けば、かわせる
+  { const ex = player.x - cpu.x, ez = player.z - cpu.z, d = Math.hypot(ex, ez) || 1e-6; cpuAI.dir = [ex / d, ez / d]; cpuAI.lungeDist = Math.max(0.35, Math.min(1.5, d - 0.62)); }
+  cpuAI.recent.unshift(kind); cpuAI.recent.length = Math.min(cpuAI.recent.length, 3);
+  cpuAI.log.push(CPU_ATTACKS[kind].label); console.log("[CPU] " + CPU_ATTACKS[kind].label + " (windup)");
+}
+function cpuMoveTo(dx, dz, dt) { // CPUを移動(リングの外へは出ない)。プレイヤーに食い込まない
+  cpu.x += dx; cpu.z += dz;
+  const lim = RING_HALF - 0.2; if (!cpuState.kb || cpuState.kb < 1e-3) { cpu.x = Math.max(-lim, Math.min(lim, cpu.x)); cpu.z = Math.max(-lim, Math.min(lim, cpu.z)); }
+  const ex = cpu.x - player.x, ez = cpu.z - player.z, d = Math.hypot(ex, ez) || 1e-6, min = cpuAI.mode === "attack" ? 0.6 : BODY_GAP;
+  if (d < min) { cpu.x = player.x + (ex / d) * min; cpu.z = player.z + (ez / d) * min; }
+}
+function updateCpuAI(dt, now) {
+  if (!cpuAI.enabled || match.over) return;
+  const ex = player.x - cpu.x, ez = player.z - cpu.z, dist = Math.hypot(ex, ez) || 1e-6, ux = ex / dist, uz = ez / dist;
+  const stunned = now < cpuState.stunUntil;
+  if (stunned) return; // 攻撃を受けた直後は、動けない
+  switch (cpuAI.mode) {
+    case "idle":
+      if (cpuAI.auto && now >= cpuAI.until) { cpuAI.mode = dist > cpuAI.range + 0.25 ? "approach" : "decide"; }
+      break;
+    case "approach": { // 間合いまで歩く(Zもプレイヤーに合わせる)
+      cpuMoveTo(ux * CPU_APPROACH_SPEED * dt, uz * CPU_APPROACH_SPEED * dt, dt);
+      if (dist <= cpuAI.range) cpuAI.mode = "decide";
+      break; }
+    case "retreat": {
+      cpuMoveTo(-ux * CPU_RETREAT_SPEED * dt, -uz * CPU_RETREAT_SPEED * dt, dt); cpuAI.retreatLeft -= CPU_RETREAT_SPEED * dt;
+      if (cpuAI.retreatLeft <= 0) { cpuAI.mode = "idle"; cpuAI.until = now + cpuRand(250, 700); }
+      break; }
+    case "decide":
+      cpuAI.range = cpuRand(1.5, 1.95); cpuStartWindup(cpuPickKind(), now); break;
+    case "windup": // 予備動作(その場で構えを変える)。終わりに、飛び込みの向きと距離を確定する
+      if (now >= cpuAI.until) {
+        const A = CPU_ATTACKS[cpuAI.kind];
+        cpuAI.mode = "attack"; cpuAI.t0 = now; cpuAI.lunged = 0; cpuAI.hit = false;
+        console.log("[CPU] " + A.label + " (lunge " + cpuAI.lungeDist.toFixed(2) + "m)");
+      }
+      break;
+    case "attack": {
+      const A = CPU_ATTACKS[cpuAI.kind], f = (now - cpuAI.t0) / A.durMs;
+      const p = smooth01((f - A.lunge[0]) / (A.lunge[1] - A.lunge[0])), target = cpuAI.lungeDist * p, step = target - cpuAI.lunged;
+      if (step > 0) { cpuMoveTo(cpuAI.dir[0] * step, cpuAI.dir[1] * step, dt); cpuAI.lunged = target; }
+      if (f >= 1) { cpuAI.mode = "recover"; cpuAI.until = now + cpuRand(450, 800); }
+      break; }
+    case "recover":
+      if (now >= cpuAI.until) { if (Math.random() < 0.4) { cpuAI.mode = "retreat"; cpuAI.retreatLeft = cpuRand(0.6, 1.1); } else { cpuAI.mode = "idle"; cpuAI.until = now + cpuRand(300, 900); } }
+      break;
+  }
+}
+// CPUの姿勢: 構え⇔歩き(近づく/下がる) → 予備動作の姿勢 → 攻撃のクリップ。戻り値は体の高さ(y)
+const _cq = new THREE.Quaternion(), _ce = new THREE.Euler();
+function updateCpuPose(dt, now) {
+  // 実際に動いた速さから、歩きアニメの強さ・再生を決める(プレイヤーと同じ)
+  const mx = (cpu.x - (cpuAI.lastX ?? cpu.x)) / Math.max(dt, 1e-4), mz = (cpu.z - (cpuAI.lastZ ?? cpu.z)) / Math.max(dt, 1e-4); cpuAI.lastX = cpu.x; cpuAI.lastZ = cpu.z;
+  cpuAI.vx += (mx - cpuAI.vx) * Math.min(1, 12 * dt); cpuAI.vz += (mz - cpuAI.vz) * Math.min(1, 12 * dt);
+  let fx = player.x - cpu.x, fz = player.z - cpu.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
+  const spd = (cpuAI.mode === "attack" || cpuAI.mode === "windup") ? 0 : Math.hypot(cpuAI.vx, cpuAI.vz);
+  cpuAI.w += (Math.min(1, spd / (WALK_SPEED * 0.6)) - cpuAI.w) * Math.min(1, 12 * dt);
+  cpuAI.phase += ((cpuAI.vx * fx + cpuAI.vz * fz) / walkStride) * dt;
+  const idleP = sampleClip(idleJson, idleDur, now / 1000 + 0.7), walkP = sampleClip(walkJson, walkDur, cpuAI.phase * walkDur);
+  const pose = {}; for (const n of Object.keys(idleP.pose)) pose[n] = idleP.pose[n].clone().slerp(walkP.pose[n] || idleP.pose[n], cpuAI.w);
+  let y = idleP.y + (walkP.y - idleP.y) * cpuAI.w;
+  if (cpuAI.mode === "windup" || cpuAI.mode === "attack") {
+    const A = CPU_ATTACKS[cpuAI.kind], el = now - cpuAI.t0;
+    if (cpuAI.mode === "windup") { // 予備動作: その技の構えへ、すばやく(攻撃の種類が一目で分かる)
+      const k = smooth01(el / (A.windupMs * 0.8));
+      for (const n of Object.keys(A.tell.bones)) if (pose[n]) { const [x, yy, z] = A.tell.bones[n]; pose[n].premultiply(_cq.setFromEuler(_ce.set(x * k, yy * k, z * k))); }
+      y -= A.tell.y * k;
+    } else {
+      const c = sampleOnce(A.clip, A.range.start + (el * A.speed) / 1000), w = Math.min(1, el / 70, (A.durMs - el) / 120);
+      for (const n of Object.keys(c.pose)) if (pose[n]) pose[n].slerp(c.pose[n], Math.max(0, w));
+      y += (c.mp[1] - y) * Math.max(0, w);
+    }
+  }
+  for (const n of Object.keys(pose)) { const b = cpu.bones[n]; if (b) b.quaternion.copy(pose[n]); }
+  return y;
+}
+// CPUの攻撃がプレイヤーに当たったか(手足の球 × プレイヤーの体の球)
+// プレイヤー側の体の球は、CPU側よりひとまわり小さい(CPUの攻撃は、動けばよけられるように)
+const PLAYER_HURT = [{ bone: "Head", r: 0.17 }, { bone: "Chest", r: 0.24 }, { bone: "Hips", r: 0.22 }, { bone: "LeftUpperLeg", r: 0.17 }, { bone: "RightUpperLeg", r: 0.17 }, { bone: "LeftLowerLeg", r: 0.16 }, { bone: "RightLowerLeg", r: 0.16 }];
+const playerState = { react: null, kb: 0, kbDir: [-1, 0], stunUntil: 0, flashUntil: 0, hits: 0 };
+const PLAYER_STUN_MS = 480;
+function checkCpuHit(now) {
+  if (cpuAI.mode !== "attack" || cpuAI.hit || match.over) return;
+  const A = CPU_ATTACKS[cpuAI.kind], f = (now - cpuAI.t0) / A.durMs;
+  if (f < A.hit[0] || f > A.hit[1]) return;
+  const hand = cpu.bones[A.limb[0]], fore = cpu.bones[A.limb[1]]; if (!hand) return;
+  hand.getWorldPosition(_w1); if (fore) { fore.getWorldPosition(_w2); _w1.add(_w3.copy(_w1).sub(_w2).normalize().multiplyScalar(0.1)); }
+  let best = null;
+  for (const h of PLAYER_HURT) { const b = player.bones[h.bone]; if (!b) continue; b.getWorldPosition(_w3); const d = _w1.distanceTo(_w3); if (d <= A.limb[2] + h.r && (!best || d < best.d)) best = { d, bone: h.bone }; }
+  if (!best) return;
+  cpuAI.hit = true; playerState.hits++;
+  const zone = { high: "head", mid: "body", low: "legs" }[cpuAI.kind];
+  playerState.react = { zone, at: now }; playerState.stunUntil = now + PLAYER_STUN_MS; playerState.flashUntil = now + 110;
+  const dx = player.x - cpu.x, dz = player.z - cpu.z, l = Math.hypot(dx, dz) || 1; playerState.kbDir = [dx / l, dz / l]; playerState.kb += A.kb;
+  attack = null; // 攻撃中だったら中断
+  const msg = `${A.label} HIT player ${best.bone} -> reaction ${zone}`; cpuAI.log.push(msg); console.log("[CPU-Hit] " + msg);
+}
+let playerMats = null;
+function applyPlayerReaction(dt, now) {
+  if (playerState.kb > 1e-4 && !match.over) { const step = playerState.kb * Math.min(1, 14 * dt); player.x += playerState.kbDir[0] * step; player.z += playerState.kbDir[1] * step; playerState.kb -= step; const r = Math.hypot(player.x, player.z); if (r > WORLD_LIM) { player.x *= WORLD_LIM / r; player.z *= WORLD_LIM / r; } }
+  const k = reactAmountOf(playerState.react, now);
+  if (k > 0 && !match.over) {
+    const R = REACT[playerState.react.zone];
+    for (const n of Object.keys(R.bones)) { const b = player.bones[n]; if (!b) continue; const [x, y, z] = R.bones[n]; b.quaternion.premultiply(_hQ.setFromEuler(_hE.set(x * k, y * k, z * k))); }
+    player.root.position.y -= R.drop * k;
+  }
+  if (!playerMats) { const l = []; player.root.traverse((o) => { if (o.isMesh && o.material) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m.emissive && !l.includes(m)) l.push(m); }); if (l.length) playerMats = l; }
+  if (playerMats) { const f = now < playerState.flashUntil ? 0.7 : 0; for (const m of playerMats) m.emissive.setRGB(f, f * 0.4, f * 0.4); }
+}
+
 // ---------- 攻撃の当たり判定と、CPUのリアクション ----------
 // 攻撃中(HIT_WINDOW の間)、攻撃している手足の球と、CPUの体の球(頭・胸・腹・すね)が重なったら「ヒット」(1回の攻撃で1回)。
 //  ・当たった場所で、リアクションが変わる: 頭=のけぞる(上段) / 胸・腹=体がくの字に折れる(中段) / すね=膝が崩れる(下段)
 //  ・CPUは、攻撃の向きへノックバックする(場外まで押し出せばリングアウト)
 const HIT_WINDOW = [0.15, 0.72]; // 攻撃の長さの何割〜何割の間だけ当たる(振り出し〜伸びきり)
 const LIMBS = { high: { bone: "LeftHand", fore: "LeftForearm", r: 0.16, kb: 0.45, label: "Left Jab" }, mid: { bone: "RightHand", fore: "RightForearm", r: 0.17, kb: 0.7, label: "Right Straight" }, low: { bone: "RightFoot", fore: null, r: 0.2, kb: 0.55, label: "Right Low Kick" } };
-const HURTBOXES = [{ bone: "Head", r: 0.2, zone: "head" }, { bone: "Chest", r: 0.3, zone: "body" }, { bone: "Hips", r: 0.27, zone: "body" }, { bone: "LeftLowerLeg", r: 0.19, zone: "legs" }, { bone: "RightLowerLeg", r: 0.19, zone: "legs" }];
+const HURTBOXES = [{ bone: "Head", r: 0.2, zone: "head" }, { bone: "Chest", r: 0.3, zone: "body" }, { bone: "Hips", r: 0.27, zone: "body" }, { bone: "LeftUpperLeg", r: 0.2, zone: "legs" }, { bone: "RightUpperLeg", r: 0.2, zone: "legs" }, { bone: "LeftLowerLeg", r: 0.19, zone: "legs" }, { bone: "RightLowerLeg", r: 0.19, zone: "legs" }];
 const REACT = {
   head: { in: 60, hold: 70, out: 300, drop: 0.02, bones: { Head: [-0.75, 0, 0], Neck: [-0.5, 0, 0], Spine: [-0.35, 0, 0], Chest: [-0.2, 0, 0], LeftUpperArm: [-0.4, 0, 0.3], RightUpperArm: [-0.4, 0, -0.3] } },
   body: { in: 60, hold: 80, out: 320, drop: 0.05, bones: { Spine: [0.55, 0, 0], Chest: [0.35, 0, 0], Head: [0.35, 0, 0], Neck: [0.2, 0, 0], Hips: [0.15, 0, 0] } },
   legs: { in: 60, hold: 90, out: 340, drop: 0.2, bones: { LeftUpperLeg: [-0.5, 0, 0], RightUpperLeg: [-0.5, 0, 0], LeftLowerLeg: [0.9, 0, 0], RightLowerLeg: [0.9, 0, 0], Spine: [0.25, 0, 0], Head: [0.2, 0, 0] } },
 };
-const cpuState = { react: null, kb: 0, kbDir: [1, 0], hits: 0, flashUntil: 0 };
+const cpuState = { react: null, kb: 0, kbDir: [1, 0], hits: 0, flashUntil: 0, stunUntil: 0 };
 const hitLog = [];
 const _w1 = new THREE.Vector3(), _w2 = new THREE.Vector3(), _w3 = new THREE.Vector3();
 function limbCenter(kind) {
@@ -288,14 +426,16 @@ function checkHit(now) {
   const zone = { high: "head", mid: "body", low: "legs" }[attack.kind];
   cpuState.react = { zone, at: now };
   cpuState.flashUntil = now + 110;
+  cpuState.stunUntil = now + 450; if (cpuAI.mode === "windup" || cpuAI.mode === "attack") { cpuAI.mode = "recover"; cpuAI.until = now + 450; } // CPUの攻撃は、当てられたら中断
   // ノックバック: プレイヤーからCPUへの向きへ
   const dx = cpu.x - player.x, dz = cpu.z - player.z, l = Math.hypot(dx, dz) || 1;
   cpuState.kbDir = [dx / l, dz / l]; cpuState.kb += L.kb;
   const msg = `${A.label} HIT cpu ${best.bone} -> reaction ${zone}`; hitLog.push(msg); console.log("[Hit] " + msg);
 }
 const _hQ = new THREE.Quaternion(), _hE = new THREE.Euler();
-function reactAmount(now) {
-  const r = cpuState.react; if (!r) return 0;
+const reactAmount = (now) => reactAmountOf(cpuState.react, now);
+function reactAmountOf(r, now) {
+  if (!r) return 0;
   const R = REACT[r.zone], e = now - r.at;
   if (e < 0 || e >= R.in + R.hold + R.out) return 0;
   if (e < R.in) { const t = e / R.in; return 1 - (1 - t) ** 3; }
@@ -359,7 +499,8 @@ function update(dt, now) {
   // CPUのほうを向く(向いている方向 f)。移動の前進/後退は、この向きが基準
   let fx = cpu.x - player.x, fz = cpu.z - player.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
   // 移動(X・Z軸)。攻撃中は移動できない
-  const mv = attack || match.over ? { x: 0, z: 0 } : readDir();
+  const stunned = now < playerState.stunUntil;
+  const mv = attack || match.over || stunned ? { x: 0, z: 0 } : readDir();
   const mag = Math.min(1, Math.hypot(mv.x, mv.z));
   const back = mv.x * fx + mv.z * fz < -0.3 ? BACK_SPEED_SCALE : 1; // CPUから離れる向きは、少し遅い
   const dist = mag * WALK_SPEED * back * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
@@ -382,7 +523,9 @@ function update(dt, now) {
   state.phase += ((Math.abs(along) >= lateral ? along : lateral) / walkStride) * dt;
   // 体の向き: お互いを向く(なめらかに)
   player.yaw += angleDiff(player.yaw, Math.atan2(fx, fz)) * Math.min(1, 12 * dt);
-  cpu.yaw += angleDiff(cpu.yaw, Math.atan2(-fx, -fz)) * Math.min(1, 12 * dt);
+  // CPUの向き: ふだんはプレイヤーを向く。予備動作〜攻撃中は、確定した飛び込みの向きに固定する(横へよけられる)
+  const cpuCommitted = cpuAI.mode === "windup" || cpuAI.mode === "attack";
+  cpu.yaw += angleDiff(cpu.yaw, cpuCommitted ? Math.atan2(cpuAI.dir[0], cpuAI.dir[1]) : Math.atan2(-fx, -fz)) * Math.min(1, 12 * dt);
   if (!match.over) { player.root.rotation.y = player.yaw; cpu.root.rotation.y = cpu.yaw; }
 
   // プレイヤーのポーズ: 構え(アイドル) ⇔ 歩き
@@ -405,17 +548,19 @@ function update(dt, now) {
       player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
     }
   }
+  applyPlayerReaction(dt, now); // CPUの攻撃を受けたときの、ノックバックと体の反応
   let rx = player.x + fx * step, rz = player.z + fz * step;
   { const dx = rx - cpu.x, dz = rz - cpu.z, d = Math.hypot(dx, dz) || 1e-6; if (d < 0.55) { rx = cpu.x + (dx / d) * 0.55; rz = cpu.z + (dz / d) * 0.55; } } // 踏み込みでも、CPUに食い込まない
   player.root.position.x = rx; player.root.position.z = rz;
-  // CPU: 構えのアイドルのループ
-  const cpuP = sampleClip(idleJson, idleDur, now / 1000 + 0.7);
-  for (const n of Object.keys(cpuP.pose)) { const b = cpu.bones[n]; if (b) b.quaternion.copy(cpuP.pose[n]); }
+  // CPU: AI(近づく・予備動作・飛び込み攻撃・隙・下がる)で動かす
+  updateCpuAI(dt, now);
+  const cpuY = updateCpuPose(dt, now);
   applyCpuReaction(dt, now); // ノックバック(位置)と、ヒットしたときの体の反応
-  cpu.root.position.set(cpu.x, cpuP.y - (cpuState.react && !match.over ? REACT[cpuState.react.zone].drop * reactAmount(now) : 0), cpu.z);
+  cpu.root.position.set(cpu.x, cpuY - (cpuState.react && !match.over ? REACT[cpuState.react.zone].drop * reactAmount(now) : 0), cpu.z);
   // 攻撃の当たり判定(両者のポーズが決まったあとに、手足と体の位置で調べる)
   scene.updateMatrixWorld(true);
   checkHit(now);
+  checkCpuHit(now);
   // リングアウト: 判定 → 負けた側が場外へ落ちる
   updateRingOut(dt, now);
   // カメラ: 2人の中間(X)を追い、2人が離れるほど自然に引く(寄る/引くはなめらかに)
@@ -437,6 +582,8 @@ requestAnimationFrame(frame);
 
 // テスト用
 window.__fight = {
+  debugPos: () => { const g = (b) => { const v = new THREE.Vector3(); b.getWorldPosition(v); return v.toArray().map((x) => +x.toFixed(2)); }; return { hand: g(cpu.bones.RightHand), fore: g(cpu.bones.RightForearm), cpuHips: g(cpu.bones.Hips), pHead: g(player.bones.Head), pChest: g(player.bones.Chest), pHips: g(player.bones.Hips), pLL: g(player.bones.LeftLowerLeg), pRL: g(player.bones.RightLowerLeg), pLF: g(player.bones.LeftFoot) }; },
+  cpuAI, playerState, CPU_ATTACKS, cpuAttack: (k) => { cpuStartWindup(k, performance.now()); },
   hitLog, cpuState, setCpu: (x, z = 0) => { cpu.x = x; cpu.z = z; }, LIMBS,
   zoneForY, zoneBounds,
   startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
