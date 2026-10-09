@@ -119,10 +119,11 @@ const rim = new THREE.DirectionalLight(0x6f8cff, 0.9); rim.position.set(3, 3, -4
 
 // ---------- キャラクターとモーション ----------
 const loader = new GLTFLoader();
-const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson] = await Promise.all([
+const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson] = await Promise.all([
   loader.loadAsync("./assets/china_rigged.glb"),
   loader.loadAsync("./assets/box_usa_rigged.glb"),
-  fetch("./assets/walk.json").then((r) => r.json()),
+  fetch("./assets/stepForward.json").then((r) => r.json()),
+  fetch("./assets/stepSide.json").then((r) => r.json()),
   fetch("./assets/fightIdleUsa.json").then((r) => r.json()),
   fetch("./assets/leftPunch1.json").then((r) => r.json()),
   fetch("./assets/rightLowKick.json").then((r) => r.json()),
@@ -146,7 +147,7 @@ const cpu = makeFighter(usaGltf, -1);      // 右で、左(プレイヤー)を�
 player.x = -0.8; cpu.x = 0.8; player.z = 0; cpu.z = 0;
 player.root.position.set(player.x, 0, 0); cpu.root.position.set(cpu.x, 0, 0);
 
-const walkDur = walkJson.keyframes[walkJson.keyframes.length - 1].time || 1, walkStride = walkJson.strideLengthPerCycle || 0.9;
+const stepFDur = stepFJson.keyframes[stepFJson.keyframes.length - 1].time, stepSDur = stepSJson.keyframes[stepSJson.keyframes.length - 1].time;
 const idleDur = idleJson.keyframes[idleJson.keyframes.length - 1].time || 2;
 function toQ(arr) { return new THREE.Quaternion(arr[0], arr[1], arr[2], arr[3]); }
 const _q = new THREE.Quaternion();
@@ -159,6 +160,29 @@ function sampleClip(clip, dur, t) {
   for (const n of Object.keys(a.pose)) pose[n] = toQ(a.pose[n]).slerp(_q.set(...b.pose[n]), f);
   const ay = (a.modelPosition || [0, 0, 0])[1], by = (b.modelPosition || [0, 0, 0])[1];
   return { pose, y: ay + (by - ay) * f };
+}
+
+// ---------- フットワーク(ファイティングポーズを保ったまま、ステップで移動) ----------
+// 上半身(構え・腕・ガード)はアイドルのまま。脚だけを、ボクサーのシャッフル(軽いステップ)に差し替える。
+//  ・前後(相手に近づく/離れる): stepForward.json(順再生=近づく、逆再生=下がる)
+//  ・横(奥・手前): stepSide.json(キャラの右へ=そのまま、左へ=左右を反転)
+//  どちらも、動いた距離に合わせて再生するので、足が滑らない
+const LEG_BONES = ["LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot"];
+const STRIDE_F = 0.8, STRIDE_S = 0.6; // 1サイクル(左右1歩ずつ)で進む距離(m)
+const mirrorName = (n) => (n.startsWith("Left") ? "Right" + n.slice(4) : n.startsWith("Right") ? "Left" + n.slice(5) : n);
+function mirrorPose(pose) { const o = {}; for (const n of Object.keys(pose)) { const q = pose[n]; o[mirrorName(n)] = new THREE.Quaternion(q.x, -q.y, -q.z, q.w); } return o; }
+// st: { vx, vz, w, pf, ps }(動いている速さ・ステップの強さ・再生位置)。f: 向いている方向。gate=0なら、ステップしない(攻撃中など)
+function footwork(st, idleP, fx, fz, dt, gate = 1) {
+  const along = st.vx * fx + st.vz * fz, lat = st.vx * -fz + st.vz * fx, spd = Math.hypot(st.vx, st.vz);
+  st.w += ((gate ? Math.min(1, spd / (WALK_SPEED * 0.5)) : 0) - st.w) * Math.min(1, 12 * dt);
+  st.pf = (st.pf || 0) + (along / STRIDE_F) * dt; st.ps = (st.ps || 0) + (Math.abs(lat) / STRIDE_S) * dt;
+  const F = sampleClip(stepFJson, stepFDur, st.pf * stepFDur), S = sampleClip(stepSJson, stepSDur, st.ps * stepSDur);
+  const ws = Math.abs(lat) / (Math.abs(along) + Math.abs(lat) + 1e-4), Sp = lat < 0 ? mirrorPose(S.pose) : S.pose;
+  const pose = {};
+  for (const n of Object.keys(idleP.pose)) pose[n] = idleP.pose[n].clone();
+  for (const n of LEG_BONES) { const comb = F.pose[n].clone().slerp(Sp[n], ws); pose[n].slerp(comb, st.w); }
+  const y = idleP.y + ((F.y + (S.y - F.y) * ws) + 0.056) * st.w; // 上下の揺れ(クリップの基準の高さ -0.056 からの差)
+  return { pose, y };
 }
 
 // ---------- 攻撃モーション ----------
@@ -267,6 +291,7 @@ const CPU_ATTACKS = {
 for (const a of Object.values(CPU_ATTACKS)) { a.range = activeRange(a.clip); a.durMs = ((a.range.end - a.range.start) * 1000) / a.speed; }
 const CPU_APPROACH_SPEED = 1.5, CPU_RETREAT_SPEED = 1.3;
 const cpuAI = { enabled: true, auto: true, mode: "idle", t0: 0, until: 800, kind: null, dir: [-1, 0], lungeDist: 0, lunged: 0, hit: false, log: [], recent: [], range: 1.7, retreatLeft: 0, lastX: null, lastZ: null, vx: 0, vz: 0, w: 0, phase: 0 };
+if (new URLSearchParams(location.search).get("ai") === "0") cpuAI.auto = false; // ?ai=0 でCPUが自分からは攻撃しない(練習・動作確認用)
 const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
 const cpuRand = (a, b) => a + Math.random() * (b - a);
 function cpuPickKind() { // 同じ技が3回続かないように、重み付きで選ぶ(上段40・中段35・下段25)
@@ -331,12 +356,9 @@ function updateCpuPose(dt, now) {
   const mx = (cpu.x - (cpuAI.lastX ?? cpu.x)) / Math.max(dt, 1e-4), mz = (cpu.z - (cpuAI.lastZ ?? cpu.z)) / Math.max(dt, 1e-4); cpuAI.lastX = cpu.x; cpuAI.lastZ = cpu.z;
   cpuAI.vx += (mx - cpuAI.vx) * Math.min(1, 12 * dt); cpuAI.vz += (mz - cpuAI.vz) * Math.min(1, 12 * dt);
   let fx = player.x - cpu.x, fz = player.z - cpu.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
-  const spd = (cpuAI.mode === "attack" || cpuAI.mode === "windup") ? 0 : Math.hypot(cpuAI.vx, cpuAI.vz);
-  cpuAI.w += (Math.min(1, spd / (WALK_SPEED * 0.6)) - cpuAI.w) * Math.min(1, 12 * dt);
-  cpuAI.phase += ((cpuAI.vx * fx + cpuAI.vz * fz) / walkStride) * dt;
-  const idleP = sampleClip(idleJson, idleDur, now / 1000 + 0.7), walkP = sampleClip(walkJson, walkDur, cpuAI.phase * walkDur);
-  const pose = {}; for (const n of Object.keys(idleP.pose)) pose[n] = idleP.pose[n].clone().slerp(walkP.pose[n] || idleP.pose[n], cpuAI.w);
-  let y = idleP.y + (walkP.y - idleP.y) * cpuAI.w;
+  const idleP = sampleClip(idleJson, idleDur, now / 1000 + 0.7);
+  const fwk = footwork(cpuAI, idleP, fx, fz, dt, cpuAI.mode === "attack" || cpuAI.mode === "windup" ? 0 : 1);
+  const pose = fwk.pose; let y = fwk.y;
   if (cpuAI.mode === "windup" || cpuAI.mode === "attack") {
     const A = CPU_ATTACKS[cpuAI.kind], el = now - cpuAI.t0;
     if (cpuAI.mode === "windup") { // 予備動作: その技の構えへ、すばやく(攻撃の種類が一目で分かる)
@@ -516,11 +538,6 @@ function update(dt, now) {
   const mx = (player.x - (state.lastX ?? player.x)) / Math.max(dt, 1e-4), mz = (player.z - (state.lastZ ?? player.z)) / Math.max(dt, 1e-4);
   state.lastX = player.x; state.lastZ = player.z;
   state.vx += (mx - state.vx) * Math.min(1, 14 * dt); state.vz += (mz - state.vz) * Math.min(1, 14 * dt);
-  const along = state.vx * fx + state.vz * fz, lateral = Math.abs(state.vx * fz - state.vz * fx), spd = Math.hypot(state.vx, state.vz);
-  const walkAmt = Math.min(1, spd / (WALK_SPEED * 0.6));
-  state.w += (walkAmt - state.w) * Math.min(1, 12 * dt);
-  // 歩きの再生: CPUへ近づく=順再生、離れる=逆再生、横(奥・手前)へのステップは順再生。足が滑らない速さ
-  state.phase += ((Math.abs(along) >= lateral ? along : lateral) / walkStride) * dt;
   // 体の向き: お互いを向く(なめらかに)
   player.yaw += angleDiff(player.yaw, Math.atan2(fx, fz)) * Math.min(1, 12 * dt);
   // CPUの向き: ふだんはプレイヤーを向く。予備動作〜攻撃中は、確定した飛び込みの向きに固定する(横へよけられる)
@@ -528,13 +545,11 @@ function update(dt, now) {
   cpu.yaw += angleDiff(cpu.yaw, cpuCommitted ? Math.atan2(cpuAI.dir[0], cpuAI.dir[1]) : Math.atan2(-fx, -fz)) * Math.min(1, 12 * dt);
   if (!match.over) { player.root.rotation.y = player.yaw; cpu.root.rotation.y = cpu.yaw; }
 
-  // プレイヤーのポーズ: 構え(アイドル) ⇔ 歩き
-  const idleP = sampleClip(idleJson, idleDur, now / 1000), walkP = sampleClip(walkJson, walkDur, state.phase * walkDur);
-  for (const n of Object.keys(idleP.pose)) {
-    const b = player.bones[n]; if (!b) continue;
-    b.quaternion.copy(idleP.pose[n]).slerp(walkP.pose[n] || idleP.pose[n], state.w);
-  }
-  player.root.position.y = idleP.y + ((walkP.y - idleP.y) * state.w);
+  // プレイヤーのポーズ: 構え(アイドル)のまま、脚だけステップ
+  const idleP = sampleClip(idleJson, idleDur, now / 1000);
+  const fwk = footwork(state, idleP, fx, fz, dt, 1);
+  for (const n of Object.keys(fwk.pose)) { const b = player.bones[n]; if (b) b.quaternion.copy(fwk.pose[n]); }
+  player.root.position.y = fwk.y;
   // 攻撃: 構えの上にクリップを重ねる(頭と終わりでなじませる)。踏み込み(modelPosition)は、向いている方向へ
   let step = 0;
   if (attack) {
@@ -590,5 +605,5 @@ window.__fight = {
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
-  getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, dir: readDir(), yaw: player.yaw, camWidth, camDist, camX: CAM_LOOK.x, over: match.over, loser: match.loser, fy: match.fall ? match.fall.y : 0 }),
+  getState: () => ({ attack: attack && attack.kind, px: player.x, pz: player.z, cx: cpu.x, cz: cpu.z, vx: state.vx, vz: state.vz, w: state.w, pf: state.pf, ps: state.ps, dir: readDir(), yaw: player.yaw, camWidth, camDist, camX: CAM_LOOK.x, over: match.over, loser: match.loser, fy: match.fall ? match.fall.y : 0 }),
 };
