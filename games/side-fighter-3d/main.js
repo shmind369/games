@@ -5,7 +5,7 @@ import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 // Side Fighter 3D — 鉄拳のようなサイドビュー視点の3D格闘ゲーム(第1段階)
 //  ・左: 中華娘(プレイヤー) / 右: USAボクサー(CPU) が向かい合って立つ
 //  ・スマホ縦画面。画面の左右スワイプ(ドラッグ)で横(X軸)、上下スワイプで奥(上)・手前(下)(Z軸)へ移動する
-//  ・画面のタップで攻撃: 画面の左半分をタップ=左ジャブ(踏み込み)、右半分をタップ=右ローキック
+//  ・画面の左半分をタップで攻撃。タップした高さで、上段(左ジャブ)・中段(右ストレート)・下段(右ローキック)を使い分ける
 //  ・まだダメージ・CPUの動きはない(CPUは構えのアイドルのみ)
 // 座標: X軸が左右(右が+)。カメラは+Z側から、ステージを真横に見る。Y軸が上
 // ============================================================
@@ -119,13 +119,14 @@ const rim = new THREE.DirectionalLight(0x6f8cff, 0.9); rim.position.set(3, 3, -4
 
 // ---------- キャラクターとモーション ----------
 const loader = new GLTFLoader();
-const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson] = await Promise.all([
+const [chinaGltf, usaGltf, walkJson, idleJson, jabJson, kickJson, straightJson] = await Promise.all([
   loader.loadAsync("./assets/china_rigged.glb"),
   loader.loadAsync("./assets/box_usa_rigged.glb"),
   fetch("./assets/walk.json").then((r) => r.json()),
   fetch("./assets/fightIdleUsa.json").then((r) => r.json()),
   fetch("./assets/leftPunch1.json").then((r) => r.json()),
   fetch("./assets/rightLowKick.json").then((r) => r.json()),
+  fetch("./assets/rightStraight.json").then((r) => r.json()),
 ]);
 function makeFighter(gltf, facing) {
   const root = new THREE.Group(); // 位置(X)と向き(yaw)
@@ -165,8 +166,10 @@ function activeRange(clip) {
   return { start: keys[0].time, end: keys[end].time };
 }
 const ATTACKS = {
-  jab: { label: "Left Jab", clip: jabJson, range: activeRange(jabJson) },
-  kick: { label: "Right Low Kick", clip: kickJson, range: activeRange(kickJson) },
+  // 画面の左側をタップした高さで使い分ける: 上(頭より上) = 上段 / キャラの体のあたり = 中段 / 足元より下 = 下段
+  high: { label: "上段 Left Jab", clip: jabJson, range: activeRange(jabJson) },            // 上段: 左ジャブ(頭の高さ)
+  mid: { label: "中段 Right Straight", clip: straightJson, range: activeRange(straightJson) }, // 中段: 右ストレート(胸の高さ)
+  low: { label: "下段 Right Low Kick", clip: kickJson, range: activeRange(kickJson) },      // 下段: 右ローキック(足元)
 };
 for (const a of Object.values(ATTACKS)) a.durMs = ((a.range.end - a.range.start) * 1000) / ATTACK_SPEED;
 // クリップを時刻t(秒, ループしない)でサンプル。modelPosition(前進・沈み込み)も返す
@@ -187,6 +190,31 @@ function startAttack(kind, now) {
   return true;
 }
 
+// ---------- 攻撃の高さ(上段・中段・下段)を決める: タップした画面の高さを、プレイヤーの体の位置と比べる ----------
+//  上段: キャラの頭より上(頭の上端から体の高さの20%より上) / 下段: 足元より下(足元から体の高さの10%より上は中段) / 中段: その間(体のあたり)
+const _v = new THREE.Vector3();
+function playerScreenY() { // プレイヤーの頭の上端・足元の、画面上のy(CSSピクセル)
+  const H = canvas.clientHeight, at = (y) => { _v.set(player.root.position.x, y, player.root.position.z).project(camera); return (1 - _v.y) / 2 * H; };
+  return { head: at(1.8), feet: at(0) };
+}
+function zoneBounds() { const { head, feet } = playerScreenY(), h = feet - head; return { up: head - 0.2 * h, low: feet - 0.1 * h, head, feet, h }; }
+function zoneForY(y) { const b = zoneBounds(); return y < b.up ? "high" : y > b.low ? "low" : "mid"; }
+// 画面の左側に、3つの高さの目印(うすい線と「上段/中段/下段」)を出す。タップしたゾーンは一瞬光る
+const zonesEl = document.createElement("div");
+zonesEl.style.cssText = "position:fixed;left:0;top:0;width:50%;height:100%;z-index:6;pointer-events:none;";
+zonesEl.innerHTML = ["up", "low"].map((k) => `<div id="zl_${k}" style="position:absolute;left:0;right:0;height:0;border-top:1px dashed rgba(255,255,255,0.28)"></div>`).join("") +
+  [["high", "上段"], ["mid", "中段"], ["low", "下段"]].map(([k, t]) => `<div id="zt_${k}" style="position:absolute;left:8px;font:700 13px system-ui,sans-serif;color:#fff;opacity:0.4;text-shadow:0 1px 3px #000;transition:opacity .2s,color .2s">${t}</div>`).join("");
+document.body.appendChild(zonesEl);
+const zoneEls = { up: zonesEl.querySelector("#zl_up"), low: zonesEl.querySelector("#zl_low"), high: zonesEl.querySelector("#zt_high"), mid: zonesEl.querySelector("#zt_mid"), lowT: zonesEl.querySelector("#zt_low") };
+function updateZoneOverlay() {
+  const b = zoneBounds(), H = canvas.clientHeight;
+  zoneEls.up.style.top = `${b.up}px`; zoneEls.low.style.top = `${b.low}px`;
+  zoneEls.high.style.top = `${Math.max(8, b.up / 2 - 8)}px`;
+  zoneEls.mid.style.top = `${(b.up + b.low) / 2 - 8}px`;
+  zoneEls.lowT.style.top = `${Math.min(H - 70, (b.low + H) / 2 - 8)}px`;
+}
+function flashZone(z) { const el = z === "low" ? zoneEls.lowT : zoneEls[z]; el.style.opacity = 1; el.style.color = "#ffd060"; setTimeout(() => { el.style.opacity = 0.4; el.style.color = "#fff"; }, 250); }
+
 // ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
 // 押した位置から横へ動かした量で、移動の向きと速さが決まる(離すと止まる)。縦の動きは無視
 const input = { x: 0, z: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0 }; // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
@@ -204,12 +232,13 @@ const endPtr = (e) => {
   if (e.pointerId !== input.id) return;
   // ほとんど動かさず、すぐ離した = タップ → 攻撃(画面の左半分=左ジャブ、右半分=右ローキック)
   const isTap = e.type === "pointerup" && input.maxMove <= TAP_MAX_MOVE_PX && performance.now() - input.t0 <= TAP_MAX_MS;
-  if (isTap) startAttack(e.clientX < window.innerWidth / 2 ? "jab" : "kick", performance.now());
+  // 左半分をタップ = 攻撃。タップした高さで、上段・中段・下段を使い分ける(右半分は今のところ何もしない)
+  if (isTap && e.clientX < window.innerWidth / 2) { const z = zoneForY(e.clientY); if (startAttack(z, performance.now())) flashZone(z); }
   input.id = null; input.x = input.z = 0;
 };
 canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-window.addEventListener("keydown", (e) => { keys.add(e.code); if (e.code === "KeyJ") startAttack("jab", performance.now()); if (e.code === "KeyK") startAttack("kick", performance.now()); }); window.addEventListener("keyup", (e) => keys.delete(e.code));
+window.addEventListener("keydown", (e) => { keys.add(e.code); if (e.code === "KeyJ") startAttack("high", performance.now()); if (e.code === "KeyK") startAttack("mid", performance.now()); if (e.code === "KeyL") startAttack("low", performance.now()); }); window.addEventListener("keyup", (e) => keys.delete(e.code));
 const readDir = () => {
   const kx = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
   const kz = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0);
@@ -321,6 +350,7 @@ function update(dt, now) {
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   update(dt, performance.now());
+  updateZoneOverlay();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -330,6 +360,7 @@ requestAnimationFrame(frame);
 
 // テスト用
 window.__fight = {
+  zoneForY, zoneBounds,
   startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },

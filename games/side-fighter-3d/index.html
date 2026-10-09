@@ -15,7 +15,7 @@
     #hint {
       position: fixed; left: 50%; bottom: max(22px, env(safe-area-inset-bottom)); transform: translateX(-50%);
       z-index: 11; padding: 8px 18px; border-radius: 999px; background: rgba(0,0,0,0.5);
-      font-size: 13px; letter-spacing: 0.04em; pointer-events: none; transition: opacity 1s; white-space: nowrap;
+      font-size: 13px; letter-spacing: 0.04em; pointer-events: none; transition: opacity 1s; text-align: center; line-height: 1.5; width: max-content; max-width: 92vw;
     }
     #loading { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: #05060a; font-size: 14px; letter-spacing: 0.1em; }
   </style>
@@ -24,7 +24,7 @@
   </script>
 </head>
 <body>
-  <div id="hint">スワイプ: 移動(左右=前後・上下=奥/手前)　タップ: 攻撃</div>
+  <div id="hint">スワイプ: 移動 ／ 左側タップ: 攻撃<br>(タップの高さで 上段・中段・下段)</div>
   <div id="loading">LOADING...</div>
   <script type="module" src="main.js"></script>
 </body>
