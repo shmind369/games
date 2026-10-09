@@ -198,16 +198,24 @@ function activeRange(clip) {
 }
 // 画面右側をタップした高さで 上段/中段/下段 を選び、さらに「相手との距離」で近接/遠間の技に切り替える
 //  zone: 当たったときのリアクション(head/body/legs) / hit: 技の長さの何割〜何割の間だけ当たる / lunge: 前へ踏み込む(開始・終了の割合, 距離m)
+// コンビネーション: 近距離のとき、技の途中(当たり判定が終わったあたり)で攻撃ボタンをもう一度押していると、戻りモーションをとばして次の技へつながる
+const COMBO_MAX = 5;           // 何発まで続けられるか
+const COMBO_RANGE = 1.4 * 1.25; // 次の技へつながる距離(m)。近接の境目より少し広め
+const COMBO_KB_SCALE = 0.35;   // 2発目以降のノックバックの倍率(離れすぎず、つながるように)
+const COMBO_PULL_DIST = 1.0;   // 次の技へつなぐとき、相手がこれより離れていたら、自動で少し詰める(ノックバックで離れても、つながるように)
+const COMBO_BLEND_MS = 90;     // 前の技のポーズから次の技へ、なじませる長さ
+let comboHits = 0, comboLastHitAt = -1e9;
+const lastAtk = { pose: {}, y: 0 };
 const NEAR_DIST = 1.4; // これより近い(2人の中心の距離, m) = 近接 / 以上 = 遠間
 const ATTACKS = {
   high_near: { zone: "head", label: "上段(近接) 右後ろ回し蹴り", clip: spinJson, hit: [0.4, 0.62], lunge: null },
-  mid_near: { zone: "body", label: "中段(近接) 左ジャブ", clip: jabJson },
-  low_near: { zone: "legs", label: "下段(近接) 右ローキック", clip: kickJson },
+  mid_near: { zone: "body", label: "中段(近接) 左ジャブ", clip: jabJson, end: 0.75, hit: [0.38, 0.68], cancel: 0.55 }, // end: 動きのあとの「止まっている」部分を切る
+  low_near: { zone: "legs", label: "下段(近接) 右ローキック", clip: kickJson, end: 0.92, hit: [0.3, 0.62], cancel: 0.6 },
   high_far: { zone: "head", label: "上段(遠間) 右飛び後ろ回し蹴り", clip: flySpinJson, hit: [0.4, 0.62], lunge: [0.1, 0.5, 1.4] },
   mid_far: { zone: "body", label: "中段(遠間) 飛び込み左サイドキック", clip: sideKickJson, hit: [0.33, 0.6], lunge: [0.06, 0.38, 1.2] },
   low_far: { zone: "legs", label: "下段(遠間) 左スライドローキック", clip: slideKickJson, hit: [0.36, 0.64], lunge: [0.0, 0.36, 1.2] },
 };
-for (const a of Object.values(ATTACKS)) a.range = activeRange(a.clip);
+for (const a of Object.values(ATTACKS)) { a.range = activeRange(a.clip); if (a.end) a.range.end = a.end; }
 for (const a of Object.values(ATTACKS)) a.durMs = ((a.range.end - a.range.start) * 1000) / ATTACK_SPEED;
 // クリップを時刻t(秒, ループしない)でサンプル。modelPosition(前進・沈み込み)も返す
 function sampleOnce(clip, t) {
@@ -219,6 +227,7 @@ function sampleOnce(clip, t) {
   const am = a.modelPosition || [0, 0, 0], bm = b.modelPosition || [0, 0, 0];
   return { pose, mp: [0, 1, 2].map((k) => am[k] + (bm[k] - am[k]) * f) };
 }
+const cancelAt = (A) => A.cancel ?? Math.max(0.35, (A.hit ? A.hit[1] : 0.72) - 0.02); // 次の技へつなげられるようになる時点(技の長さの割合)
 let attack = null; // { kind(=ATTACKSのキー), startAt, hit, lunged }
 const attackLog = [];
 function attackIdFor(zone) { // 高さ(zone)と、相手との距離から、使う技を決める
@@ -226,9 +235,10 @@ function attackIdFor(zone) { // 高さ(zone)と、相手との距離から、使
   return zone + (Math.hypot(cpu.x - player.x, cpu.z - player.z) < NEAR_DIST ? "_near" : "_far");
 }
 function startAttack(zone, now) {
+  if (attack && !attack.queued && attack.combo < COMBO_MAX && !match.over && performance.now() >= playerState.stunUntil) { attack.queued = zone; return true; } // 攻撃中のタップ = 次の技を先行入力
   const kind = attackIdFor(zone);
   if (attack || match.over || performance.now() < playerState.stunUntil) return false; // 攻撃中・のけぞり中・試合終了後は受け付けない
-  attack = { kind, startAt: now, hit: false, lunged: 0 }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
+  comboHits = 0; attack = { kind, startAt: now, hit: false, lunged: 0, combo: 1, queued: null, from: null }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
   return true;
 }
 
@@ -256,6 +266,17 @@ function updateZoneOverlay() {
   zoneEls.lowT.style.top = `${Math.min(H - 70, (b.low + H) / 2 - 8)}px`;
 }
 function flashZone(z) { const el = z === "low" ? zoneEls.lowT : zoneEls[z]; el.style.opacity = 1; el.style.color = "#ffd060"; setTimeout(() => { el.style.opacity = 0.4; el.style.color = "#fff"; }, 250); }
+
+// コンビネーションの表示(画面の左上あたりに「N HIT」)。2発以上つながったら出す
+const comboEl = document.createElement("div");
+comboEl.style.cssText = "position:fixed;left:14px;top:96px;z-index:7;pointer-events:none;font:900 34px system-ui,sans-serif;color:#ffd060;text-shadow:0 2px 6px #000,0 0 14px rgba(255,160,40,.6);opacity:0;transition:opacity .25s,transform .12s;transform-origin:left center";
+document.body.appendChild(comboEl);
+function showCombo() {
+  if (comboHits < 2) return;
+  comboEl.innerHTML = `${comboHits}<span style="font-size:18px;margin-left:4px">HIT COMBO</span>`;
+  comboEl.style.opacity = 1; comboEl.style.transform = "scale(1.25)"; setTimeout(() => { comboEl.style.transform = "scale(1)"; }, 90);
+  clearTimeout(showCombo.t); showCombo.t = setTimeout(() => { comboEl.style.opacity = 0; }, 1100);
+}
 
 // ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
 // 押した位置から横へ動かした量で、移動の向きと速さが決まる(離すと止まる)。縦の動きは無視
@@ -469,7 +490,8 @@ function checkHit(now) {
   cpuState.stunUntil = now + 450; if (cpuAI.mode === "windup" || cpuAI.mode === "attack") { cpuAI.mode = "recover"; cpuAI.until = now + 450; } // CPUの攻撃は、当てられたら中断
   // ノックバック: プレイヤーからCPUへの向きへ
   const dx = cpu.x - player.x, dz = cpu.z - player.z, l = Math.hypot(dx, dz) || 1;
-  cpuState.kbDir = [dx / l, dz / l]; cpuState.kb += L.kb;
+  cpuState.kbDir = [dx / l, dz / l]; cpuState.kb += L.kb * (attack.combo > 1 ? COMBO_KB_SCALE : 1);
+  comboHits++; comboLastHitAt = now; showCombo();
   const msg = `${A.label} HIT cpu ${best.bone} -> reaction ${zone}`; hitLog.push(msg); console.log("[Hit] " + msg);
 }
 const _hQ = new THREE.Quaternion(), _hE = new THREE.Euler();
@@ -570,21 +592,35 @@ function update(dt, now) {
   player.root.position.y = fwk.y;
   // 攻撃: 構えの上にクリップを重ねる(頭と終わりでなじませる)。踏み込み(modelPosition)は、向いている方向へ
   let step = 0;
+  if (attack && attack.queued && now - attack.startAt >= ATTACKS[attack.kind].durMs * cancelAt(ATTACKS[attack.kind])) { // コンビネーション: 次の技へつなぐ
+    const z = attack.queued, close = Math.hypot(cpu.x - player.x, cpu.z - player.z) < COMBO_RANGE;
+    if (close && !match.over) {
+      const nk = z + "_near", prevCombo = attack.combo;
+      attack = { kind: nk, startAt: now, hit: false, lunged: 0, combo: prevCombo + 1, queued: null, pull: Math.min(0.7, Math.max(0, Math.hypot(cpu.x - player.x, cpu.z - player.z) - COMBO_PULL_DIST)), pulled: 0, from: { pose: Object.fromEntries(Object.entries(lastAtk.pose).map(([n, q]) => [n, q.clone()])), y: lastAtk.y } };
+      attackLog.push(ATTACKS[nk].label); console.log("[Player] " + ATTACKS[nk].label + " (combo " + (prevCombo + 1) + ")");
+    } else attack.queued = null;
+  }
   if (attack) {
     const A = ATTACKS[attack.kind], el = now - attack.startAt;
     if (el >= A.durMs) { attack = null; }
     else {
-      const w = Math.max(0, Math.min(1, Math.min(el / ATTACK_BLEND_IN_MS, (A.durMs - el) / ATTACK_BLEND_OUT_MS)));
+      const bi = attack.from ? COMBO_BLEND_MS : ATTACK_BLEND_IN_MS;
+      const w = Math.max(0, Math.min(1, Math.min(el / bi, (A.durMs - el) / ATTACK_BLEND_OUT_MS)));
       const c = sampleOnce(A.clip, A.range.start + (el * ATTACK_SPEED) / 1000);
-      for (const n of Object.keys(c.pose)) { const b = player.bones[n]; if (b) b.quaternion.copy(idleP.pose[n] || c.pose[n]).slerp(c.pose[n], w); }
+      const base = attack.from ? attack.from.pose : idleP.pose, baseY = attack.from ? attack.from.y : idleP.y;
+      for (const n of Object.keys(c.pose)) { const b = player.bones[n]; if (b) { b.quaternion.copy(base[n] || c.pose[n]).slerp(c.pose[n], w); (lastAtk.pose[n] ||= new THREE.Quaternion()).copy(b.quaternion); } }
       step = c.mp[2] * w; // モデルの前方(+Z) = CPUのいる方向
+      player.root.position.y = baseY + (c.mp[1] - baseY) * w; lastAtk.y = player.root.position.y;
+      if (attack.pull > attack.pulled) { // コンビネーション: 離れていたら自動で詰める(0.15秒で)
+        const u = Math.min(1, el / 150), inc = Math.min(attack.pull * u - attack.pulled, Math.max(0, Math.hypot(cpu.x - player.x, cpu.z - player.z) - BODY_GAP - 0.1));
+        if (inc > 0) { attack.pulled += inc; player.x += fx * inc; player.z += fz * inc; }
+      }
       if (A.lunge) { // 遠間の技: 本当に前へ踏み込む(CPUの手前で止まる。技のあとも、その位置のまま)
         const [l0, l1, dist] = A.lunge, u = Math.max(0, Math.min(1, (el / A.durMs - l0) / (l1 - l0))), want = dist * u * u * (3 - 2 * u);
         const inc = Math.max(0, Math.min(want - attack.lunged, Math.hypot(cpu.x - player.x, cpu.z - player.z) - BODY_GAP - 0.1));
         attack.lunged += inc; player.x += fx * inc; player.z += fz * inc;
         const pr = Math.hypot(player.x, player.z); if (pr > WORLD_LIM) { player.x *= WORLD_LIM / pr; player.z *= WORLD_LIM / pr; }
       }
-      player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
     }
   }
   applyPlayerReaction(dt, now); // CPUの攻撃を受けたときの、ノックバックと体の反応
@@ -625,7 +661,7 @@ window.__fight = {
   cpuAI, playerState, CPU_ATTACKS, cpuAttack: (k) => { cpuStartWindup(k, performance.now()); },
   hitLog, cpuState, setCpu: (x, z = 0) => { cpu.x = x; cpu.z = z; }, LIMBS,
   zoneForY, zoneBounds,
-  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS,
+  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
