@@ -17,21 +17,16 @@ const WORLD_LIM = 9;        // 場外へ落ちる前に、これ以上は遠く�
 const BODY_GAP = 0.7;         // 2人の体が重ならない最小距離(m)
 const WALK_SPEED = 2.38;       // 最大の移動速度 (m/s)
 const BACK_SPEED_SCALE = 0.85; // 後ろへ下がるときは少し遅い
-const SWIPE_DEADZONE_PX = 6;  // これ以下の動きは無視
-const SWIPE_FULL_PX = 55;     // これだけ動かすと最大速度
 const VISIBLE_WIDTH_MIN = 3.5; // 画面に映す幅(m)の最小。2人が近いときの、寄った画面
 const VISIBLE_WIDTH_MAX = 10;  // 同じく最大(離れたときに、ここまで引く)
 const CAM_MARGIN = 2.4;        // 2人の間隔に足す余白(m)。映す幅 = 間隔 + 余白
 const VFOV = 40;
-// クイックステップ(瞬発ステップ): 素早いスワイプ(フリック)のあと、すぐ同じ向きへもう一度スワイプ → 溜め → 一瞬で1ステップぶん(固定距離)動く → 着地して構え直す
+// クイックステップ(瞬発ステップ): スティックを最大まで倒す → 溜め → 一瞬で1ステップぶん(固定距離)動く → 着地して構え直す
 const DASH_DIST = 1.2;         // 1回のステップで動く距離(m)。固定
 const DASH_WINDUP_MS = 100, DASH_MOVE_MS = 130, DASH_TOTAL_MS = 367; // 溜め / 動いている時間 / ぜんぶの長さ(ms)
 const DASH_COOLDOWN_MS = 450;  // 着地してから、次のステップができるまで(連続で高速移動できないように)
-const FLICK_MAX_MS = 260, FLICK_MIN_PX = 18; // これ以内の時間で、これ以上動かして離したら「素早いスワイプ」
-const QUICK_GAP_MS = 320;      // 1回目のフリックを離してから、2回目を押すまでの許容時間
 const ATTACK_SPEED = 1.3;     // 攻撃モーションの再生速度(1.0=ファイルのまま。大きいほどキビキビ)
 const ATTACK_BLEND_IN_MS = 60, ATTACK_BLEND_OUT_MS = 150; // 構えとの、なじませ
-const TAP_MAX_MOVE_PX = 12, TAP_MAX_MS = 320;            // これ以内の動き・時間で離したら「タップ」
 
 // ---------- レンダラー・シーン・カメラ ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -272,22 +267,6 @@ function playerScreenY() { // プレイヤーの頭の上端・足元の、画�
 }
 function zoneBounds() { const { head, feet } = playerScreenY(), h = feet - head; return { up: head - 0.2 * h, low: feet - 0.1 * h, head, feet, h }; }
 function zoneForY(y) { const b = zoneBounds(); return y < b.up ? "high" : y > b.low ? "low" : "mid"; }
-// 画面の左側に、3つの高さの目印(うすい線と「上段/中段/下段」)を出す。タップしたゾーンは一瞬光る
-const zonesEl = document.createElement("div");
-zonesEl.style.cssText = "position:fixed;left:50%;top:0;width:50%;height:100%;z-index:6;pointer-events:none;";
-zonesEl.innerHTML = ["up", "low"].map((k) => `<div id="zl_${k}" style="position:absolute;left:0;right:0;height:0;border-top:1px dashed rgba(255,255,255,0.28)"></div>`).join("") +
-  [["high", "上段"], ["mid", "中段"], ["low", "下段"]].map(([k, t]) => `<div id="zt_${k}" style="position:absolute;right:8px;font:700 13px system-ui,sans-serif;color:#fff;opacity:0.4;text-shadow:0 1px 3px #000;transition:opacity .2s,color .2s">${t}</div>`).join("");
-document.body.appendChild(zonesEl);
-const zoneEls = { up: zonesEl.querySelector("#zl_up"), low: zonesEl.querySelector("#zl_low"), high: zonesEl.querySelector("#zt_high"), mid: zonesEl.querySelector("#zt_mid"), lowT: zonesEl.querySelector("#zt_low") };
-function updateZoneOverlay() {
-  const b = zoneBounds(), H = canvas.clientHeight;
-  zoneEls.up.style.top = `${b.up}px`; zoneEls.low.style.top = `${b.low}px`;
-  zoneEls.high.style.top = `${Math.max(8, b.up / 2 - 8)}px`;
-  zoneEls.mid.style.top = `${(b.up + b.low) / 2 - 8}px`;
-  zoneEls.lowT.style.top = `${Math.min(H - 70, (b.low + H) / 2 - 8)}px`;
-}
-function flashZone(z) { const el = z === "low" ? zoneEls.lowT : zoneEls[z]; el.style.opacity = 1; el.style.color = "#ffd060"; setTimeout(() => { el.style.opacity = 0.4; el.style.color = "#fff"; }, 250); }
-
 // コンビネーションの表示(画面の左上あたりに「N HIT」)。2発以上つながったら出す
 const comboEl = document.createElement("div");
 comboEl.style.cssText = "position:fixed;left:14px;top:96px;z-index:7;pointer-events:none;font:900 34px system-ui,sans-serif;color:#ffd060;text-shadow:0 2px 6px #000,0 0 14px rgba(255,160,40,.6);opacity:0;transition:opacity .25s,transform .12s;transform-origin:left center";
@@ -301,40 +280,60 @@ function showCombo() {
 
 // クイックステップの表示(画面の下のほうに「DASH」)
 const quickEl = document.createElement("div");
-quickEl.style.cssText = "position:fixed;left:50%;bottom:150px;transform:translateX(-50%);z-index:7;pointer-events:none;font:900 18px system-ui,sans-serif;letter-spacing:.2em;color:#9fd0ff;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s";
+quickEl.style.cssText = "position:fixed;left:50%;bottom:calc(33.3vh + 12px);transform:translateX(-50%);z-index:7;pointer-events:none;font:900 18px system-ui,sans-serif;letter-spacing:.2em;color:#9fd0ff;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s";
 quickEl.textContent = "STEP!"; document.body.appendChild(quickEl);
 function showQuick() { quickEl.style.opacity = 1; clearTimeout(showQuick.t); showQuick.t = setTimeout(() => { quickEl.style.opacity = 0; }, 500); }
 
-// ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
-// 押した位置から横へ動かした量で、移動の向きと速さが決まる(離すと止まる)。縦の動きは無視
-const input = { x: 0, z: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0, dx: 0, dy: 0, quick: false, quickCand: false, lastFlick: null }; // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
+// ---------- 操作パネル(画面の下3分の1) ----------
+//  真ん中: バーチャルスティック(少し倒す=通常移動 / 最大まで倒す=クイックステップ) / スティックの右: 攻撃ボタン(上段・中段・下段)。片手で操作できる配置
+//  スティックの上下 = 奥・手前、左右 = 横。倒した量が大きいほど、歩きが速い(STICK_WALK_FULL で最大)
+const STICK_WALK_START = 0.12, STICK_WALK_FULL = 0.5; // これ以上倒すと歩き出す / これ以上倒すと、歩きは最大の速さ
+const STICK_DASH = 0.92, STICK_DASH_REARM = 0.75;       // これ以上(ほぼ最大)まで倒すとクイックステップ / これより戻すと、もう一度できる
+const input = { x: 0, z: 0, id: null, mag: 0 };         // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
 const keys = new Set();
-const axis = (d, dead, full) => { const a = Math.abs(d); return a < dead ? 0 : Math.sign(d) * Math.min(1, (a - dead) / (full - dead)); };
-canvas.addEventListener("pointerdown", (e) => { if (input.id === null) { input.id = e.pointerId; input.ox = e.clientX; input.oy = e.clientY; input.t0 = performance.now(); input.maxMove = 0; input.x = input.z = 0; input.dx = input.dy = 0; input.quick = false; input.quickCand = !!input.lastFlick && input.t0 - input.lastFlick.t <= QUICK_GAP_MS; canvas.setPointerCapture(e.pointerId); document.getElementById("hint").style.opacity = 0; } });
-canvas.addEventListener("pointermove", (e) => {
-  if (e.pointerId !== input.id) return;
-  const dx = e.clientX - input.ox, dy = e.clientY - input.oy;
-  input.maxMove = Math.max(input.maxMove, Math.hypot(dx, dy)); input.dx = dx; input.dy = dy;
-  if (input.quickCand && Math.hypot(dx, dy) >= 14) { // 2回目のスワイプの向きが、1回目と同じなら、クイックステップ
-    input.quickCand = false; const l = Math.hypot(dx, dy), f = input.lastFlick;
-    if (f && (dx / l) * f.ux + (dy / l) * f.uy >= 0.7) { input.quick = true; input.lastFlick = null; if (startDash(dx / l, dy / l)) showQuick(); }
-  }
-  input.x = axis(dx, SWIPE_DEADZONE_PX, SWIPE_FULL_PX);
-  input.z = axis(dy, SWIPE_DEADZONE_PX, SWIPE_FULL_PX); // 上へ=奥、下へ=手前
-});
-const endPtr = (e) => {
-  if (e.pointerId !== input.id) return;
-  // ほとんど動かさず、すぐ離した = タップ → 攻撃(画面の左半分=左ジャブ、右半分=右ローキック)
-  const isTap = e.type === "pointerup" && input.maxMove <= TAP_MAX_MOVE_PX && performance.now() - input.t0 <= TAP_MAX_MS;
-  // 右半分をタップ = 攻撃。タップした高さで、上段・中段・下段を使い分ける(左半分は今のところ何もしない)
-  if (isTap && e.clientX >= window.innerWidth / 2) { const z = zoneForY(e.clientY); if (startAttack(z, performance.now())) flashZone(z); }
-  if (e.type === "pointerup" && !isTap && !input.quick) { // 素早いスワイプなら、向きを覚えておく(次のスワイプがクイックステップになる)
-    const l = Math.hypot(input.dx, input.dy), now = performance.now();
-    input.lastFlick = l >= FLICK_MIN_PX && now - input.t0 <= FLICK_MAX_MS ? { t: now, ux: input.dx / l, uy: input.dy / l } : null;
-  }
-  input.id = null; input.x = input.z = 0; input.quick = false; input.quickCand = false;
-};
-canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
+const padEl = document.createElement("div");
+padEl.id = "pad";
+padEl.innerHTML = `<style>
+#pad{position:fixed;left:0;right:0;bottom:0;height:33.333vh;z-index:6;background:linear-gradient(to bottom,rgba(8,10,20,0),rgba(8,10,20,.72) 38%,rgba(8,10,20,.82));touch-action:none;-webkit-user-select:none;user-select:none;--R:56px}
+#stickZone{position:absolute;left:50%;top:50%;width:calc(var(--R)*3.6);height:calc(var(--R)*3.6);transform:translate(-50%,-50%);border-radius:50%;touch-action:none}
+#stickBase{position:absolute;left:50%;top:50%;width:calc(var(--R)*2);height:calc(var(--R)*2);transform:translate(-50%,-50%);border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.08),rgba(255,255,255,.03));border:2px solid rgba(255,255,255,.35);box-sizing:border-box;transition:border-color .1s,box-shadow .1s}
+#stickBase.max{border-color:#9fd0ff;box-shadow:0 0 18px rgba(120,190,255,.7),inset 0 0 14px rgba(120,190,255,.35)}
+#stickBase::after{content:"";position:absolute;inset:-9px;border-radius:50%;border:1px dashed rgba(159,208,255,.35)}
+#stickKnob{position:absolute;left:50%;top:50%;width:calc(var(--R)*0.95);height:calc(var(--R)*0.95);margin:calc(var(--R)*-0.475) 0 0 calc(var(--R)*-0.475);border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.75),rgba(180,190,210,.55));box-shadow:0 3px 10px rgba(0,0,0,.5)}
+#atk{position:absolute;top:50%;transform:translateY(-50%);left:calc(50% + var(--R) + 32px);right:12px;max-width:150px;display:flex;flex-direction:column;gap:9px}
+#atk button{font:800 16px system-ui,sans-serif;letter-spacing:.12em;color:#fff;height:calc(var(--R)*0.92);border-radius:14px;border:2px solid rgba(255,208,96,.6);background:rgba(120,40,40,.55);touch-action:none;-webkit-tap-highlight-color:transparent;padding:0}
+#atk button.on{background:rgba(255,208,96,.85);color:#222;border-color:#fff}
+</style>
+<div id="stickZone"><div id="stickBase"><div id="stickKnob"></div></div></div>
+<div id="atk"><button data-z="high">上段</button><button data-z="mid">中段</button><button data-z="low">下段</button></div>`;
+document.body.appendChild(padEl);
+const stickZone = padEl.querySelector("#stickZone"), stickBase = padEl.querySelector("#stickBase"), stickKnob = padEl.querySelector("#stickKnob");
+let stickR = 56, dashArmed = true;
+function layoutPad() { // 画面の大きさに合わせて、スティックの大きさを決める
+  const h = padEl.clientHeight || window.innerHeight / 3;
+  stickR = Math.max(36, Math.min(64, h * 0.21, window.innerWidth * 0.16));
+  padEl.style.setProperty("--R", stickR + "px");
+}
+window.addEventListener("resize", layoutPad); layoutPad();
+const hintEl = document.getElementById("hint"); if (hintEl) hintEl.style.bottom = "calc(33.3vh + 10px)";
+function stickUpdate(e) {
+  const r = stickBase.getBoundingClientRect(), dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+  const L = Math.hypot(dx, dy), m = L / stickR, k = L > stickR ? stickR / L : 1, ux = L > 0 ? dx / L : 0, uy = L > 0 ? dy / L : 0;
+  stickKnob.style.transform = `translate(${dx * k}px,${dy * k}px)`;
+  const f = m < STICK_WALK_START ? 0 : Math.min(1, (m - STICK_WALK_START) / (STICK_WALK_FULL - STICK_WALK_START));
+  input.x = ux * f; input.z = uy * f; input.mag = m; // 上へ=奥、下へ=手前
+  stickBase.classList.toggle("max", m >= STICK_DASH);
+  if (m >= STICK_DASH && dashArmed) { dashArmed = false; if (startDash(ux, uy)) showQuick(); }
+  else if (m < STICK_DASH_REARM) dashArmed = true;
+}
+function stickRelease() { input.id = null; input.x = input.z = input.mag = 0; dashArmed = true; stickKnob.style.transform = ""; stickBase.classList.remove("max"); }
+stickZone.addEventListener("pointerdown", (e) => { if (input.id !== null) return; input.id = e.pointerId; try { stickZone.setPointerCapture(e.pointerId); } catch (_) {} if (hintEl) hintEl.style.opacity = 0; stickUpdate(e); e.preventDefault(); });
+stickZone.addEventListener("pointermove", (e) => { if (e.pointerId === input.id) stickUpdate(e); });
+for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) stickZone.addEventListener(t, (e) => { if (e.pointerId === input.id) stickRelease(); });
+for (const btn of padEl.querySelectorAll("#atk button")) { // 攻撃ボタン(スティックと同時に押せる)
+  btn.addEventListener("pointerdown", (e) => { e.preventDefault(); btn.classList.add("on"); if (hintEl) hintEl.style.opacity = 0; startAttack(btn.dataset.z, performance.now()); });
+  for (const t of ["pointerup", "pointercancel", "pointerleave"]) btn.addEventListener(t, () => btn.classList.remove("on"));
+}
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 window.addEventListener("keydown", (e) => { keys.add(e.code); if (e.code === "KeyJ") startAttack("high", performance.now()); if (e.code === "KeyK") startAttack("mid", performance.now()); if (e.code === "KeyL") startAttack("low", performance.now()); }); window.addEventListener("keyup", (e) => keys.delete(e.code));
 const readDir = () => {
@@ -696,7 +695,6 @@ function update(dt, now) {
 function frame() {
   const dt = Math.min(0.05, clock.getDelta());
   update(dt, performance.now());
-  updateZoneOverlay();
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -710,7 +708,7 @@ window.__fight = {
   cpuAI, playerState, CPU_ATTACKS, cpuAttack: (k) => { cpuStartWindup(k, performance.now()); },
   hitLog, cpuState, setCpu: (x, z = 0) => { cpu.x = x; cpu.z = z; }, LIMBS,
   zoneForY, zoneBounds,
-  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getQuick: () => input.quick, input, getDash: () => dash && { t: performance.now() - dash.t0 }, startDash: (x, y) => startDash(x, y), getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
+  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, input, stickUpdate, stickRelease, getDash: () => dash && { t: performance.now() - dash.t0 }, startDash: (x, y) => startDash(x, y), getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
