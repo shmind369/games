@@ -23,6 +23,10 @@ const VISIBLE_WIDTH_MIN = 3.5; // 画面に映す幅(m)の最小。2人が近い
 const VISIBLE_WIDTH_MAX = 10;  // 同じく最大(離れたときに、ここまで引く)
 const CAM_MARGIN = 2.4;        // 2人の間隔に足す余白(m)。映す幅 = 間隔 + 余白
 const VFOV = 40;
+// クイックステップ: 素早いスワイプ(フリック)のあと、すぐ同じ向きへもう一度スワイプ → 押している間、通常の2倍の速さで動く
+const QUICK_MULT = 2;          // 通常移動に対する速度の倍率
+const FLICK_MAX_MS = 260, FLICK_MIN_PX = 18; // これ以内の時間で、これ以上動かして離したら「素早いスワイプ」
+const QUICK_GAP_MS = 320;      // 1回目のフリックを離してから、2回目を押すまでの許容時間
 const ATTACK_SPEED = 1.3;     // 攻撃モーションの再生速度(1.0=ファイルのまま。大きいほどキビキビ)
 const ATTACK_BLEND_IN_MS = 60, ATTACK_BLEND_OUT_MS = 150; // 構えとの、なじませ
 const TAP_MAX_MOVE_PX = 12, TAP_MAX_MS = 320;            // これ以内の動き・時間で離したら「タップ」
@@ -278,16 +282,26 @@ function showCombo() {
   clearTimeout(showCombo.t); showCombo.t = setTimeout(() => { comboEl.style.opacity = 0; }, 1100);
 }
 
+// クイックステップの表示(画面の下のほうに「DASH」)
+const quickEl = document.createElement("div");
+quickEl.style.cssText = "position:fixed;left:50%;bottom:150px;transform:translateX(-50%);z-index:7;pointer-events:none;font:900 18px system-ui,sans-serif;letter-spacing:.2em;color:#9fd0ff;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s";
+quickEl.textContent = "QUICK STEP"; document.body.appendChild(quickEl);
+function showQuick() { quickEl.style.opacity = 1; clearTimeout(showQuick.t); showQuick.t = setTimeout(() => { quickEl.style.opacity = 0; }, 500); }
+
 // ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
 // 押した位置から横へ動かした量で、移動の向きと速さが決まる(離すと止まる)。縦の動きは無視
-const input = { x: 0, z: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0 }; // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
+const input = { x: 0, z: 0, id: null, ox: 0, oy: 0, t0: 0, maxMove: 0, dx: 0, dy: 0, quick: false, quickCand: false, lastFlick: null }; // x: -1(左)〜+1(右)、z: -1(奥)〜+1(手前)
 const keys = new Set();
 const axis = (d, dead, full) => { const a = Math.abs(d); return a < dead ? 0 : Math.sign(d) * Math.min(1, (a - dead) / (full - dead)); };
-canvas.addEventListener("pointerdown", (e) => { if (input.id === null) { input.id = e.pointerId; input.ox = e.clientX; input.oy = e.clientY; input.t0 = performance.now(); input.maxMove = 0; input.x = input.z = 0; canvas.setPointerCapture(e.pointerId); document.getElementById("hint").style.opacity = 0; } });
+canvas.addEventListener("pointerdown", (e) => { if (input.id === null) { input.id = e.pointerId; input.ox = e.clientX; input.oy = e.clientY; input.t0 = performance.now(); input.maxMove = 0; input.x = input.z = 0; input.dx = input.dy = 0; input.quick = false; input.quickCand = !!input.lastFlick && input.t0 - input.lastFlick.t <= QUICK_GAP_MS; canvas.setPointerCapture(e.pointerId); document.getElementById("hint").style.opacity = 0; } });
 canvas.addEventListener("pointermove", (e) => {
   if (e.pointerId !== input.id) return;
   const dx = e.clientX - input.ox, dy = e.clientY - input.oy;
-  input.maxMove = Math.max(input.maxMove, Math.hypot(dx, dy));
+  input.maxMove = Math.max(input.maxMove, Math.hypot(dx, dy)); input.dx = dx; input.dy = dy;
+  if (input.quickCand && Math.hypot(dx, dy) >= 14) { // 2回目のスワイプの向きが、1回目と同じなら、クイックステップ
+    input.quickCand = false; const l = Math.hypot(dx, dy), f = input.lastFlick;
+    if (f && (dx / l) * f.ux + (dy / l) * f.uy >= 0.7) { input.quick = true; input.lastFlick = null; showQuick(); }
+  }
   input.x = axis(dx, SWIPE_DEADZONE_PX, SWIPE_FULL_PX);
   input.z = axis(dy, SWIPE_DEADZONE_PX, SWIPE_FULL_PX); // 上へ=奥、下へ=手前
 });
@@ -297,7 +311,11 @@ const endPtr = (e) => {
   const isTap = e.type === "pointerup" && input.maxMove <= TAP_MAX_MOVE_PX && performance.now() - input.t0 <= TAP_MAX_MS;
   // 右半分をタップ = 攻撃。タップした高さで、上段・中段・下段を使い分ける(左半分は今のところ何もしない)
   if (isTap && e.clientX >= window.innerWidth / 2) { const z = zoneForY(e.clientY); if (startAttack(z, performance.now())) flashZone(z); }
-  input.id = null; input.x = input.z = 0;
+  if (e.type === "pointerup" && !isTap && !input.quick) { // 素早いスワイプなら、向きを覚えておく(次のスワイプがクイックステップになる)
+    const l = Math.hypot(input.dx, input.dy), now = performance.now();
+    input.lastFlick = l >= FLICK_MIN_PX && now - input.t0 <= FLICK_MAX_MS ? { t: now, ux: input.dx / l, uy: input.dy / l } : null;
+  }
+  input.id = null; input.x = input.z = 0; input.quick = false; input.quickCand = false;
 };
 canvas.addEventListener("pointerup", endPtr); canvas.addEventListener("pointercancel", endPtr);
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -565,7 +583,7 @@ function update(dt, now) {
   const mv = attack || match.over || stunned ? { x: 0, z: 0 } : readDir();
   const mag = Math.min(1, Math.hypot(mv.x, mv.z));
   const back = mv.x * fx + mv.z * fz < -0.3 ? BACK_SPEED_SCALE : 1; // CPUから離れる向きは、少し遅い
-  const dist = mag * WALK_SPEED * back * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
+  const quick = input.id !== null && input.quick && !(keys.size > 0 && (keys.has('KeyA') || keys.has('KeyD') || keys.has('KeyW') || keys.has('KeyS'))), dist = mag * WALK_SPEED * back * (quick ? QUICK_MULT : 1) * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
   const ux = mag > 0 ? mv.x / Math.hypot(mv.x, mv.z) : 0, uz = mag > 0 ? mv.z / Math.hypot(mv.x, mv.z) : 0;
   for (let i = 0; i < steps; i++) {
     player.x += (ux * dist) / steps; player.z += (uz * dist) / steps;
@@ -661,7 +679,7 @@ window.__fight = {
   cpuAI, playerState, CPU_ATTACKS, cpuAttack: (k) => { cpuStartWindup(k, performance.now()); },
   hitLog, cpuState, setCpu: (x, z = 0) => { cpu.x = x; cpu.z = z; }, LIMBS,
   zoneForY, zoneBounds,
-  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
+  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getQuick: () => input.quick, input, getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
