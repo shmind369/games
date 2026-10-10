@@ -23,8 +23,10 @@ const VISIBLE_WIDTH_MIN = 3.5; // 画面に映す幅(m)の最小。2人が近い
 const VISIBLE_WIDTH_MAX = 10;  // 同じく最大(離れたときに、ここまで引く)
 const CAM_MARGIN = 2.4;        // 2人の間隔に足す余白(m)。映す幅 = 間隔 + 余白
 const VFOV = 40;
-// クイックステップ: 素早いスワイプ(フリック)のあと、すぐ同じ向きへもう一度スワイプ → 押している間、通常の2倍の速さで動く
-const QUICK_MULT = 2;          // 通常移動に対する速度の倍率
+// クイックステップ(瞬発ステップ): 素早いスワイプ(フリック)のあと、すぐ同じ向きへもう一度スワイプ → 溜め → 一瞬で1ステップぶん(固定距離)動く → 着地して構え直す
+const DASH_DIST = 1.2;         // 1回のステップで動く距離(m)。固定
+const DASH_WINDUP_MS = 100, DASH_MOVE_MS = 130, DASH_TOTAL_MS = 367; // 溜め / 動いている時間 / ぜんぶの長さ(ms)
+const DASH_COOLDOWN_MS = 450;  // 着地してから、次のステップができるまで(連続で高速移動できないように)
 const FLICK_MAX_MS = 260, FLICK_MIN_PX = 18; // これ以内の時間で、これ以上動かして離したら「素早いスワイプ」
 const QUICK_GAP_MS = 320;      // 1回目のフリックを離してから、2回目を押すまでの許容時間
 const ATTACK_SPEED = 1.3;     // 攻撃モーションの再生速度(1.0=ファイルのまま。大きいほどキビキビ)
@@ -123,7 +125,7 @@ const rim = new THREE.DirectionalLight(0x6f8cff, 0.9); rim.position.set(3, 3, -4
 
 // ---------- キャラクターとモーション ----------
 const loader = new GLTFLoader();
-const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson, spinJson, flySpinJson, sideKickJson, slideKickJson] = await Promise.all([
+const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, straightJson, cpuJabJson, cpuBodyJson, cpuHookJson, spinJson, flySpinJson, sideKickJson, slideKickJson, dashFJson, dashBJson, dashLJson, dashRJson] = await Promise.all([
   loader.loadAsync("./assets/china_rigged.glb"),
   loader.loadAsync("./assets/box_usa_rigged.glb"),
   fetch("./assets/stepForward.json").then((r) => r.json()),
@@ -139,6 +141,10 @@ const [chinaGltf, usaGltf, stepFJson, stepSJson, idleJson, jabJson, kickJson, st
   fetch("./assets/rightFlyingBackSpinKick.json").then((r) => r.json()),
   fetch("./assets/leftLungeSideKick.json").then((r) => r.json()),
   fetch("./assets/leftSlideLowKick1.json").then((r) => r.json()),
+  fetch("./assets/dashForward.json").then((r) => r.json()),
+  fetch("./assets/dashBack.json").then((r) => r.json()),
+  fetch("./assets/dashSide.json").then((r) => r.json()),
+  fetch("./assets/dashSideR.json").then((r) => r.json()),
 ]);
 function makeFighter(gltf, facing) {
   const root = new THREE.Group(); // 位置(X)と向き(yaw)
@@ -234,6 +240,17 @@ function sampleOnce(clip, t) {
 const cancelAt = (A) => A.cancel ?? Math.max(0.35, (A.hit ? A.hit[1] : 0.72) - 0.02); // 次の技へつなげられるようになる時点(技の長さの割合)
 let attack = null; // { kind(=ATTACKSのキー), startAt, hit, lunged }
 const attackLog = [];
+// ---------- クイックステップ(瞬発ステップ) ----------
+let dash = null, dashReadyAt = 0; // { t0, dir:[x,z], clip, p }
+function startDash(sx, sy) { // スワイプの向き(画面 x=横, y=下が手前)へ。前/後ろ/左右で、モーションを使い分ける
+  const now = performance.now();
+  if (dash || attack || match.over || now < dashReadyAt || now < playerState.stunUntil) return false;
+  let fx = cpu.x - player.x, fz = cpu.z - player.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
+  const fwd = sx * fx + sy * fz, side = sx * -fz + sy * fx; // キャラの右 = (-fz, fx)
+  const clip = fwd >= 0.6 ? dashFJson : fwd <= -0.6 ? dashBJson : side > 0 ? dashRJson : dashLJson;
+  dash = { t0: now, dir: [sx, sy], clip, p: 0 }; console.log("[Player] quick step " + (fwd >= 0.6 ? "forward" : fwd <= -0.6 ? "back" : side > 0 ? "right" : "left"));
+  return true;
+}
 function attackIdFor(zone) { // 高さ(zone)と、相手との距離から、使う技を決める
   if (ATTACKS[zone]) return zone;
   return zone + (Math.hypot(cpu.x - player.x, cpu.z - player.z) < NEAR_DIST ? "_near" : "_far");
@@ -241,7 +258,7 @@ function attackIdFor(zone) { // 高さ(zone)と、相手との距離から、使
 function startAttack(zone, now) {
   if (attack && !attack.queued && attack.combo < COMBO_MAX && !match.over && performance.now() >= playerState.stunUntil) { attack.queued = zone; return true; } // 攻撃中のタップ = 次の技を先行入力
   const kind = attackIdFor(zone);
-  if (attack || match.over || performance.now() < playerState.stunUntil) return false; // 攻撃中・のけぞり中・試合終了後は受け付けない
+  if (attack || dash || match.over || performance.now() < playerState.stunUntil) return false; // 攻撃中・のけぞり中・試合終了後は受け付けない
   comboHits = 0; attack = { kind, startAt: now, hit: false, lunged: 0, combo: 1, queued: null, from: null }; attackLog.push(ATTACKS[kind].label); console.log("[Player] " + ATTACKS[kind].label);
   return true;
 }
@@ -285,7 +302,7 @@ function showCombo() {
 // クイックステップの表示(画面の下のほうに「DASH」)
 const quickEl = document.createElement("div");
 quickEl.style.cssText = "position:fixed;left:50%;bottom:150px;transform:translateX(-50%);z-index:7;pointer-events:none;font:900 18px system-ui,sans-serif;letter-spacing:.2em;color:#9fd0ff;text-shadow:0 2px 6px #000;opacity:0;transition:opacity .25s";
-quickEl.textContent = "QUICK STEP"; document.body.appendChild(quickEl);
+quickEl.textContent = "STEP!"; document.body.appendChild(quickEl);
 function showQuick() { quickEl.style.opacity = 1; clearTimeout(showQuick.t); showQuick.t = setTimeout(() => { quickEl.style.opacity = 0; }, 500); }
 
 // ---------- 入力: 画面の左右スワイプ(ドラッグ)で横移動 ----------
@@ -300,7 +317,7 @@ canvas.addEventListener("pointermove", (e) => {
   input.maxMove = Math.max(input.maxMove, Math.hypot(dx, dy)); input.dx = dx; input.dy = dy;
   if (input.quickCand && Math.hypot(dx, dy) >= 14) { // 2回目のスワイプの向きが、1回目と同じなら、クイックステップ
     input.quickCand = false; const l = Math.hypot(dx, dy), f = input.lastFlick;
-    if (f && (dx / l) * f.ux + (dy / l) * f.uy >= 0.7) { input.quick = true; input.lastFlick = null; showQuick(); }
+    if (f && (dx / l) * f.ux + (dy / l) * f.uy >= 0.7) { input.quick = true; input.lastFlick = null; if (startDash(dx / l, dy / l)) showQuick(); }
   }
   input.x = axis(dx, SWIPE_DEADZONE_PX, SWIPE_FULL_PX);
   input.z = axis(dy, SWIPE_DEADZONE_PX, SWIPE_FULL_PX); // 上へ=奥、下へ=手前
@@ -446,7 +463,7 @@ function checkCpuHit(now) {
   const zone = { high: "head", mid: "body", low: "legs" }[cpuAI.kind];
   playerState.react = { zone, at: now }; playerState.stunUntil = now + PLAYER_STUN_MS; playerState.flashUntil = now + 110;
   const dx = player.x - cpu.x, dz = player.z - cpu.z, l = Math.hypot(dx, dz) || 1; playerState.kbDir = [dx / l, dz / l]; playerState.kb += A.kb;
-  attack = null; // 攻撃中だったら中断
+  attack = null; dash = null; // 攻撃中・ステップ中だったら中断
   const msg = `${A.label} HIT player ${best.bone} -> reaction ${zone}`; cpuAI.log.push(msg); console.log("[CPU-Hit] " + msg);
 }
 let playerMats = null;
@@ -553,7 +570,7 @@ function ringOut(who, now) {
   const f = who === "player" ? player : cpu, r = Math.hypot(f.x, f.z) || 1;
   match.over = true; match.loser = who;
   match.fall = { who, x: f.x, z: f.z, y: 0, vx: (f.x / r) * 1.4, vz: (f.z / r) * 1.4, vy: 1.2, tx: (Math.random() - 0.5) * 3, tz: 2.5 + Math.random() };
-  attack = null; input.x = input.z = 0;
+  attack = null; dash = null; input.x = input.z = 0;
   console.log("[Match] RING OUT: " + who + " loses");
   resultEl.querySelector("#roResult").textContent = who === "player" ? "YOU LOSE" : "YOU WIN!";
   resultEl.querySelector("#roResult").style.color = who === "player" ? "#ff6a6a" : "#ffe14a";
@@ -580,11 +597,16 @@ function update(dt, now) {
   let fx = cpu.x - player.x, fz = cpu.z - player.z; const fl = Math.hypot(fx, fz) || 1; fx /= fl; fz /= fl;
   // 移動(X・Z軸)。攻撃中は移動できない
   const stunned = now < playerState.stunUntil;
-  const mv = attack || match.over || stunned ? { x: 0, z: 0 } : readDir();
+  const mv = attack || dash || match.over || stunned ? { x: 0, z: 0 } : readDir();
   const mag = Math.min(1, Math.hypot(mv.x, mv.z));
   const back = mv.x * fx + mv.z * fz < -0.3 ? BACK_SPEED_SCALE : 1; // CPUから離れる向きは、少し遅い
-  const quick = input.id !== null && input.quick && !(keys.size > 0 && (keys.has('KeyA') || keys.has('KeyD') || keys.has('KeyW') || keys.has('KeyS'))), dist = mag * WALK_SPEED * back * (quick ? QUICK_MULT : 1) * dt, steps = Math.max(1, Math.ceil(dist / 0.05));
-  const ux = mag > 0 ? mv.x / Math.hypot(mv.x, mv.z) : 0, uz = mag > 0 ? mv.z / Math.hypot(mv.x, mv.z) : 0;
+  let dist = mag * WALK_SPEED * back * dt;
+  let ux = mag > 0 ? mv.x / Math.hypot(mv.x, mv.z) : 0, uz = mag > 0 ? mv.z / Math.hypot(mv.x, mv.z) : 0;
+  if (dash) { // クイックステップ: 溜めのあと、動いている間だけ、決まった向きへ固定距離ぶん進む(ゆっくり→一気に、ではなく、最初に勢いよく)
+    const el = now - dash.t0, u = Math.max(0, Math.min(1, (el - DASH_WINDUP_MS) / DASH_MOVE_MS)), p = 1 - (1 - u) * (1 - u);
+    dist = DASH_DIST * (p - dash.p); dash.p = p; ux = dash.dir[0]; uz = dash.dir[1];
+  }
+  const steps = Math.max(1, Math.ceil(dist / 0.05));
   for (let i = 0; i < steps; i++) {
     player.x += (ux * dist) / steps; player.z += (uz * dist) / steps;
     // CPUに食い込まない(円どうし)。リングの外へも出られる(出たらリングアウト)が、遠くへは行きすぎない
@@ -641,6 +663,15 @@ function update(dt, now) {
       }
     }
   }
+  if (dash) { // クイックステップのポーズ(溜め → 蹴り出し → 空中 → 着地)
+    const el = now - dash.t0;
+    if (el >= DASH_TOTAL_MS) { dash = null; dashReadyAt = now + DASH_COOLDOWN_MS; }
+    else {
+      const w = Math.max(0, Math.min(1, Math.min(el / 40, (DASH_TOTAL_MS - el) / 60))), c = sampleOnce(dash.clip, el / 1000);
+      for (const n of Object.keys(c.pose)) { const b = player.bones[n]; if (b) b.quaternion.copy(idleP.pose[n] || c.pose[n]).slerp(c.pose[n], w); }
+      player.root.position.y = idleP.y + (c.mp[1] - idleP.y) * w;
+    }
+  }
   applyPlayerReaction(dt, now); // CPUの攻撃を受けたときの、ノックバックと体の反応
   let rx = player.x + fx * step, rz = player.z + fz * step;
   { const dx = rx - cpu.x, dz = rz - cpu.z, d = Math.hypot(dx, dz) || 1e-6; if (d < 0.55) { rx = cpu.x + (dx / d) * 0.55; rz = cpu.z + (dz / d) * 0.55; } } // 踏み込みでも、CPUに食い込まない
@@ -679,7 +710,7 @@ window.__fight = {
   cpuAI, playerState, CPU_ATTACKS, cpuAttack: (k) => { cpuStartWindup(k, performance.now()); },
   hitLog, cpuState, setCpu: (x, z = 0) => { cpu.x = x; cpu.z = z; }, LIMBS,
   zoneForY, zoneBounds,
-  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getQuick: () => input.quick, input, getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
+  startAttack: (k) => startAttack(k, performance.now()), attackLog, ATTACKS, getQuick: () => input.quick, input, getDash: () => dash && { t: performance.now() - dash.t0 }, startDash: (x, y) => startDash(x, y), getCombo: () => ({ hits: comboHits, n: attack && attack.combo }),
   player, cpu, RING_HALF, BODY_GAP, camera, ringOut: (w) => ringOut(w, performance.now()),
   setDir: (x, z = 0) => { input.x = x; input.z = z; },
   teleport: (x, z = 0) => { player.x = x; player.z = z; player.root.position.x = x; player.root.position.z = z; },
