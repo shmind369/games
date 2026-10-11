@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>VR MISSIONS 3D 中華娘 ver</title>
+<style>
+  :root{ --grn:#39ff14; --grn-dim:#0d6b1f; --grn-mid:#1faa3a; --amber:#ffb300; --red:#ff2b2b; --bg:#010402; }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;overflow:hidden;background:var(--bg);font-family:"Courier New",ui-monospace,monospace;}
+  #wrap{position:fixed;inset:0;display:flex;flex-direction:column;}
+  #hud{height:38px;flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;
+       padding:0 12px;color:var(--grn);font-size:13px;letter-spacing:1px;
+       border-bottom:1px solid var(--grn-dim);background:rgba(3,10,4,.6);text-shadow:0 0 6px rgba(57,255,20,.6);z-index:10;}
+  #hud .mid{font-size:15px;}
+  #ammoTxt{font-size:11px;letter-spacing:2px;color:var(--amber);}
+  #alertWrap{display:flex;align-items:center;gap:6px;font-size:11px;}
+  #alertBar{width:70px;height:8px;border:1px solid var(--grn-dim);position:relative;background:#000;}
+  #alertFill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--grn);}
+  #stage{position:relative;flex:1 1 auto;min-height:0;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;}
+  #fx{position:absolute;inset:0;pointer-events:none;z-index:5;
+      background:repeating-linear-gradient(0deg, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,.22) 3px, rgba(0,0,0,.22) 3px),
+                 radial-gradient(ellipse at center, rgba(0,0,0,0) 58%, rgba(0,0,0,.55) 100%);
+      mix-blend-mode:multiply;animation:flick 7s infinite;}
+  @keyframes flick{0%,97%{opacity:1}98%{opacity:.85}100%{opacity:1}}
+  #muzzleFlash{position:absolute;inset:0;pointer-events:none;z-index:9;background:#fff;opacity:0;}
+  #crosshair{position:absolute;left:50%;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;z-index:7;pointer-events:none;
+        opacity:0;}
+  #crosshair::before,#crosshair::after{content:"";position:absolute;background:rgba(57,255,20,.75);}
+  #crosshair::before{left:50%;top:0;bottom:0;width:1.5px;margin-left:-0.75px;}
+  #crosshair::after{top:50%;left:0;right:0;height:1.5px;margin-top:-0.75px;}
+  #gunOverlay{position:absolute;right:0;bottom:0;width:min(46vw,220px);z-index:8;pointer-events:none;
+        transform:translateY(50px);opacity:0;}
+  #gunOverlay svg{display:block;width:100%;filter:drop-shadow(0 0 4px rgba(57,255,20,.5));}
+  #fireBtn{position:absolute;right:18px;bottom:18px;width:74px;height:74px;border-radius:50%;z-index:9;
+        font-family:inherit;font-size:13px;letter-spacing:2px;font-weight:700;color:var(--red);
+        border:1px solid #7a2020;background:rgba(60,10,10,.28);box-shadow:0 0 12px rgba(255,43,43,.25);touch-action:none;}
+  #fireBtn:active{background:rgba(255,43,43,.35);box-shadow:0 0 18px rgba(255,43,43,.55);}
+  #punchBtn{position:absolute;right:24px;bottom:104px;width:62px;height:62px;border-radius:50%;z-index:9;
+        font-family:inherit;font-size:11px;letter-spacing:2px;font-weight:700;color:#e8fff0;
+        border:1px solid #4a7a5a;background:rgba(20,50,30,.28);box-shadow:0 0 10px rgba(232,255,240,.18);touch-action:none;}
+  #punchBtn:active{background:rgba(232,255,240,.22);box-shadow:0 0 16px rgba(232,255,240,.45);}
+  #look{position:absolute;right:0;top:0;bottom:0;left:42%;z-index:6;touch-action:none;}
+  #mirrorWrap{position:absolute;top:7px;left:50%;transform:translateX(-50%);z-index:7;pointer-events:none;
+        border:2px solid #2a6b35;border-radius:8px;overflow:hidden;background:#000;
+        box-shadow:0 0 14px rgba(0,0,0,.6), inset 0 0 10px rgba(57,255,20,.12);}
+  #mirror{display:block;transform:scaleX(-1);}
+  #mirrorTag{position:absolute;left:7px;top:3px;font-size:9px;letter-spacing:2px;color:#57b36a;text-shadow:0 0 4px rgba(0,0,0,.8);pointer-events:none;}
+  #stick{position:absolute;left:18px;bottom:18px;width:130px;height:130px;border-radius:50%;
+         border:1px solid var(--grn-dim);background:rgba(20,60,25,.12);z-index:8;touch-action:none;}
+  #nub{position:absolute;left:50%;top:50%;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;
+       border:1px solid var(--grn);background:rgba(57,255,20,.14);box-shadow:0 0 10px rgba(57,255,20,.4);}
+  .hint{position:absolute;left:0;right:0;bottom:6px;text-align:center;color:var(--grn-mid);font-size:10px;letter-spacing:2px;z-index:7;pointer-events:none;}
+  .ov{position:absolute;inset:0;z-index:12;display:none;flex-direction:column;align-items:center;justify-content:center;
+      text-align:center;color:var(--grn);background:radial-gradient(ellipse at center,rgba(2,12,4,.86),rgba(0,0,0,.94));padding:24px;}
+  .ov.show{display:flex;}
+  .ov h1{font-size:clamp(28px,7.5vw,56px);letter-spacing:6px;text-shadow:0 0 14px rgba(57,255,20,.7);font-weight:700;line-height:1.05;}
+  .ov h1 small{display:block;font-size:.32em;letter-spacing:8px;color:var(--grn-mid);margin-top:8px;}
+  .ov p{margin:13px 0;font-size:14px;line-height:1.7;color:#bfe;max-width:350px;letter-spacing:1px;}
+  .ov .res{font-size:15px;color:var(--grn);letter-spacing:2px;margin:5px 0;}
+  .ov .res b{color:#fff;}
+  .btn{margin-top:16px;padding:13px 30px;font-family:inherit;font-size:15px;letter-spacing:3px;cursor:pointer;
+       color:var(--bg);background:var(--grn);border:none;font-weight:700;box-shadow:0 0 16px rgba(57,255,20,.55);}
+  .btn:active{transform:translateY(1px);}
+  .btn.ghost{background:transparent;color:var(--grn);border:1px solid var(--grn-mid);box-shadow:none;}
+  #failTitle{color:var(--red);text-shadow:0 0 16px rgba(255,43,43,.7);}
+  .row{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div id="mTag">MISSION 01</div>
+    <div class="mid" id="timer">00:00.0</div>
+    <div id="ammoTxt">AMMO 0</div>
+    <div id="alertWrap"><span id="alertTxt">CLEAR</span><div id="alertBar"><div id="alertFill"></div></div></div>
+  </div>
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="mirrorWrap"><canvas id="mirror"></canvas><span id="mirrorTag">REAR VIEW</span></div>
+    <div id="look"></div>
+    <div id="fx"></div>
+    <div id="muzzleFlash"></div>
+    <div id="crosshair"></div>
+    <div id="gunOverlay">
+      <svg viewBox="0 0 220 130" xmlns="http://www.w3.org/2000/svg">
+        <g fill="rgba(57,255,20,0.08)" stroke="#39ff14" stroke-width="2" stroke-linejoin="round">
+          <path d="M95 130 L138 130 L132 78 L99 78 Z"/>
+          <path d="M70 78 L178 78 L178 56 L86 56 Z"/>
+          <path d="M168 56 L173 45 L180 56 Z"/>
+          <path d="M89 56 L97 45 L106 56 Z"/>
+          <path d="M92 92 a16 14 0 0 0 30 7" fill="none"/>
+        </g>
+      </svg>
+    </div>
+    <button id="fireBtn">FIRE</button>
+    <button id="punchBtn">PUNCH</button>
+    <div id="stick"><div id="nub"></div></div>
+    <div class="hint" id="hint">左:前後＋左右(カニ歩き) / 右ドラッグを上へ:構え・下へ:俯瞰 / FIRE(Space)発射・PUNCH(F)で近接 ── 上のミラーで背後を確認</div>
+
+    <div class="ov show" id="ovTitle">
+      <h1>VR MISSIONS<small>SNEAKING ・ 3D</small></h1>
+      <p>仮想訓練空間。<b style="color:#ff9a9a">中華娘</b>になって、三人称視点で護衛兵(歩哨)の<b style="color:#ff7a7a">視界コーン</b>をかいくぐり、<b style="color:#39ff14">EXIT</b>へ潜入せよ。コーンに入り続けると警報が満タンで任務失敗。</p>
+      <p style="color:#ffb300">視点を上方向にドラッグして見下ろし角を浅くしていくと、自然に一人称の構え視点へ移行し、十分に寄ると正面へ発射可能になる。完全に構えた状態ではさらに上下ドラッグで照準を自由に振れ、下方向はほぼ足元まで向けられる(上下それぞれの限界を超えると俯瞰へ戻る)。命中した歩哨は無力化されるが、弾数は限られており発射音で警報が上昇する。</p>
+      <p style="color:#9be7c4">PUNCHは正面の近距離にいる歩哨を無音で無力化できる。警報は上がらないが、射程はごく短い。</p>
+      <p style="color:#7fbf8f">スマホ:左スティックで前後左右移動・右ドラッグ(上=構え/下=俯瞰)・FIREで発射 / PC:WASD移動・Q/E旋回・マウス右ドラッグで視点・Spaceで発射。上部ミラーは背後の映像です</p>
+      <button class="btn" id="startBtn">START</button>
+    </div>
+    <div class="ov" id="ovClear">
+      <h1>MISSION<br>COMPLETE</h1>
+      <div class="res">TIME &nbsp; <b id="clearTime">00:00.0</b></div>
+      <div class="res">BEST &nbsp; <b id="bestTime">--:--.-</b></div>
+      <div class="row"><button class="btn" id="nextBtn">NEXT</button>
+      <button class="btn ghost" id="retryClearBtn">RETRY</button></div>
+    </div>
+    <div class="ov" id="ovFail">
+      <h1 id="failTitle">MISSION<br>FAILED</h1>
+      <p>発見された。アラート発生。</p>
+      <button class="btn" id="retryBtn">RETRY</button>
+    </div>
+    <div class="ov" id="ovAll">
+      <h1>ALL<br>CLEAR</h1>
+      <p>全ミッション制覇。お見事です。</p>
+      <div class="res">TOTAL &nbsp; <b id="totalTime">00:00.0</b></div>
+      <button class="btn" id="againBtn">PLAY AGAIN</button>
+    </div>
+    <div class="ov show" id="ovErr" style="z-index:60"><h1 id="loadH" style="color:#39ff14">LOADING...</h1><p id="loadP">中華娘と護衛兵のモデルを読み込んでいます</p></div>
+  </div>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
