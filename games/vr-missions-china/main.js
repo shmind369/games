@@ -108,19 +108,24 @@ let tracers=[];
 const PUNCH_RANGE=1.1, PUNCH_ANGLE=Math.PI/3, PUNCH_COOLDOWN=0.45, PUNCH_ANIM_TIME=0.25;
 let punchCooldown=0, punchT=0;
 let impacts=[];
-// 視点: 三人称のみ(自機が常に見える)。カメラは自機の後ろ上から、向きは固定(画面の上 = 奥 = +Z方向)。操作は片手のスティックだけ
-//  heading = 自機の向き(動いた方向を自動で向く。FIRE/PUNCH は、この向きの敵を自動で狙う)
-let heading=0, curSpeed=0, moving=false, moveSign=1;
-const CAM_HEADING=0;      // カメラが見ている方角(固定)
-const CAM_PITCH=0.95;     // 見下ろし角(ラジアン)
-const camDist=4.6;        // 自機からカメラまでの距離
+// 視点: 三人称のみ(自機の全身が常に見える)。カメラは、自機が向いている方向の後ろから肩越しについてくる(前方も見渡せる)
+//  操作は片手のスティックだけ: 左右 = 旋回 / 上下 = 前進・後退。heading = 自機の向き(FIRE/PUNCH は、この向きの敵を自動で狙う)
+let heading=0, curSpeed=0, moving=false, moveSign=1, camYaw=0;
+const TURN_SPEED=2.2, BACK_SCALE=0.6; // 旋回の速さ(ラジアン/秒) / 後退の速さの倍率
+const CAM_BACK=2.9, CAM_UP=1.8, CAM_SHOULDER=0.25, CAM_PITCH=-0.47, CAM_FOLLOW=9; // 後ろへ(m) / 上へ(m) / 右肩のほうへ(m) / 見る角度(下向き。自機が画面の上のほうに映り、前方が遠くまで見える) / 向きへの追従の速さ
 const WALL_H=2.0, EYE_H=0.9;
-// 自機の後ろ上のカメラ位置(壁は半透明なので、壁の向こうにカメラがあっても自機は見える)
-function thirdPersonCamPos(p){
-  const hDist=camDist*Math.cos(p);
-  return { x:player.x-Math.sin(CAM_HEADING)*hDist, y:EYE_H+camDist*Math.sin(p), z:player.y-Math.cos(CAM_HEADING)*hDist };
+const desired=new THREE.Vector3(), lookAt=new THREE.Vector3();
+// カメラを置く: 自機の後ろ・上・右肩側。向きは自機の向きについてくる。壁は半透明なので、壁の中・外にカメラがあっても自機は見える
+function placeCamera(dt,snap){
+  if(snap) camYaw=heading; else camYaw+=angDiff(heading,camYaw)*Math.min(1,dt*CAM_FOLLOW);
+  const fx=Math.sin(camYaw), fz=Math.cos(camYaw), rx=-Math.cos(camYaw), rz=Math.sin(camYaw);
+  desired.set(player.x-fx*CAM_BACK+rx*CAM_SHOULDER, CAM_UP, player.y-fz*CAM_BACK+rz*CAM_SHOULDER);
+  camera.position.copy(desired); // 位置は自機にぴったり(向きだけ、なめらかに追従)
+  const c=Math.cos(CAM_PITCH), sn=Math.sin(CAM_PITCH);
+  lookAt.set(camera.position.x+fx*c*10, camera.position.y+sn*10, camera.position.z+fz*c*10);
+  camera.lookAt(lookAt);
 }
-const desired=new THREE.Vector3();
+
 
 function isWall(cx,cy){ if(cx<0||cy<0||cx>=COLS||cy>=ROWS) return true; return G[cy][cx]==="#"; }
 
@@ -269,9 +274,7 @@ function loadLevel(i){
   heading=0; curSpeed=0; moving=false; moveSign=1;
   document.getElementById("mTag").textContent="MISSION "+L.name.slice(0,2);
   buildScene(); layoutMirror();
-  const camPos=thirdPersonCamPos(CAM_PITCH);
-  camera.position.set(camPos.x,camPos.y,camPos.z);
-  camera.lookAt(player.x,EYE_H,player.y);
+  placeCamera(0,true);
 }
 
 //============================ COLLISION ============================
@@ -305,16 +308,16 @@ function visionAngle(g,now){ return g.ang + (g.scan? Math.sin(now*0.0016)*g.scan
 
 //============================ UPDATE ============================
 function update(dt,now){
-  // 移動: スティックの向き = 画面での向き(上 = 奥)。自機は動いた方向を自動で向く(カメラは回らない)
+  // 移動: スティックの左右 = 旋回(右へ倒すと右へ向きを変える) / 上下 = 前進・後退。カメラは自機の向きについてくる
   let fwd = usingStick ? -Math.max(-1,Math.min(1,input.y)) : ((keys.u?1:0)-(keys.d?1:0));
-  let str = usingStick ?  Math.max(-1,Math.min(1,input.x)) : ((keys.sr?1:0)-(keys.sl?1:0));
-  if(Math.hypot(fwd,str)<STICK_DEAD){ fwd=0; str=0; }
-  const sh=Math.sin(CAM_HEADING), ch=Math.cos(CAM_HEADING);
-  let mx=sh*fwd - ch*str, my=ch*fwd + sh*str;
-  let mag=Math.hypot(mx,my); if(mag>1){mx/=mag;my/=mag;mag=1;}
-  player.x+=mx*PSPD*dt; player.y+=my*PSPD*dt; resolve(player);
-  curSpeed=mag; moving=mag>0.06;
-  if(moving) heading+=angDiff(Math.atan2(mx,my),heading)*Math.min(1,dt*14);
+  let trn = usingStick ?  Math.max(-1,Math.min(1,input.x)) : ((keys.sr||keys.tr?1:0)-(keys.sl||keys.tl?1:0));
+  if(Math.abs(fwd)<STICK_DEAD) fwd=0; if(Math.abs(trn)<STICK_DEAD) trn=0;
+  heading-=trn*TURN_SPEED*dt; // headingが増える = 左へ向く(右 = -X方向)なので、右へ倒すと減らす
+  const sp=fwd>0?fwd:fwd*BACK_SCALE;
+  player.x+=Math.sin(heading)*sp*PSPD*dt; player.y+=Math.cos(heading)*sp*PSPD*dt; resolve(player);
+  curSpeed=Math.abs(sp); moving=curSpeed>0.06||Math.abs(trn)>0;
+  if(Math.abs(trn)>0&&curSpeed<0.3) curSpeed=0.3; // その場で旋回するときも、足を少し動かす(歩く距離には入れない)
+  if(Math.abs(fwd)>0.05) moveSign=fwd<0?-1:1;
   if(fireCooldown>0) fireCooldown=Math.max(0,fireCooldown-dt);
   if(flashT>0) flashT=Math.max(0,flashT-dt);
   if(punchCooldown>0) punchCooldown=Math.max(0,punchCooldown-dt);
@@ -472,11 +475,7 @@ function render3D(now,dt){
   // goal
   goalObj.userData.ring.rotation.z+=dt*1.5;
   const p=0.5+0.5*Math.sin(now*0.004); goalObj.scale.setScalar(1+p*0.06);
-  // カメラ: 自機の後ろ上(向きは固定)。壁がじゃまなら寄る
-  const camPos=thirdPersonCamPos(CAM_PITCH);
-  desired.set(camPos.x,camPos.y,camPos.z);
-  camera.position.lerp(desired, 1-Math.pow(0.0009,dt));
-  camera.lookAt(player.x,EYE_H,player.y);
+  placeCamera(dt,false); // カメラ: 自機の向きに合わせて、肩越しについてくる
   renderer.render(scene,camera);
 }
 
@@ -569,5 +568,5 @@ window.addEventListener("mouseup",()=>{ if(stId==="m") stickEnd(); });
 resize();
 requestAnimationFrame(frame);
 show("ovTitle");
-window.__vm={ get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
+window.__vm={ get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, heading:()=>heading, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
 
