@@ -99,7 +99,7 @@ let guards=[];
 let input={x:0,y:0};
 let alertMeter=0, timeMs=0, lastT=0;
 let best=[null,null,null], totalMs=0;
-const PSPD=3.6;
+const PSPD=3.6, STICK_DEAD=0.12; // 歩く速さ / スティックの遊び(これ以下は動かない)
 // weapon
 const HIT_RADIUS=0.4, MAX_RANGE=22, FIRE_COOLDOWN=0.35, NOISE_ALERT=0.16, FLASH_TIME=0.08, GUARD_HEIGHT=1.5;
 let ammo=0, fireCooldown=0, flashT=0;
@@ -108,32 +108,17 @@ let tracers=[];
 const PUNCH_RANGE=1.1, PUNCH_ANGLE=Math.PI/3, PUNCH_COOLDOWN=0.45, PUNCH_ANIM_TIME=0.25;
 let punchCooldown=0, punchT=0;
 let impacts=[];
-// camera / heading (tank-style: right-drag controls yaw + pitch)
-// pitch range: [0, AIM_PITCH] is a continuous "aim zoom" zone that blends from the normal
-// third-person edge view down into a first-person aim view; [AIM_PITCH, PITCH_MAX] is the
-// normal third-person range.
-let heading=0, pitch=0.28, curSpeed=0, moving=false, moveSign=1;
-let aimT=0; // 0 = third person, 1 = fully aimed (first person)
-let aimPitch=0; // free vertical look angle, only active once fully aimed (pitch<=0)
-const camDist=2.4;
+// 視点: 三人称のみ(自機が常に見える)。カメラは自機の後ろ上から、向きは固定(画面の上 = 奥 = +Z方向)。操作は片手のスティックだけ
+//  heading = 自機の向き(動いた方向を自動で向く。FIRE/PUNCH は、この向きの敵を自動で狙う)
+let heading=0, curSpeed=0, moving=false, moveSign=1;
+const CAM_HEADING=0;      // カメラが見ている方角(固定)
+const CAM_PITCH=0.95;     // 見下ろし角(ラジアン)
+const camDist=4.6;        // 自機からカメラまでの距離
 const WALL_H=2.0, EYE_H=0.9;
-const AIM_PITCH=0.25, PITCH_MAX=1.3, AIM_FIRE_THRESHOLD=0.65, AIM_LOOK_UP=0.5, AIM_LOOK_DOWN=1.45;
-// Returns a third-person camera position along the player's view ray at the given pitch,
-// pulled in front of any wall that would otherwise sit between the camera and the player.
+// 自機の後ろ上のカメラ位置(壁は半透明なので、壁の向こうにカメラがあっても自機は見える)
 function thirdPersonCamPos(p){
-  const hDistFull=camDist*Math.cos(p), tanP=Math.tan(p);
-  const step=0.08; let effHDist=hDistFull;
-  for(let d=step; d<=hDistFull; d+=step){
-    const h=EYE_H+d*tanP;
-    if(h>WALL_H+0.1) break; // camera already above wall height; nothing further can block
-    const wx=player.x-Math.sin(heading)*d, wz=player.y-Math.cos(heading)*d;
-    if(isWall(Math.floor(wx),Math.floor(wz))){ effHDist=Math.max(0.35,d-0.15); break; }
-  }
-  return {
-    x:player.x-Math.sin(heading)*effHDist,
-    y:EYE_H+effHDist*tanP,
-    z:player.y-Math.cos(heading)*effHDist,
-  };
+  const hDist=camDist*Math.cos(p);
+  return { x:player.x-Math.sin(CAM_HEADING)*hDist, y:EYE_H+camDist*Math.sin(p), z:player.y-Math.cos(CAM_HEADING)*hDist };
 }
 const desired=new THREE.Vector3();
 
@@ -235,7 +220,8 @@ function buildWalls(parent){
   const cells=[];
   for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++) if(G[y][x]==="#") cells.push([x,y]);
   const inst=new THREE.InstancedMesh(new THREE.BoxGeometry(1,H,1),
-    new THREE.MeshBasicMaterial({color:0x0a3318}), cells.length);
+    new THREE.MeshBasicMaterial({color:0x0a3318,transparent:true,opacity:0.42,depthWrite:false}), cells.length); // 半透明: 壁ごしでも自機が見える
+  inst.renderOrder=1;
   const m=new THREE.Matrix4();
   cells.forEach((c,i)=>{ m.makeTranslation(c[0]+0.5,H/2,c[1]+0.5); inst.setMatrixAt(i,m); });
   inst.instanceMatrix.needsUpdate=true; parent.add(inst);
@@ -274,16 +260,16 @@ function loadLevel(i){
     fov:g.fov*Math.PI/180, scan:g.scan||0, x:g.path[0][0], y:g.path[0][1], ang:0, sees:false, phase:Math.random()*6,
     dead:false, fallT:0 }));
   alertMeter=0; timeMs=0; input.x=0; input.y=0;
-  ammo=L.ammo||4; fireCooldown=0; flashT=0; aimT=0; aimPitch=0;
+  ammo=L.ammo||4; fireCooldown=0; flashT=0;
   tracers.forEach(tr=>{ scene.remove(tr.line); tr.line.geometry.dispose(); tr.line.material.dispose(); });
   tracers=[];
   punchCooldown=0; punchT=0;
   impacts.forEach(im=>{ scene.remove(im.mesh); im.mesh.geometry.dispose(); im.mesh.material.dispose(); });
   impacts=[];
-  heading=0; pitch=0.28; curSpeed=0; moving=false;
+  heading=0; curSpeed=0; moving=false; moveSign=1;
   document.getElementById("mTag").textContent="MISSION "+L.name.slice(0,2);
   buildScene(); layoutMirror();
-  const camPos=thirdPersonCamPos(pitch);
+  const camPos=thirdPersonCamPos(CAM_PITCH);
   camera.position.set(camPos.x,camPos.y,camPos.z);
   camera.lookAt(player.x,EYE_H,player.y);
 }
@@ -319,16 +305,16 @@ function visionAngle(g,now){ return g.ang + (g.scan? Math.sin(now*0.0016)*g.scan
 
 //============================ UPDATE ============================
 function update(dt,now){
-  // turn (keyboard Q/E or right-drag) + forward/back + strafe relative to heading
-  const turn=(keys.tr?1:0)-(keys.tl?1:0);
-  heading+=turn*2.3*dt;
-  const fwd = usingStick ? -Math.max(-1,Math.min(1,input.y)) : ((keys.u?1:0)-(keys.d?1:0));
-  const str = usingStick ?  Math.max(-1,Math.min(1,input.x)) : ((keys.sr?1:0)-(keys.sl?1:0));
-  const sh=Math.sin(heading), ch=Math.cos(heading);
+  // 移動: スティックの向き = 画面での向き(上 = 奥)。自機は動いた方向を自動で向く(カメラは回らない)
+  let fwd = usingStick ? -Math.max(-1,Math.min(1,input.y)) : ((keys.u?1:0)-(keys.d?1:0));
+  let str = usingStick ?  Math.max(-1,Math.min(1,input.x)) : ((keys.sr?1:0)-(keys.sl?1:0));
+  if(Math.hypot(fwd,str)<STICK_DEAD){ fwd=0; str=0; }
+  const sh=Math.sin(CAM_HEADING), ch=Math.cos(CAM_HEADING);
   let mx=sh*fwd - ch*str, my=ch*fwd + sh*str;
   let mag=Math.hypot(mx,my); if(mag>1){mx/=mag;my/=mag;mag=1;}
   player.x+=mx*PSPD*dt; player.y+=my*PSPD*dt; resolve(player);
-  curSpeed=mag; moving=mag>0.06; if(Math.abs(fwd)>0.05) moveSign=fwd<0?-1:1; // 後ろへ歩くときは、歩きを逆再生
+  curSpeed=mag; moving=mag>0.06;
+  if(moving) heading+=angDiff(Math.atan2(mx,my),heading)*Math.min(1,dt*14);
   if(fireCooldown>0) fireCooldown=Math.max(0,fireCooldown-dt);
   if(flashT>0) flashT=Math.max(0,flashT-dt);
   if(punchCooldown>0) punchCooldown=Math.max(0,punchCooldown-dt);
@@ -365,18 +351,28 @@ function update(dt,now){
 }
 
 //============================ WEAPON ============================
+// FIRE: 自機の向きの前方(±AUTO_AIM_ANGLE)にいる、いちばん近い敵を自動で狙う。壁ごしには狙わない。いなければ、まっすぐ前へ撃つ
+const AUTO_AIM_ANGLE=Math.PI/4;
 function fire(){
-  if(stateName!=="play"||aimT<AIM_FIRE_THRESHOLD) return;
+  if(stateName!=="play") return;
   if(ammo<=0 || fireCooldown>0) return;
   ammo--; fireCooldown=FIRE_COOLDOWN; flashT=FLASH_TIME;
-  const cosAP=Math.cos(aimPitch), sinAP=Math.sin(aimPitch);
-  const dx=Math.sin(heading)*cosAP, dy=sinAP, dz=Math.cos(heading)*cosAP;
+  let tgt=null, td=Infinity;
+  guards.forEach(g=>{
+    if(g.dead) return;
+    const gx=g.x-player.x, gz=g.y-player.y, dist=Math.hypot(gx,gz);
+    if(dist>MAX_RANGE||dist>=td) return;
+    if(Math.abs(angDiff(Math.atan2(gx,gz),heading))>AUTO_AIM_ANGLE) return;
+    if(lineBlocked(player.x,player.y,g.x,g.y)) return;
+    tgt=g; td=dist;
+  });
+  if(tgt) heading=Math.atan2(tgt.x-player.x,tgt.y-player.y); // 敵のほうを向く
+  const dx=Math.sin(heading), dy=0, dz=Math.cos(heading);
   let travelled=MAX_RANGE, hitGuard=null;
   const step=0.05;
   outer:
   for(let d=step; d<=MAX_RANGE; d+=step){
     const x=player.x+dx*d, y=EYE_H+dy*d, z=player.y+dz*d;
-    if(y<0||y>WALL_H+0.3){ travelled=d; break; } // hit the floor or sailed over the wall-tops
     if(isWall(Math.floor(x),Math.floor(z))){ travelled=d; break; }
     for(const g of guards){
       if(g.dead) continue;
@@ -402,17 +398,15 @@ function punch(){
   if(stateName!=="play"||punchCooldown>0) return;
   punchCooldown=PUNCH_COOLDOWN; punchT=1;
   let hitGuard=null, hitDist=Infinity;
-  guards.forEach(g=>{
+  guards.forEach(g=>{ // 近くの敵(向きは問わない。壁ごしは不可)。いちばん近い敵のほうを自動で向く
     if(g.dead) return;
     const gx=g.x-player.x, gz=g.y-player.y, dist=Math.hypot(gx,gz);
     if(dist>PUNCH_RANGE) return;
-    const ang=Math.atan2(gx,gz); // matches heading convention: forward=(sin h, cos h)
-    if(Math.abs(angDiff(ang,heading))>PUNCH_ANGLE) return;
     if(lineBlocked(player.x,player.y,g.x,g.y)) return;
     if(dist<hitDist){ hitDist=dist; hitGuard=g; }
   });
-  if(hitGuard){ hitGuard.dead=true; hitGuard.fallT=0; spawnImpact(hitGuard.x,hitGuard.y); }
-  // silent takedown: no alert/noise penalty
+  if(hitGuard){ heading=Math.atan2(hitGuard.x-player.x,hitGuard.y-player.y); hitGuard.dead=true; hitGuard.fallT=0; spawnImpact(hitGuard.x,hitGuard.y); }
+  // 無音で倒す: 警報は上がらない
 }
 function makeImpactBurst(){
   const dirs=[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1],
@@ -437,7 +431,7 @@ function render3D(now,dt){
   // player figure
   playerFig.group.position.set(player.x,0,player.y);
   playerFig.group.rotation.y=heading;
-  playerFig.group.visible=aimT<0.9;
+  playerFig.group.visible=true; // 三人称のみ: 自機はいつも見える
   ampEase+=((moving?1:0)-ampEase)*Math.min(1,dt*8);
   playerPhase+=moveSign*curSpeed*PSPD*dt/walkStride; poseFig(playerFig,playerPhase,ampEase,punchT>0?1-punchT:-1);
   // guards
@@ -478,34 +472,11 @@ function render3D(now,dt){
   // goal
   goalObj.userData.ring.rotation.z+=dt*1.5;
   const p=0.5+0.5*Math.sin(now*0.004); goalObj.scale.setScalar(1+p*0.06);
-  // camera: pitch in [AIM_PITCH, PITCH_MAX] is the normal third-person follow (yaw=heading,
-  // elevation from pitch, pulled in front of any blocking wall). pitch in [0, AIM_PITCH] is a
-  // continuous "aim zoom" zone that dollies from that view's edge smoothly into a first-person
-  // aim view as pitch approaches 0 (aimT -> 1).
-  aimT = pitch<AIM_PITCH ? 1-(pitch/AIM_PITCH) : 0;
-  if(aimT>0){
-    const edge=thirdPersonCamPos(AIM_PITCH);
-    desired.set(
-      edge.x+(player.x-edge.x)*aimT,
-      edge.y+(EYE_H-edge.y)*aimT,
-      edge.z+(player.y-edge.z)*aimT,
-    );
-    const fwd=5*aimT, cosAP=Math.cos(aimPitch), sinAP=Math.sin(aimPitch);
-    camera.position.lerp(desired, 1-Math.pow(0.0006,dt));
-    camera.lookAt(
-      player.x+Math.sin(heading)*cosAP*fwd,
-      EYE_H+sinAP*fwd,
-      player.y+Math.cos(heading)*cosAP*fwd,
-    );
-  } else {
-    const camPos=thirdPersonCamPos(pitch);
-    desired.set(camPos.x,camPos.y,camPos.z);
-    camera.position.lerp(desired, 1-Math.pow(0.0009,dt));
-    camera.lookAt(player.x,EYE_H,player.y);
-  }
-  document.getElementById("crosshair").style.opacity=aimT;
-  document.getElementById("gunOverlay").style.opacity=aimT;
-  document.getElementById("gunOverlay").style.transform="translateY("+(50*(1-aimT))+"px)";
+  // カメラ: 自機の後ろ上(向きは固定)。壁がじゃまなら寄る
+  const camPos=thirdPersonCamPos(CAM_PITCH);
+  desired.set(camPos.x,camPos.y,camPos.z);
+  camera.position.lerp(desired, 1-Math.pow(0.0009,dt));
+  camera.lookAt(player.x,EYE_H,player.y);
   renderer.render(scene,camera);
 }
 
@@ -533,7 +504,7 @@ function fmt(ms){ const t=Math.max(0,ms)/1000, m=Math.floor(t/60), s=Math.floor(
 
 //============================ FLOW ============================
 function show(id){ document.querySelectorAll(".ov").forEach(o=>o.classList.remove("show")); if(id) document.getElementById(id).classList.add("show"); }
-function startGame(){ li=0; totalMs=0; loadLevel(0); stateName="play"; show(null); }
+function startGame(){ const hn=document.getElementById("hint"); hn.style.opacity=1; clearTimeout(startGame.t); startGame.t=setTimeout(()=>{ hn.style.opacity=0; },7000); li=0; totalMs=0; loadLevel(0); stateName="play"; show(null); }
 function clear(){
   stateName="clear"; totalMs+=timeMs;
   if(best[li]==null||timeMs<best[li]) best[li]=timeMs;
@@ -594,40 +565,9 @@ stick.addEventListener("mousedown",stickStart);
 window.addEventListener("mousemove",e=>{ if(usingStick&&stId==="m") stickMove(e); });
 window.addEventListener("mouseup",()=>{ if(stId==="m") stickEnd(); });
 
-//============================ INPUT: look (camera orbit) ============================
-const look=document.getElementById("look"); let lookId=null, lookX=0, lookY=0, looking=false;
-function lookStart(e){ const t=e.changedTouches?e.changedTouches[0]:e; lookId=t.identifier??"m2"; lookX=t.clientX; lookY=t.clientY; looking=true; }
-function lookMove(e){ if(!looking) return; let t;
-  if(e.changedTouches){ for(const c of e.changedTouches) if((c.identifier??"m2")===lookId){t=c;break;} if(!t) return; } else t=e;
-  heading-=(t.clientX-lookX)*0.005;
-  let remaining=(t.clientY-lookY)*0.005;
-  // While fully aimed (pitch===0), vertical drag first adjusts the free look-up/down angle.
-  // Only once aimPitch hits its limit does the leftover drag spill over into zoom (pitch).
-  if(pitch<=0 && remaining<0){ // dragging up: look further up, then zoom in further (no-op, pitch already 0)
-    const room=AIM_LOOK_UP-aimPitch;
-    const use=Math.min(-remaining,room);
-    aimPitch+=use; remaining+=use;
-  } else if(pitch<=0 && remaining>0){ // dragging down: look toward feet, then spill into zoom-out
-    const room=aimPitch-(-AIM_LOOK_DOWN);
-    const use=Math.min(remaining,room);
-    aimPitch-=use; remaining-=use;
-  }
-  pitch+=remaining;
-  if(pitch<0)pitch=0; if(pitch>PITCH_MAX)pitch=PITCH_MAX;
-  if(pitch>0)aimPitch=0; // not fully aimed: free look resets, vertical drag is pure zoom
-  lookX=t.clientX; lookY=t.clientY; }
-function lookEnd(){ looking=false; lookId=null; }
-look.addEventListener("touchstart",e=>{e.preventDefault();lookStart(e);},{passive:false});
-look.addEventListener("touchmove",e=>{e.preventDefault();lookMove(e);},{passive:false});
-look.addEventListener("touchend",e=>{e.preventDefault();lookEnd();},{passive:false});
-look.addEventListener("touchcancel",lookEnd);
-look.addEventListener("mousedown",lookStart);
-window.addEventListener("mousemove",e=>{ if(looking&&lookId==="m2") lookMove(e); });
-window.addEventListener("mouseup",()=>{ if(lookId==="m2") lookEnd(); });
-
 //============================ BOOT ============================
 resize();
 requestAnimationFrame(frame);
 show("ovTitle");
-window.__vm={ get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, setPitch:p=>{pitch=p;}, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
+window.__vm={ get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
 
