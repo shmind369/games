@@ -574,7 +574,7 @@ function combatDebug(message) {
 // HP表示(小さな文字だけ。UIのデザインは変えていない)
 // 体力ゲージ(数字は画面に出さない。裏では動いている): 左=プレイヤー、右=敵(右から減る)
 const ENEMY_MAX_HP = 100;
-const PUNCH_DAMAGE = { leftJab: 10, rightStraight: 15 }; // プレイヤーのパンチの威力(敵に当たったとき)
+const PUNCH_DAMAGE = { leftJab: 10, rightStraight: 10 }; // プレイヤーのパンチの威力(敵に当たったとき)。左右で差はつけない
 let enemyHp = ENEMY_MAX_HP;
 let enemyKO = false;
 let matchResult = null; // null | "win" | "lose"(3カウント制などは後で)
@@ -1062,7 +1062,7 @@ function applySlingExtra(now) {
 //   最大まで引くと全体が脈打って「離して発射!」と出る
 // ・離した瞬間: シェブロンが奥(上)へ勢いよく飛んで消える
 // ・何も操作していないとき: 各グローブの下に小さな「﹀」を薄く点滅(引っ張って遊ぶ操作のヒント)
-const SLING_HINT_ENABLED = true;
+const SLING_HINT_ENABLED = false; // スリング操作は廃止(タップでパンチ)したので、グローブの目印は出さない
 const SLING_FX_RELEASE_MS = 260;
 const SVGNS = "http://www.w3.org/2000/svg";
 const slingFxSvg = document.createElementNS(SVGNS, "svg");
@@ -1147,33 +1147,40 @@ function updateSlingFx(now) {
 let dodgeState = createDodgeState();
 let gestureStart = null;
 function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
+// ---------- タップでパンチ(画面のどこをタップしてもよい。左→右→左→右…と交互に出る) ----------
+// 以前は、グローブを押さえて下へ引っぱるスリング操作だった。今は、画面のどこでも、ほとんど動かさずに(PUNCH_TAP_MAX_MOVE_PX以内)
+// すぐ(PUNCH_TAP_MAX_MS以内に)離したら「タップ」= パンチ。左右のスワイプは、今まで通り「かわし」。
+// パンチの左右は、タップするたびに交代する(左ジャブ → 右ストレート → 左ジャブ …)。ダメージは左右で同じ(PUNCH_DAMAGE)。
+// パンチが出せなかったとき(パンチ中・疲労中など)は、交代しない(次も同じ側から)
+let nextPunchKind = "leftJab";
+function tapPunch(now) {
+  if (matchResult || playerKO) return false;
+  const kind = nextPunchKind, p = PUNCHES[kind];
+  if (!p.clip || !p.range) return false;
+  if (fatigue.active) { punchStats.ignored++; playerDebug(`${p.label} input ignored (fatigued)`); return false; }
+  if (dodgeState.phase) { punchStats.ignored++; playerDebug(`${p.label} input ignored (dodging)`); return false; }
+  const chain = canChainPunch(now); // ノーガード中は、前のパンチの戻りをキャンセルして連打できる
+  if (punchState.phase && !chain) { punchStats.ignored++; playerDebug(`${p.label} input ignored (${PUNCHES[punchState.phase].label} in progress)`); return false; }
+  if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
+  punchState = triggerPunch(punchState, kind, now);
+  punchTriggerAt = now;
+  punchStats.started++;
+  sfx.play("release");
+  playerDebug(`Tap -> ${p.label}`);
+  nextPunchKind = kind === "leftJab" ? "rightStraight" : "leftJab";
+  return true;
+}
 function onPointerDown(evt) {
-  // 指を置いた場所がグローブの円の中なら、その操作を覚えておく。
-  //  ・右グローブ: タップだったとき、離した時にパンチ
-  //  ・左グローブ: 下へドラッグするとスリング(離した時にジャブ)。タップだけでは何も出ない
-  if (sling.active) return; // 2本目の指は無視
-  gestureStart = { ...pointerPos(evt), t: performance.now(), punchKind: punchAtScreen(evt.clientX, evt.clientY), pointerId: evt.pointerId };
+  gestureStart = { ...pointerPos(evt), t: performance.now(), pointerId: evt.pointerId };
 }
-function onPointerMove(evt) {
-  if (sling.active) { if (evt.pointerId === sling.pointerId) slingDragTo(evt.clientY); return; }
-  if (!gestureStart || !gestureStart.punchKind || evt.pointerId !== gestureStart.pointerId) return;
-  const dx = evt.clientX - gestureStart.x, dy = evt.clientY - gestureStart.y;
-  // 下向きの動きが主で、少し動いたらスリング開始(横の動きが主ならスリングにせず、離した時のスワイプ=かわしになる)
-  if (dy >= SLING_START_PX && dy > Math.abs(dx) && slingStart(gestureStart.y, evt.pointerId, gestureStart.punchKind)) {
-    try { canvas.setPointerCapture(evt.pointerId); } catch (_) {}
-    slingDragTo(evt.clientY);
-  }
-}
+function onPointerMove() {}
 function onPointerUp(evt) {
-  if (sling.active) {
-    if (evt.pointerId === sling.pointerId) { slingRelease(performance.now()); gestureStart = null; }
-    return;
-  }
-  if (!gestureStart) return;
+  if (!gestureStart || evt.pointerId !== gestureStart.pointerId) return;
   const end = pointerPos(evt);
   const now = performance.now();
   const dx = end.x - gestureStart.x, dt = now - gestureStart.t, dy = end.y - gestureStart.y;
   gestureStart = null;
+  if (Math.hypot(dx, dy) <= PUNCH_TAP_MAX_MOVE_PX && dt <= PUNCH_TAP_MAX_MS) { tapPunch(now); return; } // タップ = パンチ
   const direction = classifySwipe(dx, dy, dt);
   if (!direction) return;
   // パンチ中は、回避の入力を受け付けない(勝敗が決まったあとも)
@@ -1183,7 +1190,7 @@ function onPointerUp(evt) {
 canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointermove", onPointerMove);
 canvas.addEventListener("pointerup", onPointerUp);
-canvas.addEventListener("pointercancel", () => { gestureStart = null; slingCancel("canceled"); });
+canvas.addEventListener("pointercancel", () => { gestureStart = null; });
 
 // ---------- リサイズ ----------
 function resize() {
@@ -1613,6 +1620,8 @@ window.__sling = {
   extra: () => slingExtraAmount(performance.now()),
 };
 window.__punch = {
+  tapPunch: () => tapPunch(performance.now()),
+  nextKind: () => nextPunchKind,
   createPunchState,
   triggerPunch,
   advancePunch,
