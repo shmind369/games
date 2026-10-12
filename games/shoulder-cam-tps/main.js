@@ -23,11 +23,11 @@ function showLoadError(what, err) {
 //  dist = カメラの後ろへの距離(m) / elev = 自機の頭(ピボット)から見たカメラの仰角(度。高さ = ピボット + dist×sin) / pitchBias = 視線の下向き角を elev よりさらに下へ傾ける量(度)
 //  → 下向き角(視線) = elev + pitchBias / shoulder = 右肩のほうへずらす量(m) / fov = 画角 / swipeX・swipeY = スワイプ感度 / follow = 移動中にカメラが自機の向きへ追従する速さ
 //  aim* = 照準中の値(距離を縮め、肩寄りにして、画角をしぼる)
-const DEFAULTS = { dist: 2.4, elev: 9, pitchBias: 7, shoulder: 0.30, fov: 62, swipeX: 0.0055, swipeY: 0.2, follow: 1.4, aimDist: 1.8, aimShoulder: 0.34, aimFov: 52 };
+const DEFAULTS = { dist: 2.4, elev: 9, pitchBias: 7, shoulder: 0.30, fov: 62, swipeX: 0.0055, swipeY: 0.2, follow: 6, aimDist: 1.8, aimShoulder: 0.34, aimFov: 52 };
 const SLIDERS = [
   ["dist", "カメラ距離 (m)", 1.2, 4.0, 0.05], ["elev", "カメラの仰角 → 高さ (度)", -5, 40, 0.5], ["pitchBias", "視線の下向き 上乗せ (度)", -5, 15, 0.5],
   ["shoulder", "右肩オフセット (m)", 0, 1.0, 0.05], ["fov", "画角 FOV (度)", 35, 75, 1], ["swipeX", "スワイプ感度 横", 0.002, 0.012, 0.0005],
-  ["swipeY", "スワイプ感度 縦 (度/px)", 0.08, 0.5, 0.01], ["follow", "追従の速さ", 0, 4, 0.1], ["aimDist", "照準時の距離 (m)", 0.8, 3, 0.05], ["aimShoulder", "照準時の肩 (m)", 0, 1.0, 0.05], ["aimFov", "照準時のFOV", 30, 70, 1],
+  ["swipeY", "スワイプ感度 縦 (度/px)", 0.08, 0.5, 0.01], ["follow", "カメラが自機の背中へ回り込む速さ", 0, 12, 0.5], ["aimDist", "照準時の距離 (m)", 0.8, 3, 0.05], ["aimShoulder", "照準時の肩 (m)", 0, 1.0, 0.05], ["aimFov", "照準時のFOV", 30, 70, 1],
 ];
 const S = { ...DEFAULTS };
 try { Object.assign(S, JSON.parse(localStorage.getItem("shouldercam-v1") || "{}")); } catch (_) {}
@@ -171,6 +171,7 @@ let speed = 0, cycles = 0, ampE = 0, leanE = 0, lastSwipeAt = -1e9;
 const input = { mx: 0, my: 0, mag: 0 }; // スティック(mx: 右+、my: 下+)
 const keys = new Set();
 let prevMoveMag = 0, quickTurnUntil = 0, turnRemain = 0;
+let ctrlYaw = yaw; // スティックの「上」の基準になる向き。スティックを倒している間は、押しはじめの向きで固定(カメラが自機の向きへ回っても、同じ方向へ歩き続ける)。離している間・構え中は、カメラの向きに同期
 const QUICK_TURN_MS = 220, QUICK_TURN_RATE = 46, TURN_RATE = 20; // クイックターン: 倒しはじめの時間(ms) / その間の旋回の速さ(大きいほど一瞬) / ふだんの旋回の速さ
 let dodge = null, dodgeReadyAt = 0, kickT = 0, fireReadyAt = 0, camT = 1, recoil = 0;
 const WALK_MAX = 2.0, RUN_MAX = 4.2, AIM_SPEED = 1.5, DODGE_DIST = 3.0, DODGE_MS = 380;
@@ -232,7 +233,7 @@ canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 // 照準中は、画角がせまいぶん感度を少し下げる
 function lookBy(dx, dy) {
   const k = lerp(1, 0.6, aimT);
-  yaw -= dx * S.swipeX * k;                                  // 右へスワイプ → 右を向く
+  yaw -= dx * S.swipeX * k; ctrlYaw -= dx * S.swipeX * k;    // 右へスワイプ → 右を向く(スティックの基準も、同じだけ回す)
   pitchElev = clamp(pitchElev + dy * S.swipeY * k, -6, 48);   // 上へスワイプ → 上を向く(カメラが下がる)、下へ → 見下ろす
   lastSwipeAt = performance.now();
 }
@@ -276,7 +277,7 @@ function moveVector() {
   let mx = input.mx, my = input.my, mag = input.mag;
   if (!mag) { const kx = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0), ky = (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0) - (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0); mx = kx; my = ky; mag = Math.min(1, Math.hypot(kx, ky)); if (mag) { mx /= Math.hypot(kx, ky); my /= Math.hypot(kx, ky); } }
   if (mag < 0.12) return { x: 0, z: 0, mag: 0, fwd: 0, str: 0 };
-  const fwd = -my, str = mx, fx = Math.sin(yaw), fz = Math.cos(yaw), rx = -Math.cos(yaw), rz = Math.sin(yaw);
+  const fwd = -my, str = mx, fx = Math.sin(ctrlYaw), fz = Math.cos(ctrlYaw), rx = -Math.cos(ctrlYaw), rz = Math.sin(ctrlYaw);
   const L = Math.hypot(fwd, str) || 1;
   return { x: (fx * fwd + rx * str) / L * mag, z: (fz * fwd + rz * str) / L * mag, mag, fwd: fwd / L, str: str / L };
 }
@@ -288,6 +289,7 @@ function update(dt, now) {
   aimT += ((aim ? 1 : 0) - aimT) * Math.min(1, dt * 9);
   // 移動
   const mv = moveVector(); let target = 0;
+  if (mv.mag === 0 || aim || dodge) ctrlYaw = yaw; // 離している間・構え中は、基準をカメラに合わせる
   if (dodge) {
     const el = now - dodge.t0, u = clamp(el / DODGE_MS, 0, 1), p = 1 - (1 - u) * (1 - u), inc = DODGE_DIST * (p - dodge.p); dodge.p = p;
     const steps = Math.max(1, Math.ceil(Math.abs(inc) / 0.08)); for (let i = 0; i < steps; i++) { player.x += (dodge.dx * inc) / steps; player.z += (dodge.dz * inc) / steps; resolveCircle(player); }
@@ -307,8 +309,9 @@ function update(dt, now) {
     turnRemain = angDiff(want, heading);
     heading += turnRemain * Math.min(1, dt * rate);
     prevMoveMag = mv.mag;
-    // カメラの自動追従: 前へ歩いていて、しばらくスワイプしていないときだけ、ゆっくり自機の向きへ(後ろ向きに歩くときは追従しない)
-    if (!aim && mv.mag > 0.3 && mv.fwd > 0.15 && now - lastSwipeAt > 900 && S.follow > 0) { const d = angDiff(heading, yaw); if (Math.abs(d) < 1.5) yaw += d * Math.min(1, dt * S.follow); }
+    // カメラの自動追従: 構えていないとき、歩いている間(クイックターン含む)は、カメラが常に自機の背中を映すように、自機の向きへ回り込む。
+    // 倒しはじめ(クイックターン中)は速く、そのあとは S.follow の速さ。直前にスワイプしていたら(0.6秒)、その操作を優先する
+    if (!aim && mv.mag > 0 && now - lastSwipeAt > 600 && S.follow > 0) yaw += angDiff(heading, yaw) * Math.min(1, dt * (now < quickTurnUntil ? S.follow * 1.8 : S.follow));
   }
   // 自機の見た目
   character.position.set(player.x, 0, player.z); character.rotation.y = heading; blob.position.set(player.x, 0.012, player.z);
@@ -378,4 +381,4 @@ camera.position.set(player.x, 1.8, player.z + 2.3);
 $("loading").style.display = "none";
 setTimeout(() => { $("msg").style.opacity = 0; }, 8000);
 requestAnimationFrame(frame);
-window.__tps = { S, get turnRemain() { return turnRemain; }, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
+window.__tps = { S, get ctrlYaw() { return ctrlYaw; }, get turnRemain() { return turnRemain; }, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
