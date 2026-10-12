@@ -99,6 +99,7 @@ let guards=[];
 let input={x:0,y:0};
 let alertMeter=0, timeMs=0, lastT=0;
 let best=[null,null,null], totalMs=0;
+const GUARD_SPEED_SCALE=1/3; // 護衛兵の歩く速さの倍率(ステージの設定値 spd に掛ける。元の速さ = 1)
 const PSPD=3.6, STICK_DEAD=0.12; // 歩く速さ / スティックの遊び(これ以下は動かない)
 // weapon
 const HIT_RADIUS=0.4, MAX_RANGE=22, FIRE_COOLDOWN=0.35, NOISE_ALERT=0.16, FLASH_TIME=0.08, GUARD_HEIGHT=1.5;
@@ -261,7 +262,7 @@ function loadLevel(i){
     if(row[x]==="S"){player.x=x+0.5;player.y=y+0.5;}
     if(row[x]==="G"){goal.x=x+0.5;goal.y=y+0.5;}
   }});
-  guards=L.guards.map(g=>({ path:g.path, seg:0, t:0, spd:g.spd, range:g.range,
+  guards=L.guards.map(g=>({ path:g.path, seg:0, t:0, spd:g.spd*GUARD_SPEED_SCALE, range:g.range,
     fov:g.fov*Math.PI/180, scan:g.scan||0, x:g.path[0][0], y:g.path[0][1], ang:0, sees:false, phase:Math.random()*6,
     dead:false, fallT:0 }));
   alertMeter=0; timeMs=0; input.x=0; input.y=0;
