@@ -547,14 +547,17 @@ punchBtn.addEventListener("touchstart",punchBtnHandler,{passive:false});
 punchBtn.addEventListener("mousedown",punchBtnHandler);
 
 //============================ INPUT: quick turn ============================
-// クイックターン: スティックを素早く(QT_MS以内に)端まで倒すと、倒した向き(自機から見て 上=そのまま / 右=右へ90° / 下=後ろへ180°...)へ即、向きを変える。
-// そのあと QT_LOCK_MS のあいだは、倒したままでも旋回し続けない(行きすぎ防止)
-const QT_MS=180, QT_EDGE=0.85, QT_LOCK_MS=350, QT_MIN_ANGLE=0.25;
-const qt={restT:0, edge:false, lockUntil:0};
-function quickTurn(x,y,now){
+// クイックターン: スティックを素早く(QT_MS以内に)端まで倒す動き(フリック)を、同じ向きへ QT_DBL_MS 以内に**2回**すると(ダブルスワイプ)、倒した向き
+// (自機から見て 上=そのまま / 右=右へ90° / 下=後ろへ180°...)へ即、向きを変える。1回だけでは何も起きない(いつも通りの旋回)。
+// 1回目のあと QT_FIRST_LOCK_MS は旋回しない(2回目を待つあいだ、勝手に回らないように)。クイックターンのあと QT_LOCK_MS は、倒したままでも旋回し続けない(行きすぎ防止)
+const QT_MS=180, QT_EDGE=0.85, QT_DBL_MS=380, QT_SAME_DIR=0.7, QT_FIRST_LOCK_MS=140, QT_LOCK_MS=350, QT_MIN_ANGLE=0.25;
+const qt={restT:0, edge:false, lockUntil:0, last:null};
+function flick(x,y,now){
   const a=Math.atan2(x,-y); // 上 = 0、右 = +、左 = -
-  if(Math.abs(a)<QT_MIN_ANGLE) return; // ほぼ真上へ倒した(前進のダッシュ)なら、向きはそのまま
-  heading-=a; qt.lockUntil=now+QT_LOCK_MS; // 右へ向く = headingが減る
+  if(qt.last&&now-qt.last.t<=QT_DBL_MS&&Math.abs(angDiff(a,qt.last.a))<=QT_SAME_DIR){ // 2回目 = クイックターン
+    qt.last=null;
+    if(Math.abs(a)>=QT_MIN_ANGLE){ heading-=a; qt.lockUntil=now+QT_LOCK_MS; } // 右へ向く = headingが減る。ほぼ真上なら、向きはそのまま
+  } else { qt.last={t:now,a}; qt.lockUntil=Math.max(qt.lockUntil,now+QT_FIRST_LOCK_MS); }
 }
 //============================ INPUT: joystick ============================
 const stick=document.getElementById("stick"), nub=document.getElementById("nub");
@@ -569,7 +572,7 @@ function stickMove(e){ if(!usingStick) return; let t;
   // 素早く倒す(まん中から一気に端まで)と、倒した向きへ自機が即、向きを変える(クイックターン)
   const m=Math.hypot(input.x,input.y), tnow=performance.now();
   if(m<0.25) qt.restT=tnow;
-  if(m>=QT_EDGE&&!qt.edge){ qt.edge=true; if(tnow-qt.restT<=QT_MS&&stateName==="play"&&tnow>=qt.lockUntil) quickTurn(input.x,input.y,tnow); }
+  if(m>=QT_EDGE&&!qt.edge){ qt.edge=true; if(tnow-qt.restT<=QT_MS&&stateName==="play") flick(input.x,input.y,tnow); }
   else if(m<0.6) qt.edge=false; }
 function stickEnd(){ usingStick=false; stId=null; input.x=0; input.y=0; nub.style.transform="translate(0,0)"; }
 stick.addEventListener("touchstart",e=>{e.preventDefault();stickStart(e);},{passive:false});
