@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 
 // 肩越しカメラ(リベレーションズ風)のスマホ縦画面プロトタイプ。中華娘モデル(china_rigged.glb)を使う。
-// 操作: 左下スティック = 移動 / スティックの中央をタップ = 照準の切替 / 中央を長押し(押しっぱなし)しながら倒す = 照準をグリグリ動かす / 右側スワイプ = カメラ / 右下 = 攻撃・回避
+// 操作: 画面下センターのスティック = 移動 / スティックの中央をタップ = 照準の切替 / 中央を長押し(押しっぱなし)しながら倒す = 照準をグリグリ動かす / 右側スワイプ = カメラ / 右下 = 攻撃・回避
 // 調整: 右上の ⚙ で、カメラの距離・高さ・下向き角・肩のオフセット・FOV・スワイプ感度・追従の速さを実機でその場で変えられる(値は保存される)
 
 const $ = (id) => document.getElementById(id);
@@ -239,11 +239,10 @@ const stickEnd = (e) => {
   stk.mode = "none"; input.mx = input.my = input.mag = 0; aimIn.x = aimIn.y = 0; nubEl.style.transform = ""; stickEl.classList.remove("run", "press");
 };
 for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) stickEl.addEventListener(t, stickEnd);
-// 右側スワイプ = カメラ(画面の右半分で始めた指)。左半分で始めた指は、スティック以外は無視。マウスはドラッグでカメラ
+// スワイプ = カメラ(スティック・ボタン以外の場所で始めた指。マウスはドラッグでカメラ)
 let lookId = null, lookX = 0, lookY = 0;
 canvas.addEventListener("pointerdown", (e) => {
   if (lookId !== null) return;
-  if (e.pointerType !== "mouse" && e.clientX < window.innerWidth * 0.4) return;
   lookId = e.pointerId; lookX = e.clientX; lookY = e.clientY; try { canvas.setPointerCapture(e.pointerId); } catch (_) {} $("msg").style.opacity = 0;
 });
 canvas.addEventListener("pointermove", (e) => {
