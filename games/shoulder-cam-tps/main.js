@@ -137,12 +137,18 @@ function sampleWalk(t) {
 const AIM_EULER = { RightUpperArm: [-84, 8, -6], RightForearm: [-8, 0, 0], LeftUpperArm: [-70, -20, 22], LeftForearm: [-62, 0, 0], Spine: [0, -10, 0], Chest: [0, -8, 0], Neck: [0, 12, 0] };
 const AIM_Q = {}; { const e = new THREE.Euler(); for (const [n, d] of Object.entries(AIM_EULER)) AIM_Q[n] = new THREE.Quaternion().setFromEuler(e.set(d[0] * RAD, d[1] * RAD, d[2] * RAD)); }
 const _lq = new THREE.Quaternion(), _le = new THREE.Euler();
-function poseCharacter(cycles, amp, aimW, lean, crouch, kick) {
+function poseCharacter(cycles, amp, aimW, lean, crouch, kick, twist = 0) {
   const w = sampleWalk(cycles * walkDur);
   for (const n of Object.keys(w.pose)) {
     const b = bones[n]; if (!b) continue;
     b.quaternion.copy(IDLE[n] || w.pose[n]).slerp(w.pose[n], amp);
     if (aimW > 0 && AIM_Q[n]) b.quaternion.slerp(AIM_Q[n], aimW);
+  }
+  if (twist !== 0) { // クイックターン: 上半身と頭が、向く先へ先に回る(体はあとから追いつく)
+    const tw = clamp(twist, -1.4, 1.4);
+    if (bones.Spine) bones.Spine.quaternion.premultiply(_lq.setFromEuler(_le.set(0, tw * 0.3, 0)));
+    if (bones.Chest) bones.Chest.quaternion.premultiply(_lq.setFromEuler(_le.set(0, tw * 0.25, 0)));
+    if (bones.Head) bones.Head.quaternion.premultiply(_lq.setFromEuler(_le.set(0, tw * 0.3, 0)));
   }
   if (lean !== 0 || kick !== 0) { // 走るときの前傾 / 射撃の反動
     if (bones.Spine) bones.Spine.quaternion.premultiply(_lq.setFromEuler(_le.set(lean * 0.6, 0, 0)));
@@ -164,6 +170,8 @@ let aim = false, aimT = 0, aimPressAt = 0;
 let speed = 0, cycles = 0, ampE = 0, leanE = 0, lastSwipeAt = -1e9;
 const input = { mx: 0, my: 0, mag: 0 }; // スティック(mx: 右+、my: 下+)
 const keys = new Set();
+let prevMoveMag = 0, quickTurnUntil = 0, turnRemain = 0;
+const QUICK_TURN_MS = 220, QUICK_TURN_RATE = 46, TURN_RATE = 20; // クイックターン: 倒しはじめの時間(ms) / その間の旋回の速さ(大きいほど一瞬) / ふだんの旋回の速さ
 let dodge = null, dodgeReadyAt = 0, kickT = 0, fireReadyAt = 0, camT = 1, recoil = 0;
 const WALK_MAX = 2.0, RUN_MAX = 4.2, AIM_SPEED = 1.5, DODGE_DIST = 3.0, DODGE_MS = 380;
 
@@ -283,7 +291,7 @@ function update(dt, now) {
   if (dodge) {
     const el = now - dodge.t0, u = clamp(el / DODGE_MS, 0, 1), p = 1 - (1 - u) * (1 - u), inc = DODGE_DIST * (p - dodge.p); dodge.p = p;
     const steps = Math.max(1, Math.ceil(Math.abs(inc) / 0.08)); for (let i = 0; i < steps; i++) { player.x += (dodge.dx * inc) / steps; player.z += (dodge.dz * inc) / steps; resolveCircle(player); }
-    speed = DODGE_DIST / (DODGE_MS / 1000) * (1 - u); if (u >= 1) { dodge = null; dodgeReadyAt = now + 600; }
+    speed = DODGE_DIST / (DODGE_MS / 1000) * (1 - u); turnRemain = 0; if (u >= 1) { dodge = null; dodgeReadyAt = now + 600; }
   } else {
     const running = mv.mag >= 0.7 && !aim;
     target = mv.mag === 0 ? 0 : aim ? AIM_SPEED * (mv.mag) : mv.mag < 0.7 ? WALK_MAX * (mv.mag / 0.7) : lerp(WALK_MAX, RUN_MAX, smooth((mv.mag - 0.7) / 0.3));
@@ -291,8 +299,14 @@ function update(dt, now) {
     if (speed > 0.02 && mv.mag > 0) { const dirx = mv.x / mv.mag, dirz = mv.z / mv.mag, inc = speed * dt, steps = Math.max(1, Math.ceil(inc / 0.08)); for (let i = 0; i < steps; i++) { player.x += (dirx * inc) / steps; player.z += (dirz * inc) / steps; resolveCircle(player); } }
     else if (mv.mag === 0) speed *= 0.6;
     // 向き: 移動方向へ自然に旋回。照準中は、カメラの正面を向く
+    // 構えていないとき: スティックを倒した向きへ、素早く(クイックターン)向きを変える。倒しはじめの QUICK_TURN_MS は、ほぼ一瞬(約0.1秒で180°)。そのあとも、向きを変えるときは速い
+    // 構えているときは、カメラの正面を向く(これまで通り)
+    if (mv.mag > 0 && prevMoveMag === 0 && !aim) quickTurnUntil = now + QUICK_TURN_MS;
     const want = aim ? yaw : mv.mag > 0 ? Math.atan2(mv.x, mv.z) : heading;
-    heading += angDiff(want, heading) * Math.min(1, dt * (aim ? 14 : 9));
+    const rate = aim ? 14 : now < quickTurnUntil ? QUICK_TURN_RATE : TURN_RATE;
+    turnRemain = angDiff(want, heading);
+    heading += turnRemain * Math.min(1, dt * rate);
+    prevMoveMag = mv.mag;
     // カメラの自動追従: 前へ歩いていて、しばらくスワイプしていないときだけ、ゆっくり自機の向きへ(後ろ向きに歩くときは追従しない)
     if (!aim && mv.mag > 0.3 && mv.fwd > 0.15 && now - lastSwipeAt > 900 && S.follow > 0) { const d = angDiff(heading, yaw); if (Math.abs(d) < 1.5) yaw += d * Math.min(1, dt * S.follow); }
   }
@@ -303,7 +317,7 @@ function update(dt, now) {
   const runK = clamp((speed - WALK_MAX) / (RUN_MAX - WALK_MAX), 0, 1); leanE += ((dodge ? 0.55 : runK * 0.35) - leanE) * Math.min(1, dt * 8);
   const crouch = dodge ? 0.16 * Math.sin(Math.PI * clamp((now - dodge.t0) / DODGE_MS, 0, 1)) : 0;
   kickT = Math.max(0, kickT - dt * 7);
-  poseCharacter(cycles, ampE, aimT, leanE, crouch, kickT);
+  poseCharacter(cycles, ampE, aimT, leanE, crouch, kickT, aim ? 0 : turnRemain);
   // 弾の線を消す
   for (let i = tracers.length - 1; i >= 0; i--) { const tr = tracers[i]; tr.life -= dt; if (tr.life <= 0) { scene.remove(tr.line, tr.spark); tr.line.geometry.dispose(); tr.line.material.dispose(); tr.spark.geometry.dispose(); tr.spark.material.dispose(); tracers.splice(i, 1); } else { tr.line.material.opacity = tr.life / tr.max; tr.spark.material.opacity = tr.life / tr.max; tr.spark.scale.setScalar(1 + (1 - tr.life / tr.max) * 2); } }
   recoil = Math.max(0, recoil - dt * 9);
@@ -364,4 +378,4 @@ camera.position.set(player.x, 1.8, player.z + 2.3);
 $("loading").style.display = "none";
 setTimeout(() => { $("msg").style.opacity = 0; }, 8000);
 requestAnimationFrame(frame);
-window.__tps = { S, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
+window.__tps = { S, get turnRemain() { return turnRemain; }, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
