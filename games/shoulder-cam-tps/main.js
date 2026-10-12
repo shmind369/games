@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "./vendor/loaders/GLTFLoader.js";
 
 // 肩越しカメラ(リベレーションズ風)のスマホ縦画面プロトタイプ。中華娘モデル(china_rigged.glb)を使う。
-// 操作: 左下スティック = 移動 / 右側スワイプ = カメラ回転・上下 / 右下 = 照準(タップで切替・長押しで押している間)・攻撃・回避
+// 操作: 左下スティック = 移動 / スティックの中央をタップ = 照準の切替 / 中央を長押し(押しっぱなし)しながら倒す = 照準をグリグリ動かす / 右側スワイプ = カメラ / 右下 = 攻撃・回避
 // 調整: 右上の ⚙ で、カメラの距離・高さ・下向き角・肩のオフセット・FOV・スワイプ感度・追従の速さを実機でその場で変えられる(値は保存される)
 
 const $ = (id) => document.getElementById(id);
@@ -205,16 +205,39 @@ function rayBoxes(ox, oy, oz, dx, dy, dz, maxT, margin) {
 
 // ---------- 入力 ----------
 // 左下スティック(固定)。タッチ・マウスどちらも pointer events
+//  ・倒す(すぐに中央から出る) = 移動
+//  ・中央をタップ(押してすぐ離す・倒さない) = 照準のオン/オフ
+//  ・中央を長押し(AIM_PRESS_MS以上、倒さずに押さえる) → 照準オン → そのまま倒す = 照準をグリグリ動かす(スティックの向きへ、倒した量に比例して視点が動く。移動はしない)。離すと照準は入ったまま
 const stickEl = $("stick"), nubEl = $("nub"); let stickId = null; const SR = 52;
+const AIM_PRESS_MS = 250, STICK_CENTER_PX = 14, AIM_YAW_RATE = 2.6, AIM_PITCH_RATE = 70; // 中央とみなす半径(px) / 照準操作の最大速さ(ラジアン/秒, 度/秒)
+const stk = { mode: "none", t0: 0, timer: 0 }; // mode: none | pending(中央を押さえている) | move | press(長押し済み) | aimadjust
+const aimIn = { x: 0, y: 0 };
 function stickMove(e) {
   const r = stickEl.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
   let dx = e.clientX - cx, dy = e.clientY - cy; const L = Math.hypot(dx, dy), k = L > SR ? SR / L : 1;
   nubEl.style.transform = `translate(${dx * k}px,${dy * k}px)`;
-  input.mx = (dx * k) / SR; input.my = (dy * k) / SR; input.mag = Math.min(1, L / SR); stickEl.classList.toggle("run", input.mag >= 0.9);
+  const vx = (dx * k) / SR, vy = (dy * k) / SR, mag = Math.min(1, L / SR);
+  if (stk.mode === "pending" && L > STICK_CENTER_PX) { stk.mode = "move"; clearTimeout(stk.timer); } // 長押し前に倒した = 普通の移動
+  if (stk.mode === "press" && L > STICK_CENTER_PX) { stk.mode = "aimadjust"; stickEl.classList.add("press"); }
+  if (stk.mode === "aimadjust") {
+    if (L <= STICK_CENTER_PX * 0.6) { aimIn.x = aimIn.y = 0; } else { aimIn.x = vx; aimIn.y = vy; }
+    input.mx = input.my = input.mag = 0; stickEl.classList.remove("run"); return;
+  }
+  if (stk.mode === "move") { input.mx = vx; input.my = vy; input.mag = mag; stickEl.classList.toggle("run", mag >= 0.9); }
 }
-stickEl.addEventListener("pointerdown", (e) => { if (stickId !== null) return; stickId = e.pointerId; try { stickEl.setPointerCapture(e.pointerId); } catch (_) {} stickMove(e); $("msg").style.opacity = 0; e.preventDefault(); });
+stickEl.addEventListener("pointerdown", (e) => {
+  if (stickId !== null) return; stickId = e.pointerId; try { stickEl.setPointerCapture(e.pointerId); } catch (_) {}
+  $("msg").style.opacity = 0; e.preventDefault();
+  stk.mode = "pending"; stk.t0 = performance.now(); aimIn.x = aimIn.y = 0;
+  stk.timer = setTimeout(() => { if (stk.mode === "pending") { stk.mode = "press"; setAim(true); stickEl.classList.add("press"); if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} } } }, AIM_PRESS_MS); // 中央を押さえたまま 0.25秒 = 「押し込んだ」
+  stickMove(e);
+});
 stickEl.addEventListener("pointermove", (e) => { if (e.pointerId === stickId) stickMove(e); });
-const stickEnd = (e) => { if (e.pointerId !== stickId) return; stickId = null; input.mx = input.my = input.mag = 0; nubEl.style.transform = ""; stickEl.classList.remove("run"); };
+const stickEnd = (e) => {
+  if (e.pointerId !== stickId) return; stickId = null; clearTimeout(stk.timer);
+  if (stk.mode === "pending" && e.type === "pointerup") setAim(!aim); // 中央をすぐ離した = タップ → 照準の切り替え
+  stk.mode = "none"; input.mx = input.my = input.mag = 0; aimIn.x = aimIn.y = 0; nubEl.style.transform = ""; stickEl.classList.remove("run", "press");
+};
 for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) stickEl.addEventListener(t, stickEnd);
 // 右側スワイプ = カメラ(画面の右半分で始めた指)。左半分で始めた指は、スティック以外は無視。マウスはドラッグでカメラ
 let lookId = null, lookX = 0, lookY = 0;
@@ -240,11 +263,7 @@ function lookBy(dx, dy) {
 window.addEventListener("keydown", (e) => { keys.add(e.code); if (e.code === "Space") { e.preventDefault(); fire(); } if (e.code === "KeyE") startDodge(); if (e.code === "ShiftLeft") setAim(true); });
 window.addEventListener("keyup", (e) => { keys.delete(e.code); if (e.code === "ShiftLeft") setAim(false); });
 // アクションボタン
-function setAim(v) { aim = v; $("bAim").classList.toggle("on", aim); }
-{ const b = $("bAim"); // タップ = 切り替え / 長押し(0.35秒以上)= 押している間だけ
-  b.addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); aimPressAt = performance.now(); if (!aim) setAim(true); else { aimPressAt = -1; setAim(false); } });
-  const up = () => { if (aimPressAt > 0 && performance.now() - aimPressAt > 350) setAim(false); aimPressAt = 0; };
-  b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up); }
+function setAim(v) { aim = v; $("stick").classList.toggle("aim", aim); }
 $("bAtk").addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); $("bAtk").classList.add("on"); fire(); });
 $("bDodge").addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); $("bDodge").classList.add("on"); startDodge(); });
 for (const id of ["bAtk", "bDodge"]) for (const t of ["pointerup", "pointercancel", "pointerleave"]) $(id).addEventListener(t, () => $(id).classList.remove("on"));
@@ -285,6 +304,12 @@ function moveVector() {
 // ---------- 毎フレーム ----------
 const clock = new THREE.Clock(); const hudEl = $("hud");
 function update(dt, now) {
+  // 照準をグリグリ(中央を押さえて倒している間): スティックの向き・倒した量で、視点(向き・上下)を動かす。倒し具合の少ないところは細かく動く
+  if (stk.mode === "aimadjust" && (aimIn.x || aimIn.y)) {
+    const cv = (v) => Math.sign(v) * Math.pow(Math.abs(v), 1.6), k = lerp(1, 0.6, aimT);
+    yaw -= cv(aimIn.x) * AIM_YAW_RATE * k * dt; ctrlYaw = yaw;
+    pitchElev = clamp(pitchElev + cv(aimIn.y) * AIM_PITCH_RATE * k * dt, -6, 48); lastSwipeAt = now;
+  }
   // 照準の切り替えをなめらかに
   aimT += ((aim ? 1 : 0) - aimT) * Math.min(1, dt * 9);
   // 移動
@@ -381,4 +406,4 @@ camera.position.set(player.x, 1.8, player.z + 2.3);
 $("loading").style.display = "none";
 setTimeout(() => { $("msg").style.opacity = 0; }, 8000);
 requestAnimationFrame(frame);
-window.__tps = { S, get ctrlYaw() { return ctrlYaw; }, get turnRemain() { return turnRemain; }, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
+window.__tps = { S, stk, aimIn, get ctrlYaw() { return ctrlYaw; }, get turnRemain() { return turnRemain; }, player, get heading() { return heading; }, get yaw() { return yaw; }, get pitchElev() { return pitchElev; }, get speed() { return speed; }, get aim() { return aim; }, camera, camInfo, boxes, setYaw: (v) => { yaw = v; yawView = v; }, setPos: (x, z) => { player.x = x; player.z = z; }, setHeading: (v) => { heading = v; }, lookBy, fire, startDodge, setAim, get dodging() { return !!dodge; }, input };
