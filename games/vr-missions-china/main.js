@@ -112,17 +112,17 @@ let impacts=[];
 //  操作は片手のスティックだけ: 左右 = 旋回 / 上下 = 前進・後退。heading = 自機の向き(FIRE/PUNCH は、この向きの敵を自動で狙う)
 let heading=0, curSpeed=0, moving=false, moveSign=1, camYaw=0;
 const TURN_SPEED=2.2, BACK_SCALE=0.6; // 旋回の速さ(ラジアン/秒) / 後退の速さの倍率
-const CAM_BACK=2.9, CAM_UP=1.8, CAM_SHOULDER=0.25, CAM_PITCH=-0.47, CAM_FOLLOW=9; // 後ろへ(m) / 上へ(m) / 右肩のほうへ(m) / 見る角度(下向き。自機が画面の上のほうに映り、前方が遠くまで見える) / 向きへの追従の速さ
+// カメラの設定(すべてここ。自機の位置・移動には影響しない): back = 自機の後ろへ(m) / up = カメラの高さ(m) / shoulder = 右肩のほうへずらす(m。0 = 自機が画面の左右中央) / pitch = 下向きの角度(ラジアン。大きいほど下を向く) / follow = 向きへの追従の速さ
+const CAM={back:3.6, up:3.2, shoulder:0, pitch:0.53, follow:9};
 const WALL_H=2.0, EYE_H=0.9;
 const desired=new THREE.Vector3(), lookAt=new THREE.Vector3();
 // カメラを置く: 自機の後ろ・上・右肩側。向きは自機の向きについてくる。壁は半透明なので、壁の中・外にカメラがあっても自機は見える
 function placeCamera(dt,snap){
-  if(snap) camYaw=heading; else camYaw+=angDiff(heading,camYaw)*Math.min(1,dt*CAM_FOLLOW);
+  if(snap) camYaw=heading; else camYaw+=angDiff(heading,camYaw)*Math.min(1,dt*CAM.follow);
   const fx=Math.sin(camYaw), fz=Math.cos(camYaw), rx=-Math.cos(camYaw), rz=Math.sin(camYaw);
-  desired.set(player.x-fx*CAM_BACK+rx*CAM_SHOULDER, CAM_UP, player.y-fz*CAM_BACK+rz*CAM_SHOULDER);
-  camera.position.copy(desired); // 位置は自機にぴったり(向きだけ、なめらかに追従)
-  const c=Math.cos(CAM_PITCH), sn=Math.sin(CAM_PITCH);
-  lookAt.set(camera.position.x+fx*c*10, camera.position.y+sn*10, camera.position.z+fz*c*10);
+  camera.position.set(player.x-fx*CAM.back+rx*CAM.shoulder, CAM.up, player.y-fz*CAM.back+rz*CAM.shoulder); // 位置は自機にぴったり(向きだけ、なめらかに追従)
+  const c=Math.cos(CAM.pitch), sn=Math.sin(CAM.pitch);
+  lookAt.set(camera.position.x+fx*c*10, camera.position.y-sn*10, camera.position.z+fz*c*10); // 注視点: カメラの向き(自機の向き)へ、pitch だけ下向き
   camera.lookAt(lookAt);
 }
 
@@ -568,5 +568,5 @@ window.addEventListener("mouseup",()=>{ if(stId==="m") stickEnd(); });
 resize();
 requestAnimationFrame(frame);
 show("ovTitle");
-window.__vm={ get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, heading:()=>heading, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
+window.__vm={ CAM, camera,  get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, heading:()=>heading, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
 
