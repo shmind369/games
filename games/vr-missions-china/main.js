@@ -312,7 +312,7 @@ function update(dt,now){
   // 移動: スティックの左右 = 旋回(右へ倒すと右へ向きを変える) / 上下 = 前進・後退。カメラは自機の向きについてくる
   let fwd = usingStick ? -Math.max(-1,Math.min(1,input.y)) : ((keys.u?1:0)-(keys.d?1:0));
   let trn = usingStick ?  Math.max(-1,Math.min(1,input.x)) : ((keys.sr||keys.tr?1:0)-(keys.sl||keys.tl?1:0));
-  if(Math.abs(fwd)<STICK_DEAD) fwd=0; if(Math.abs(trn)<STICK_DEAD) trn=0;
+  if(Math.abs(fwd)<STICK_DEAD) fwd=0; if(Math.abs(trn)<STICK_DEAD||performance.now()<qt.lockUntil) trn=0;
   heading-=trn*TURN_SPEED*dt; // headingが増える = 左へ向く(右 = -X方向)なので、右へ倒すと減らす
   const sp=fwd>0?fwd:fwd*BACK_SCALE;
   player.x+=Math.sin(heading)*sp*PSPD*dt; player.y+=Math.cos(heading)*sp*PSPD*dt; resolve(player);
@@ -546,16 +546,31 @@ function punchBtnHandler(e){ e.preventDefault(); e.stopPropagation(); punch(); }
 punchBtn.addEventListener("touchstart",punchBtnHandler,{passive:false});
 punchBtn.addEventListener("mousedown",punchBtnHandler);
 
+//============================ INPUT: quick turn ============================
+// クイックターン: スティックを素早く(QT_MS以内に)端まで倒すと、倒した向き(自機から見て 上=そのまま / 右=右へ90° / 下=後ろへ180°...)へ即、向きを変える。
+// そのあと QT_LOCK_MS のあいだは、倒したままでも旋回し続けない(行きすぎ防止)
+const QT_MS=180, QT_EDGE=0.85, QT_LOCK_MS=350, QT_MIN_ANGLE=0.25;
+const qt={restT:0, edge:false, lockUntil:0};
+function quickTurn(x,y,now){
+  const a=Math.atan2(x,-y); // 上 = 0、右 = +、左 = -
+  if(Math.abs(a)<QT_MIN_ANGLE) return; // ほぼ真上へ倒した(前進のダッシュ)なら、向きはそのまま
+  heading-=a; qt.lockUntil=now+QT_LOCK_MS; // 右へ向く = headingが減る
+}
 //============================ INPUT: joystick ============================
 const stick=document.getElementById("stick"), nub=document.getElementById("nub");
 let stId=null, usingStick=false, sc={x:0,y:0}; const SR=52;
 function stickStart(e){ const t=e.changedTouches?e.changedTouches[0]:e; stId=t.identifier??"m";
-  const r=stick.getBoundingClientRect(); sc.x=r.left+r.width/2; sc.y=r.top+r.height/2; usingStick=true; stickMove(e); }
+  const r=stick.getBoundingClientRect(); sc.x=r.left+r.width/2; sc.y=r.top+r.height/2; usingStick=true; qt.restT=performance.now(); qt.edge=false; stickMove(e); }
 function stickMove(e){ if(!usingStick) return; let t;
   if(e.changedTouches){ for(const c of e.changedTouches) if((c.identifier??"m")===stId){t=c;break;} if(!t) return; } else t=e;
   let dx=t.clientX-sc.x, dy=t.clientY-sc.y, d=Math.hypot(dx,dy);
   if(d>SR){ dx=dx/d*SR; dy=dy/d*SR; }
-  nub.style.transform="translate("+dx+"px,"+dy+"px)"; input.x=dx/SR; input.y=dy/SR; }
+  nub.style.transform="translate("+dx+"px,"+dy+"px)"; input.x=dx/SR; input.y=dy/SR;
+  // 素早く倒す(まん中から一気に端まで)と、倒した向きへ自機が即、向きを変える(クイックターン)
+  const m=Math.hypot(input.x,input.y), tnow=performance.now();
+  if(m<0.25) qt.restT=tnow;
+  if(m>=QT_EDGE&&!qt.edge){ qt.edge=true; if(tnow-qt.restT<=QT_MS&&stateName==="play"&&tnow>=qt.lockUntil) quickTurn(input.x,input.y,tnow); }
+  else if(m<0.6) qt.edge=false; }
 function stickEnd(){ usingStick=false; stId=null; input.x=0; input.y=0; nub.style.transform="translate(0,0)"; }
 stick.addEventListener("touchstart",e=>{e.preventDefault();stickStart(e);},{passive:false});
 stick.addEventListener("touchmove",e=>{e.preventDefault();stickMove(e);},{passive:false});
@@ -569,5 +584,5 @@ window.addEventListener("mouseup",()=>{ if(stId==="m") stickEnd(); });
 resize();
 requestAnimationFrame(frame);
 show("ovTitle");
-window.__vm={ CAM, camera,  get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, heading:()=>heading, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
+window.__vm={ qt,  CAM, camera,  get player(){return player;}, get guards(){return guards;}, setHeading:h=>{heading=h;}, heading:()=>heading, punch, fire, startGame, get state(){return stateName;}, get alert(){return alertMeter;}, get ammo(){return ammo;} }; // テスト用
 
