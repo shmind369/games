@@ -1019,7 +1019,7 @@ function slingStart(y, pointerId = null, kind = "leftJab") {
   const chain = canChainPunch(performance.now());
   if (fatigue.active || matchResult) return false; // 疲労状態は、かわし以外何もできない(勝敗が決まったあとも操作不可)
   if (!p.clip || !p.range || (punchState.phase && !chain) || dodgeState.phase || sling.active) return false;
-  if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
+  if (chain) { punchState = createPunchState(); punchResolved = false; punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
   Object.assign(sling, { kind, active: true, pull: 0, pointerId, startY: y, startId: ++slingSeq, t0: performance.now() });
   playerDebug(`Sling pull start (${p.label})`);
   return true;
@@ -1201,6 +1201,7 @@ function tapPunch(now, fromBuffer = false) {
   if (cancel) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (next punch)"); }
   tapBufferAt = -1e9;
   punchState = triggerPunch(punchState, kind, now);
+  punchResolved = false; // 新しいパンチは、まだ判定していない(前のパンチの「判定済み」を引き継ぐと、相手が無反応になる)
   punchTriggerAt = now;
   punchStats.started++;
   sfx.play("release");
@@ -1563,6 +1564,7 @@ function render() {
   // ボーン・モデル位置を完全に支配する(完全な排他制御)。優先順位はパンチ > ドジ > アイドルで、
   // どれも行っていないときは常にアイドルの構えループが再生される
   const prevPunch = punchState;
+  if (prevPunch.phase && !punchResolved && now - prevPunch.startAt >= punchDurationMs(prevPunch.phase)) { punchResolved = true; punchResolvedAt = now; resolvePlayerPunch(now); } // 安全網: どんなときも、出したパンチには必ず「ブロックかヒット」の反応が出る
   if (prevPunch.phase) punchState = advancePunch(punchState, now, punchDurationMs(prevPunch.phase));
   if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
