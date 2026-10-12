@@ -803,6 +803,10 @@ const PUNCHES = {
   rightStraight: { label: "Right Straight", url: "./assets/rightStraight.json", bone: "RightHand", forearm: "RightForearm", clip: null, range: null },
 };
 const PUNCH_SPEED = 1.0; // 再生速度の倍率(1.0=ファイルのまま。大きくするとより速く弾ける。後から調整する用)
+// 右ストレートのスピードを、左ジャブに合わせる: 「打ち出し〜拳が伸びきるまで」の時間を、左ジャブと同じにする(右は元のクリップだと遅い)。
+//  PUNCH_IMPACT_S = 各クリップで拳が伸びきる(=当たる)時刻(秒)。振りかぶり部分(0〜impact)だけ、基準(左ジャブ)の時間に収まるよう速く再生し、そのあとの戻りは元の速さのまま
+const PUNCH_IMPACT_S = { leftJab: 0.30, rightStraight: 0.45 };
+const PUNCH_REF_IMPACT_S = PUNCH_IMPACT_S.leftJab;
 const PUNCH_BLEND_IN_MS = 60; // Idleの姿勢からパンチの最初の姿勢へなじませる時間(短いほど弾ける感じ)
 const PUNCH_BLEND_OUT_MS = 150; // パンチの最後の構えからIdleへなじませる時間
 const PUNCH_HIT_RADIUS_M = 0.16; // グローブのタップ判定の半径(ワールド単位。グローブの大きさとほぼ同じ。画面上ではこの大きさに投影する)
@@ -853,7 +857,13 @@ function findTakebackByExtension(clip, forearmName) {
   }
   return 0.15;
 }
-const punchDurationMs = (kind) => ((PUNCHES[kind].range.end - PUNCHES[kind].range.start) * 1000) / PUNCH_SPEED;
+const punchDurationMs = (kind) => (PUNCH_REF_IMPACT_S + (PUNCHES[kind].range.end - PUNCHES[kind].range.start - PUNCH_IMPACT_S[kind])) * 1000 / PUNCH_SPEED;
+// パンチを打ち出してからの経過時間(ms)から、クリップの時刻(秒)を求める(振りかぶり部分だけ、右は速く進める)
+function punchClipTime(kind, elapsedMs) {
+  const p = PUNCHES[kind], e = (elapsedMs * PUNCH_SPEED) / 1000, imp = PUNCH_IMPACT_S[kind];
+  const ct = e < PUNCH_REF_IMPACT_S ? e * (imp / PUNCH_REF_IMPACT_S) : imp + (e - PUNCH_REF_IMPACT_S);
+  return p.range.start + ct;
+}
 
 for (const [kind, p] of Object.entries(PUNCHES)) {
   fetch(p.url)
@@ -941,7 +951,7 @@ function samplePunchOverIdle(now) {
   const elapsedMs = now - punchState.startAt;
   const totalMs = punchDurationMs(punchState.phase);
   const w = clamp01(Math.min(punchState.warm ? 1 : elapsedMs / PUNCH_BLEND_IN_MS, (totalMs - elapsedMs) / PUNCH_BLEND_OUT_MS));
-  const sample = sampleClip(p.clip, p.range.start + (elapsedMs * PUNCH_SPEED) / 1000);
+  const sample = sampleClip(p.clip, punchClipTime(punchState.phase, elapsedMs));
   for (const name of Object.keys(sample.pose)) {
     idle.pose[name] = idle.pose[name] ? idle.pose[name].clone().slerp(sample.pose[name], w) : sample.pose[name];
   }
@@ -1153,15 +1163,26 @@ function pointerPos(evt) { return { x: evt.clientX, y: evt.clientY }; }
 // パンチの左右は、タップするたびに交代する(左ジャブ → 右ストレート → 左ジャブ …)。ダメージは左右で同じ(PUNCH_DAMAGE)。
 // パンチが出せなかったとき(パンチ中・疲労中など)は、交代しない(次も同じ側から)
 let nextPunchKind = "leftJab";
-function tapPunch(now) {
+// テンポ: ・パンチの「判定が出たあと」PUNCH_CANCEL_MS たてば、戻りを待たずに、次のタップで次のパンチへつなげられる(ノーガード中は ENEMY_OPEN_CHAIN_GAP_MS)
+//        ・まだつなげられない間のタップは、TAP_BUFFER_MS のあいだ覚えておいて(先行入力)、つなげられるようになった瞬間に出す(取りこぼさない)
+const PUNCH_CANCEL_MS = 90, TAP_BUFFER_MS = 450;
+let tapBufferAt = -1e9;
+function canCancelPunch(now) {
+  return !!punchState.phase && punchResolved && now - punchResolvedAt >= (isEnemyOpen(now) ? ENEMY_OPEN_CHAIN_GAP_MS : PUNCH_CANCEL_MS);
+}
+function tapPunch(now, fromBuffer = false) {
   if (matchResult || playerKO) return false;
   const kind = nextPunchKind, p = PUNCHES[kind];
   if (!p.clip || !p.range) return false;
-  if (fatigue.active) { punchStats.ignored++; playerDebug(`${p.label} input ignored (fatigued)`); return false; }
-  if (dodgeState.phase) { punchStats.ignored++; playerDebug(`${p.label} input ignored (dodging)`); return false; }
-  const chain = canChainPunch(now); // ノーガード中は、前のパンチの戻りをキャンセルして連打できる
-  if (punchState.phase && !chain) { punchStats.ignored++; playerDebug(`${p.label} input ignored (${PUNCHES[punchState.phase].label} in progress)`); return false; }
-  if (chain) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (chain)"); }
+  if (fatigue.active) { if (!fromBuffer) { punchStats.ignored++; playerDebug(`${p.label} input ignored (fatigued)`); } return false; }
+  if (dodgeState.phase) { if (!fromBuffer) { punchStats.ignored++; playerDebug(`${p.label} input ignored (dodging)`); } return false; }
+  const cancel = !!punchState.phase && canCancelPunch(now);
+  if (punchState.phase && !cancel) { // まだつなげられない: 先行入力として覚えておく
+    if (!fromBuffer) { tapBufferAt = now; playerDebug(`${p.label} input buffered (${PUNCHES[punchState.phase].label} in progress)`); }
+    return false;
+  }
+  if (cancel) { punchState = createPunchState(); punchStats.finished++; playerDebug("Punch recovery canceled (next punch)"); }
+  tapBufferAt = -1e9;
   punchState = triggerPunch(punchState, kind, now);
   punchTriggerAt = now;
   punchStats.started++;
@@ -1169,6 +1190,12 @@ function tapPunch(now) {
   playerDebug(`Tap -> ${p.label}`);
   nextPunchKind = kind === "leftJab" ? "rightStraight" : "leftJab";
   return true;
+}
+// 毎フレーム: 先行入力があれば、パンチをつなげられるようになった瞬間に出す(古い入力は捨てる)
+function processTapBuffer(now) {
+  if (tapBufferAt < 0) return;
+  if (now - tapBufferAt > TAP_BUFFER_MS || matchResult || playerKO) { tapBufferAt = -1e9; return; }
+  tapPunch(now, true);
 }
 function onPointerDown(evt) {
   gestureStart = { ...pointerPos(evt), t: performance.now(), pointerId: evt.pointerId };
@@ -1257,7 +1284,7 @@ let enemyHitProbability = ENEMY_HIT_CHANCE;
 let enemyForcedResult = null; // テスト用
 let punchResolved = true;
 // グローブが敵に届かないとき、パンチの何割の時点(=腕が伸びきるあたり)で当たり/ガードを判定するか
-const PUNCH_IMPACT_FRACTION = { leftJab: 0.4, rightStraight: 0.55 };
+const PUNCH_IMPACT_FRACTION = { leftJab: 0.4, rightStraight: 0.58 }; // 右は、左と同じ時刻(0.30秒)に当たる
 const enemyReactMs = (r) => r.inMs + r.holdMs + r.outMs;
 function enemyReactAmount(now) {
   if (!enemyReact.kind) return 0;
@@ -1568,6 +1595,7 @@ function render() {
   if (!(downState && downState.who === "enemy")) { applyEnemyOpen(now); applyEnemyReact(now); }
   applyDownPose(now);
   updatePunchResult(now);
+  processTapBuffer(now); // 先行入力(パンチ中のタップ)があれば、つなげられる瞬間に出す
   updatePunchZoneDebug();
 
   renderer.render(scene, camera);
