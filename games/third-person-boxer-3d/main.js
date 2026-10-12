@@ -475,10 +475,21 @@ function sfxTone(ctx, dest, t0, { dur, wave = "sine", f0, f1 = f0, gain, attack 
 const SFX_BUILDERS = {
   // プレイヤーが殴られた: 重いドスッ + 鈍い衝撃
   playerHit(c, d, t) { sfxTone(c, d, t, { dur: 0.28, f0: 150, f1: 42, gain: 1.0 }); sfxNoise(c, d, t, { dur: 0.2, type: "lowpass", f0: 1400, f1: 200, gain: 0.9 }); sfxNoise(c, d, t, { dur: 0.05, type: "bandpass", f0: 2500, q: 0.8, gain: 0.35 }); },
-  // 敵が殴られた: 鋭いバシッ + 少し軽い芯
-  enemyHit(c, d, t) { sfxTone(c, d, t, { dur: 0.2, f0: 220, f1: 70, gain: 0.8 }); sfxNoise(c, d, t, { dur: 0.14, type: "bandpass", f0: 2200, f1: 600, q: 0.7, gain: 1.0 }); sfxNoise(c, d, t, { dur: 0.04, type: "highpass", f0: 4000, gain: 0.3 }); },
+  // 敵にパンチがヒット(派手): ドンッという低い爆発 + 鋭いバシーン + 金属的な衝撃(ガシャッ) + 体に響く重い音 + キラッと光るアクセント + 余韻
+  enemyHit(c, d, t) {
+    sfxTone(c, d, t, { dur: 0.38, f0: 150, f1: 34, gain: 1.25 });                                              // 低い爆発(ドンッ)
+    sfxTone(c, d, t, { dur: 0.16, wave: "triangle", f0: 420, f1: 90, gain: 0.7 });                              // 打撃の芯
+    sfxNoise(c, d, t, { dur: 0.16, type: "bandpass", f0: 3400, f1: 700, q: 0.7, gain: 1.5, attack: 0.002 });   // 鋭いバシーン
+    sfxNoise(c, d, t, { dur: 0.05, type: "highpass", f0: 5000, gain: 0.8, attack: 0.001 });                    // 先頭のクラック
+    sfxNoise(c, d, t, { dur: 0.3, type: "lowpass", f0: 1800, f1: 160, gain: 1.0 });                            // 体に響く重い音
+    sfxTone(c, d, t + 0.005, { dur: 0.2, wave: "square", f0: 2100, f1: 760, gain: 0.22 });                      // 金属的な衝撃(ガシャッ)
+    sfxTone(c, d, t + 0.005, { dur: 0.2, wave: "sawtooth", f0: 1630, f1: 590, gain: 0.18 });
+    sfxTone(c, d, t + 0.035, { dur: 0.45, wave: "triangle", f0: 1568, f1: 1560, gain: 0.3, attack: 0.004 });   // キラッと光るアクセント(ソ)
+    sfxTone(c, d, t + 0.07, { dur: 0.5, wave: "triangle", f0: 2093, f1: 2085, gain: 0.26, attack: 0.004 });    // (ド)
+    sfxNoise(c, d, t + 0.05, { dur: 0.55, type: "bandpass", f0: 900, f1: 300, q: 0.5, gain: 0.35, attack: 0.02 }); // 余韻(会場に響く感じ)
+  },
   // ガード: 乾いたパンッ(短く、軽い)
-  guard(c, d, t) { sfxNoise(c, d, t, { dur: 0.07, type: "bandpass", f0: 1000, f1: 700, q: 1.4, gain: 0.8 }); sfxTone(c, d, t, { dur: 0.06, wave: "triangle", f0: 260, f1: 150, gain: 0.45 }); },
+  guard(c, d, t) { sfxNoise(c, d, t, { dur: 0.09, type: "bandpass", f0: 1200, f1: 700, q: 1.2, gain: 1.0 }); sfxTone(c, d, t, { dur: 0.12, wave: "triangle", f0: 300, f1: 90, gain: 0.7 }); sfxNoise(c, d, t, { dur: 0.04, type: "highpass", f0: 4000, gain: 0.35 }); },
   // かわした: 風切り(ヒュッ)
   dodge(c, d, t) { sfxNoise(c, d, t, { dur: 0.24, type: "bandpass", f0: 500, f1: 2200, q: 1.2, gain: 1.4, attack: 0.08 }); },
   // ノーガードのチャンス: 上がる2連のピン
@@ -502,7 +513,9 @@ const sfx = {
     if (!AC) return;
     this.ctx = new AC();
     this.master = this.ctx.createGain(); this.master.gain.value = this.muted ? 0 : SFX_MASTER_VOLUME;
-    this.master.connect(this.ctx.destination);
+    const comp = this.ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.12; // 音が重なっても割れないように
+    const mk = this.ctx.createGain(); mk.gain.value = 1.4; // 圧縮で下がった分の音量を戻す
+    this.master.connect(comp); comp.connect(mk); mk.connect(this.ctx.destination);
   },
   unlock() { try { this.init(); if (this.ctx && this.ctx.state === "suspended") this.ctx.resume(); } catch (_) {} },
   play(name) {
@@ -519,7 +532,7 @@ const sfx = {
   // テスト用: 音をオフラインで描画してサンプルを返す
   async render(name, sec = 0.8) {
     const oc = new OfflineAudioContext(1, Math.floor(44100 * sec), 44100);
-    const g = oc.createGain(); g.gain.value = SFX_MASTER_VOLUME; g.connect(oc.destination);
+    const g = oc.createGain(); g.gain.value = SFX_MASTER_VOLUME; const comp = oc.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.12; const mk = oc.createGain(); mk.gain.value = 1.4; g.connect(comp); comp.connect(mk); mk.connect(oc.destination);
     SFX_BUILDERS[name](oc, g, 0.01);
     return (await oc.startRendering()).getChannelData(0);
   },
@@ -1167,8 +1180,12 @@ let nextPunchKind = "leftJab";
 //        ・まだつなげられない間のタップは、TAP_BUFFER_MS のあいだ覚えておいて(先行入力)、つなげられるようになった瞬間に出す(取りこぼさない)
 const PUNCH_CANCEL_MS = 90, TAP_BUFFER_MS = 450;
 let tapBufferAt = -1e9;
+// 出したパンチは必ず「相手に当たるまで」「拳が伸びきるまで」出し切る(途中で止めない)。つなげられるのは、①グローブが相手に届いて判定が出て、
+// ②拳が伸びきる時刻(PUNCH_REF_IMPACT_S)を過ぎて、さらに PUNCH_CANCEL_MS たってから(= 戻りの途中から)
 function canCancelPunch(now) {
-  return !!punchState.phase && punchResolved && now - punchResolvedAt >= (isEnemyOpen(now) ? ENEMY_OPEN_CHAIN_GAP_MS : PUNCH_CANCEL_MS);
+  if (!punchState.phase || !punchResolved) return false;
+  const gap = isEnemyOpen(now) ? ENEMY_OPEN_CHAIN_GAP_MS : PUNCH_CANCEL_MS;
+  return now - punchResolvedAt >= gap && now - punchState.startAt >= PUNCH_REF_IMPACT_S * 1000 / PUNCH_SPEED + gap;
 }
 function tapPunch(now, fromBuffer = false) {
   if (matchResult || playerKO) return false;
@@ -1384,8 +1401,7 @@ function addFatigue(amount, reason, now) {
 }
 function startFatigue(now) {
   Object.assign(fatigue, { active: true, at: now, until: now + FATIGUE_MS, value: FATIGUE_MAX });
-  slingCancel("fatigue");
-  punchState = createPunchState(); // パンチ中だったら中断
+  slingCancel("fatigue"); // 出したパンチは中断しない(最後まで出し切る)
   closeEnemyOpen(now); // ノーガード中だったら、解除
   enemyWaitScale = FATIGUE_ENEMY_WAIT_SCALE;
   if (enemyState && enemyState.phase === "idle") enemyState = { ...enemyState, nextAttackAt: now + (enemyState.nextAttackAt - now) * FATIGUE_ENEMY_WAIT_SCALE };
@@ -1408,8 +1424,11 @@ function updateFatigue(now) {
 const fatigueLookAmount = (now) => (fatigue.active ? clamp01(Math.min((now - fatigue.at) / FATIGUE_LOOK_IN_MS, (fatigue.until - now) / FATIGUE_LOOK_OUT_MS)) : 0);
 const _fQ = new THREE.Quaternion(), _fE = new THREE.Euler();
 let playerMaterials = null;
+// 疲労の姿勢は、パンチを出している間は重ねない(パンチを最後まで出し切ってから、なめらかに疲労の姿勢になる)
+let fatiguePoseW = 1;
 function applyFatigueLook(now) {
-  const k = fatigueLookAmount(now);
+  fatiguePoseW += ((punchState.phase ? 0 : 1) - fatiguePoseW) * 0.2;
+  const k = fatigueLookAmount(now) * fatiguePoseW;
   if (k > 0) {
     for (const name of Object.keys(FATIGUE_BONES)) {
       const bone = allBonesByName[name];
@@ -1547,7 +1566,7 @@ function render() {
   if (prevPunch.phase) punchState = advancePunch(punchState, now, punchDurationMs(prevPunch.phase));
   if (prevPunch.phase && !punchState.phase) { punchStats.finished++; playerDebug("Return to Idle"); }
 
-  if (punchState.phase && now - playerHitAt < HIT_RECOIL_MS) punchState = createPunchState(); // 被弾でパンチは中断
+  // パンチは、被弾しても中断しない(出したパンチは最後まで出し切る。被弾のけぞりは、パンチの姿勢の上に重ねるだけ)
   if (downState && downState.who === "player") {
     applyClipSample(sampleClip(IDLE_CLIP, 0)); // ダウン中は、構えを固定した上に倒れる動きを重ねる
   } else if (sling.active) {
