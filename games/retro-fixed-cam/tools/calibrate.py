@@ -27,16 +27,16 @@ SCENES = [
     "circles": { "newel_post": ((687, 1342), 0.2) },                                         # 親柱: 足元の点・半径(m)
     "occluders": { "newel_post": { "poly": [(646, 690), (695, 690), (700, 800), (742, 930), (745, 1250), (735, 1347), (668, 1352), (645, 1240), (645, 935), (648, 800)], "anchor": (687, 1342) } },
     "start_floor": (0.5, 2.4), "start_heading": 0.0,
-    # ゲート: 奥の端まで歩くと、シーン2へ。entry = 向こうのシーンでの出現位置(床の座標 m)
-    "gates": [ { "name": "to_scene2", "floor_poly": [(-0.3, 4.0), (1.3, 4.0), (1.3, 5.0), (-0.3, 5.0)], "to": 1, "enter_floor": (0.40, 2.3) } ] },
+    # ゲート: 廊下の奥の端(机のそば。Z 3.82m〜)まで歩くと、シーン2へ。出現位置・向きは、シーン2の右下の机のそば(床 X 1.11m, Z 2.19m)で、左(-X)向き(271°)
+    "gates": [ { "name": "to_scene2", "floor_poly": [(-0.3, 3.82), (1.3, 3.82), (1.3, 5.0), (-0.3, 5.0)], "to": 1, "enter_floor": (1.11, 2.19), "enter_theta_deg": 271 } ] },
   { "name": "scene2", "photo": "assets/hall2.jpg", "scale": 1.0,
     # 奥の廊下の、左の壁の巾木の線と、右の壁の巾木の線
     "left_line": ((178, 1040), (258, 805)), "right_line": ((421, 1048), (395, 905)), "cam_height": 1.62,
     "walkable": [(249, 830), (382, 830), (421, 1048), (432, 1235), (505, 1222), (660, 1205), (700, 1300), (702, 1430), (110, 1430), (100, 1300), (165, 1090), (178, 1040)],
     "obstacles": {}, "circles": {}, "occluders": {},
-    "start_floor": (0.40, 2.3), "start_heading": 0.0,
+    "start_floor": (1.11, 2.19), "start_heading": 271 * 3.141592653589793 / 180,
     # ゲート: 手前(カメラ側)の端まで来ると、シーン1へ(奥の端から、カメラのほうへ向かって入る)
-    "gates": [ { "name": "to_scene1", "img_poly": [(0, 1340), (720, 1340), (720, 1440), (0, 1440)], "to": 0, "enter_floor": (0.40, 3.7) } ] },
+    "gates": [ { "name": "to_scene1", "img_poly": [(0, 1340), (720, 1340), (720, 1440), (0, 1440)], "to": 0, "enter_floor": (0.50, 3.6), "enter_theta_deg": 180 } ] },
 ]
 
 K = np.array([[F, 0, CX], [0, F, CY], [0, 0, 1]]); Ki = np.linalg.inv(K)
@@ -66,7 +66,7 @@ def build(cfg):
     gates = []
     for g in cfg["gates"]:
         gp = g["floor_poly"] if "floor_poly" in g else poly(g["img_poly"])
-        gates.append({"name": g["name"], "poly": [list(p) for p in gp], "to": g["to"], "enter": list(g["enter_floor"]) if "enter_floor" in g else None, "_enter_img": g.get("enter_img")})
+        gates.append({"name": g["name"], "poly": [list(p) for p in gp], "to": g["to"], "enter": list(g["enter_floor"]) if "enter_floor" in g else None, "enterTheta": (g["enter_theta_deg"] * np.pi / 180 if "enter_theta_deg" in g else None), "_enter_img": g.get("enter_img")})
     start = list(cfg["start_floor"]) if "start_floor" in cfg else to_floor(G(*cfg["start_img"]))
     scene = {
       "name": cfg["name"], "image": cfg["photo"], "imageW": W_IMG, "imageH": H_IMG, "focalPx": F, "charScale": CHAR_SCALE,

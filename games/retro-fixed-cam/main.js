@@ -144,7 +144,7 @@ function setScene(i) {
 function goScene(gate) {
   if (transitioning) return; transitioning = true; fade.style.opacity = 1;
   setTimeout(() => {
-    setScene(gate.to); player.X = gate.enter[0]; player.Z = gate.enter[1]; gateCooldownUntil = performance.now() + 500;
+    setScene(gate.to); player.X = gate.enter[0]; player.Z = gate.enter[1]; if (gate.enterTheta != null) player.theta = gate.enterTheta; // 出現位置と向き(指定があれば) gateCooldownUntil = performance.now() + 500;
     requestAnimationFrame(() => { fade.style.opacity = 0; transitioning = false; });
   }, 160);
 }
