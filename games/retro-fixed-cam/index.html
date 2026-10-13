@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="data:," />
+  <title>Fixed Cam Walk（初代バイオ風 固定カメラ・ラジコン操作）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body { margin: 0; height: 100%; height: 100dvh; overflow: hidden; background: #050505; color: #e8e2d6; font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif; touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+    #stage { position: absolute; left: 0; top: 0; overflow: hidden; background: #000; }
+    #stage > * { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+    #photo { background-size: 100% 100%; }
+    #gl { pointer-events: none; }
+    .occ { background-size: 100% 100%; pointer-events: none; display: none; }
+    #dbg { pointer-events: none; display: none; }
+    #panel { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; pointer-events: none; }
+    /* 十字ボタン(ラジコン操作): ▲前進 ▼後退 ◀左旋回 ▶右旋回 */
+    #pad { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: calc(env(safe-area-inset-bottom, 0px) + 22px); width: 190px; height: 190px; z-index: 6; }
+    #pad button { position: absolute; width: 62px; height: 62px; border-radius: 14px; border: 2px solid rgba(255,255,255,.35); background: rgba(40,36,30,.72); color: #fff; font-size: 24px; padding: 0; touch-action: none; -webkit-tap-highlight-color: transparent; }
+    #pad button.on { background: rgba(214,170,90,.95); color: #1a1208; border-color: #fff; }
+    #bU { left: 64px; top: 0; } #bD { left: 64px; bottom: 0; } #bL { left: 0; top: 64px; } #bR { right: 0; top: 64px; }
+    #run { position: fixed; right: max(18px, env(safe-area-inset-right)); bottom: calc(env(safe-area-inset-bottom, 0px) + 40px); z-index: 6; width: 86px; height: 86px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); background: rgba(40,36,30,.72); color: #fff; font: 700 14px system-ui; padding: 0; touch-action: none; -webkit-tap-highlight-color: transparent; }
+    #run.on { background: rgba(214,170,90,.95); color: #1a1208; border-color: #fff; }
+    #topbar { position: fixed; right: 10px; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 7; display: flex; gap: 8px; }
+    #topbar button { height: 38px; padding: 0 12px; border-radius: 19px; border: 1px solid rgba(255,255,255,.35); background: rgba(0,0,0,.55); color: #fff; font-size: 13px; touch-action: manipulation; }
+    #topbar button.on { background: rgba(214,170,90,.9); color: #1a1208; }
+    #info { position: fixed; left: 10px; top: calc(env(safe-area-inset-top, 0px) + 8px); z-index: 7; font: 11px/1.5 ui-monospace, Menlo, monospace; color: #cfe6c8; text-shadow: 0 1px 3px #000; pointer-events: none; white-space: pre; }
+    #loading { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; gap: 14px; align-items: center; justify-content: center; background: #050505; font-size: 14px; letter-spacing: .08em; text-align: center; padding: 24px; }
+    #loading.err { color: #ff8b8b; } #loading pre { white-space: pre-wrap; text-align: left; max-width: 88vw; font-size: 12px; color: #ffc9c9; letter-spacing: 0; }
+    #loading button { padding: 10px 22px; border-radius: 10px; border: 1px solid #fff5; background: #fff2; color: #fff; font-size: 14px; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <div id="stage">
+    <div id="photo"></div>
+    <canvas id="gl"></canvas>
+    <svg id="dbg" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div id="info"></div>
+  <div id="topbar"><button id="bDbg">検出結果</button></div>
+  <div id="pad"><button id="bU">▲</button><button id="bD">▼</button><button id="bL">◀</button><button id="bR">▶</button></div>
+  <button id="run">走る</button>
+  <div id="loading">LOADING...<small>写真・床の情報・中華娘モデルを読み込んでいます</small></div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
