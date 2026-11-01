@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>Grab &amp; Glue 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #0a0d12;
+      font-family: system-ui, sans-serif;
+      color: #eee;
+      touch-action: none;
+      -webkit-text-size-adjust: 100%;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    canvas#game { display: block; touch-action: none; }
+
+    /* ---------- 照準(レティクル) ---------- */
+    #reticle {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 10px;
+      height: 10px;
+      margin: -5px 0 0 -5px;
+      z-index: 15;
+      pointer-events: none;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.75);
+      box-shadow: 0 0 0 1.5px rgba(0,0,0,0.5);
+      transition: background 0.1s, transform 0.1s;
+    }
+    #reticle.target {
+      background: rgba(255,214,110,0.95);
+      transform: scale(1.6);
+      box-shadow: 0 0 0 1.5px rgba(0,0,0,0.6), 0 0 10px rgba(255,214,110,0.8);
+    }
+    #reticle.glue {
+      background: rgba(120,255,160,0.95);
+      transform: scale(1.6);
+      box-shadow: 0 0 0 1.5px rgba(0,0,0,0.6), 0 0 10px rgba(120,255,160,0.8);
+    }
+    #reticle.held {
+      background: rgba(255,255,255,0.35);
+      transform: scale(1);
+    }
+
+    /* ---------- 上部ステータス ---------- */
+    #statusBar {
+      position: fixed;
+      top: max(10px, env(safe-area-inset-top));
+      left: 12px;
+      right: 12px;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      pointer-events: none;
+    }
+    #statusText {
+      background: rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.14);
+      padding: 7px 16px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      text-align: center;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+      max-width: 84%;
+    }
+
+    /* ---------- 視点操作レイヤー(画面右側中心のドラッグで視点回転) ---------- */
+    #lookLayer {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+    }
+
+    /* ---------- 移動用仮想スティック(左下) ---------- */
+    #joystickBase {
+      position: fixed;
+      left: max(20px, env(safe-area-inset-left));
+      bottom: max(22px, env(safe-area-inset-bottom));
+      z-index: 20;
+      width: clamp(92px, 24vw, 120px);
+      height: clamp(92px, 24vw, 120px);
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.22);
+      touch-action: none;
+    }
+    #joystickKnob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 46%;
+      height: 46%;
+      margin-left: -23%;
+      margin-top: -23%;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.32);
+      border: 1px solid rgba(255,255,255,0.5);
+      pointer-events: none;
+    }
+
+    /* ---------- メイン操作ボタン(つかむ・接着・解除、画面下部中央) ---------- */
+    #mainActions {
+      position: fixed;
+      /* 左下の仮想スティックと重ならないよう、スティックの右端より
+         内側から始める(狭い画面幅でもスティックの上に乗らないように) */
+      left: clamp(126px, 30vw, 150px);
+      right: max(8px, env(safe-area-inset-right));
+      bottom: max(20px, env(safe-area-inset-bottom));
+      z-index: 20;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      pointer-events: none;
+    }
+    .mainBtn {
+      pointer-events: auto;
+      flex: 1 1 0;
+      min-width: 0;
+      max-width: 100px;
+      min-height: 52px;
+      padding: 0 8px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.28);
+      background: rgba(20,20,26,0.74);
+      color: #fff;
+      font-size: 13.5px;
+      font-weight: 700;
+      touch-action: manipulation;
+    }
+    .mainBtn:disabled { opacity: 0.32; }
+    .mainBtn:not(:disabled):active { transform: scale(0.95); }
+    #grabBtn:not(:disabled) { background: rgba(255,214,110,0.24); border-color: rgba(255,214,110,0.65); }
+    #glueBtn:not(:disabled) { background: rgba(120,255,160,0.2); border-color: rgba(120,255,160,0.6); }
+    #releaseBtn:not(:disabled) { background: rgba(255,120,120,0.2); border-color: rgba(255,120,120,0.6); }
+
+    /* ---------- 補助ボタン(精密操作、画面右側) ---------- */
+    #auxActions {
+      position: fixed;
+      right: max(14px, env(safe-area-inset-right));
+      bottom: 128px;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 7px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.15s, transform 0.15s;
+      pointer-events: none;
+    }
+    #auxActions.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    .auxBtn {
+      width: 52px;
+      height: 44px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.26);
+      background: rgba(20,20,26,0.68);
+      color: #fff;
+      font-size: 16px;
+      touch-action: manipulation;
+    }
+    .auxBtn:active { background: rgba(255,255,255,0.2); transform: scale(0.94); }
+    .auxLabel {
+      grid-column: span 2;
+      text-align: center;
+      font-size: 10px;
+      opacity: 0.65;
+      margin-top: 2px;
+      letter-spacing: 0.04em;
+    }
+
+    /* ---------- オーバーレイ(開始画面・縦画面警告) ---------- */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 16px;
+      text-align: center;
+      padding: 32px;
+      background: rgba(6,7,10,0.96);
+    }
+    .overlay.show { display: flex; }
+    .overlay h1 { margin: 0; font-size: 22px; letter-spacing: 0.02em; color: #ffd66e; }
+    .overlay p, .overlay li { font-size: 12.5px; line-height: 1.7; opacity: 0.88; }
+    .overlay ul { text-align: left; max-width: 320px; margin: 0; padding-left: 1.2em; }
+    .bigBtn {
+      padding: 14px 32px;
+      border-radius: 999px;
+      border: none;
+      background: #4c8dff;
+      color: #fff;
+      font-size: 16px;
+      touch-action: manipulation;
+    }
+    .bigBtn:active { background: #3a72db; }
+
+    #rotateOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 24px;
+      background: #0a0d12;
+      color: #eee;
+      font-size: clamp(16px, 5vw, 20px);
+    }
+    @media (orientation: landscape) {
+      #rotateOverlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="lookLayer"></div>
+  <div id="reticle"></div>
+
+  <div id="statusBar"><div id="statusText">フィールドを歩き回って木材を探してみよう</div></div>
+
+  <div id="joystickBase"><div id="joystickKnob"></div></div>
+
+  <div id="mainActions">
+    <button id="grabBtn" class="mainBtn" disabled>つかむ</button>
+    <button id="glueBtn" class="mainBtn" disabled>接着</button>
+    <button id="releaseBtn" class="mainBtn" disabled>解除</button>
+  </div>
+
+  <div id="auxActions">
+    <button id="upBtn" class="auxBtn">▲</button>
+    <button id="downBtn" class="auxBtn">▼</button>
+    <button id="fwdBtn" class="auxBtn">近</button>
+    <button id="backBtn" class="auxBtn">遠</button>
+    <button id="rotLeftBtn" class="auxBtn">↺</button>
+    <button id="rotRightBtn" class="auxBtn">↻</button>
+    <div class="auxLabel">上下 / 前後 / 回転</div>
+  </div>
+
+  <div class="overlay show" id="startOverlay">
+    <h1>GRAB &amp; GLUE</h1>
+    <p>一人称視点で木材をつかみ、組み合わせて構造物を作るプロトタイプです。</p>
+    <ul>
+      <li>左下のスティックで移動、右側をドラッグして視点を回転</li>
+      <li>照準を木材に合わせて「つかむ」。つかんだ物は視点の動きに追従して浮遊する</li>
+      <li>右側の補助ボタンで上下・前後・回転を微調整(精密操作)</li>
+      <li>別の木材に近づけると緑色に光る→「接着」で固定。複数回つなげられる</li>
+      <li>接着済みの木材に照準を合わせて「解除」を押すと、その木材だけ分離できる</li>
+    </ul>
+    <button class="bigBtn" id="startBtn">はじめる</button>
+  </div>
+
+  <div id="rotateOverlay">画面を縦向きにしてください</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three.module.min.js"
+      }
+    }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
