@@ -153,7 +153,8 @@ export class Input {
           this.stick = { id: e.pointerId, cx: c.x, cy: c.y, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
           this.stickEl.classList.add('active');
           // 止まっているときに中心を押す → 垂直ジャンプ(既定: 押した瞬間に跳ぶ)
-          this.stick.centerTap = d <= INPUT.centerJumpRadius && this.canVerticalJump() ? { t: now } : null;
+          // 中心タップ候補: 止まっているときに中心を押した。ジャンプするかは指を離したときに決める
+          this.stick.centerTap = d <= INPUT.centerJumpRadius && this.canVerticalJump() ? { t: now, x, y, maxMove: 0 } : null;
           if (this.stick.centerTap && !INPUT.centerJumpOnRelease) {
             this._jumpPressed = true;
             this.jumpHeld = true;
@@ -240,6 +241,7 @@ export class Input {
     const l = Math.hypot(dx, dy);
     s.tilt = Math.min(1, l / R);   // 倒し具合(デッドゾーン適用前、0..1)
     s.maxTilt = Math.max(s.maxTilt || 0, s.tilt);
+    if (s.centerTap) s.centerTap.maxMove = Math.max(s.centerTap.maxMove, Math.hypot(x - s.centerTap.x, y - s.centerTap.y));
     s.dirX = l > 0 ? dx / l : 0; s.dirY = l > 0 ? -dy / l : 0;
     if (this.layout === 'release') this.stickEl.classList.toggle('max', s.tilt >= INPUT.releaseJumpTilt);
     if (l > R) {
@@ -358,9 +360,11 @@ export class Input {
         const st = this.stick;
         if (!cancelled) this._updateStick(e.clientX, e.clientY); // 離した位置で最終判定
         const ct = st.centerTap;
-        if (INPUT.centerJumpOnRelease && ct && !cancelled && st.maxTilt * INPUT.stickRadius <= INPUT.centerJumpRadius &&
-            performance.now() - ct.t <= INPUT.tapMaxTime * 1000) {
-          // (centerJumpOnRelease 時)中心を短くタップして離した → 垂直ジャンプ
+        if (INPUT.centerJumpOnRelease && ct && !cancelled && ct.maxMove <= INPUT.centerTapMaxMove &&
+            performance.now() - ct.t <= INPUT.centerTapMaxTime * 1000) {
+          // 中心を短くタップして(ほとんど動かさずに)離した → 垂直ジャンプ。
+          // 中心に指を置いてから動かした場合は移動操作として扱い、跳ばない
+          this._stopPressed = true; // タップ中のわずかな移動を打ち消して真上へ
           this._jumpPressed = true;
           this.jumpHeld = true;
           this.jumpKeepsMomentum = false;
