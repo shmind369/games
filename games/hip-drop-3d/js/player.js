@@ -25,10 +25,10 @@ export class Player {
     this.events = [];            // このステップで起きた出来事(演出・効果音用)
     this.groundY = 0;            // 真下の床の高さ
     this.superJump = false;
-    this.longBuf = 0;            // 走り幅跳びの先行入力
-    this.jumpKind = null;        // 'standing' | 'running' | 'long'(空中にいる間だけ)
+    this.jumpKind = null;        // 'standing' | 'running'(空中にいる間だけ)
     this.jumpT = 0;              // 踏み切りからの経過時間(アニメーション同期用)
-    this.recentSpeed = 0;        // 直近の最高水平速度(入力遅延で踏み切り速度が落ちないように)
+    this.keepMomentum = false;   // 次のジャンプで直前の走行速度を引き継ぐ(動的ジャンプボタン)
+    this.lastRun = { vx: 0, vz: 0, age: 99 }; // 最後に入力して走っていたときの水平速度と経過時間
 
     // 描画用
     this.anim = { run: 0, squash: 0, squashV: 0, flip: 0 };
@@ -146,15 +146,9 @@ export class Player {
   }
 
   /** ジャンプ・ヒップアタック入力を受け付ける(フレーム単位で呼ぶ) */
-  pressJump() { this.jumpBuf = P.jumpBuffer; }
+  pressJump(keepMomentum = false) { this.jumpBuf = P.jumpBuffer; this.keepMomentum = keepMomentum; }
   pressHip() { this.hipBuf = P.hipBuffer; }
-  pressLongJump() { this.longBuf = P.jumpBuffer; }
 
-  /** 走り幅跳びを受け付けられる状態か(入力側の誤判定防止にも使う) */
-  canLongJump() {
-    return this.state === 'normal' && (this.grounded || this.coyote > 0) &&
-      this.recentSpeed >= P.runSpeed * P.longJumpMinRunFrac;
-  }
 
   /**
    * move: {x,y} スティック入力 / camYaw: カメラの水平角 / jumpHeld: ボタン押下中か
@@ -164,7 +158,6 @@ export class Player {
     this.stateTime += dt;
     this.jumpBuf = Math.max(0, this.jumpBuf - dt);
     this.hipBuf = Math.max(0, this.hipBuf - dt);
-    this.longBuf = Math.max(0, this.longBuf - dt);
     this.jumpT += dt;
     this.invincible = Math.max(0, this.invincible - dt);
     this.hurtLock = Math.max(0, this.hurtLock - dt);
@@ -190,8 +183,10 @@ export class Player {
     if (this.grounded) this._groundControl(dt, w);
     else this._airControl(dt, w);
 
-    const sp = Math.hypot(this.vel.x, this.vel.z);
-    if (this.grounded) this.recentSpeed = Math.max(sp, this.recentSpeed - (P.runSpeed / P.speedMemory) * dt);
+    let sp = Math.hypot(this.vel.x, this.vel.z);
+    // 走っていたときの速度を覚えておく(親指をパッドから離してボタンを押すまでの間に減速しても引き継げるように)
+    this.lastRun.age += dt;
+    if (this.grounded && w.mag > 0.2 && sp > 0.5) { this.lastRun.vx = this.vel.x; this.lastRun.vz = this.vel.z; this.lastRun.age = 0; }
 
     // 向き: 地上は入力方向へ、空中は実際に飛んでいる方向へ(地上より緩やか)
     if (this.grounded && w.mag > 0.05) {
@@ -200,23 +195,25 @@ export class Player {
       this.yaw = turnToward(this.yaw, Math.atan2(this.vel.x, this.vel.z), P.turnRate * 0.5 * dt);
     }
 
-    // ジャンプ(コヨーテタイム+先行入力)。走り幅跳びを優先
+    // ジャンプ(コヨーテタイム+先行入力)
     if (this.grounded) this.coyote = P.coyoteTime;
     else this.coyote = Math.max(0, this.coyote - dt);
-    if (this.longBuf > 0 && this.coyote > 0 && this.recentSpeed >= P.runSpeed * P.longJumpMinRunFrac) {
-      this._doJump('long');
-    } else if (this.jumpBuf > 0 && this.coyote > 0) {
+    if (this.jumpBuf > 0 && this.coyote > 0) {
+      // 動的ジャンプボタン: 親指をパッドから離した直後なら、減速する前の走行速度で踏み切る
+      if (this.keepMomentum && this.lastRun.age <= P.jumpMomentumGrace) {
+        const ls = Math.hypot(this.lastRun.vx, this.lastRun.vz);
+        if (ls > sp) { this.vel.x = this.lastRun.vx; this.vel.z = this.lastRun.vz; sp = ls; }
+      }
       this._doJump(sp > P.runSpeed * 0.35 ? 'running' : 'standing');
     }
-    // 小ジャンプ: 上昇中にボタンを離したら上昇速度を削る(走り幅跳びは対象外)
-    if (!jumpHeld && this.vel.y > 0 && !this.jumpCut && !this.grounded && this.jumpKind !== 'long') {
+    // 小ジャンプ: 上昇中にボタンを離したら上昇速度を削る
+    if (!jumpHeld && this.vel.y > 0 && !this.jumpCut && !this.grounded) {
       this.vel.y *= P.jumpCutMul;
       this.jumpCut = true;
     }
 
-    // 重力(走り幅跳び中は弱めて、長く伸びる放物線に)
-    let g = this.vel.y > 0 ? P.gravityUp : P.gravityDown;
-    if (this.jumpKind === 'long') g *= P.longJumpGravityMul;
+    // 重力
+    const g = this.vel.y > 0 ? P.gravityUp : P.gravityDown;
     this.vel.y = Math.max(this.vel.y - g * dt, -P.maxFall);
 
     const wasGrounded = this.grounded;
@@ -226,7 +223,6 @@ export class Player {
     if (res.landed && !wasGrounded) {
       this.events.push({ type: 'land', speed: fallSpeed, kind: this.jumpKind });
       this.jumpKind = null;
-      this.recentSpeed = Math.hypot(this.vel.x, this.vel.z); // 着地後もそのまま走り続けられる
       this.anim.squashV = -Math.min(10, fallSpeed * 0.5);
     }
     if (this.grounded) this.superJump = false;
@@ -245,36 +241,23 @@ export class Player {
   }
 
   /**
-   * 踏み切り。水平速度はリセットせず引き継ぎ、垂直方向にだけ専用の初速を与える。
-   *  standing / running: 高さ jumpHeight。水平速度はそのまま
-   *  long: 高さ longJumpHeight、水平初速 = 直近の走行速度 × longJumpSpeedMul
+   * 踏み切り。水平速度はリセットせずそのまま引き継ぎ、垂直方向にだけ専用の初速を与える。
    */
   _doJump(kind) {
-    const gUp = P.gravityUp * (kind === 'long' ? P.longJumpGravityMul : 1);
-    const h = kind === 'long' ? P.longJumpHeight : P.jumpHeight;
-    this.vel.y = Math.sqrt(2 * gUp * h) * (this.superJump ? 1.3 : 1);
-    if (kind === 'long') {
-      const sp = Math.hypot(this.vel.x, this.vel.z);
-      // 方向は実際に走っている向き(止まりかけなら体の向き)
-      const dx = sp > 0.5 ? this.vel.x / sp : Math.sin(this.yaw);
-      const dz = sp > 0.5 ? this.vel.z / sp : Math.cos(this.yaw);
-      const H = Math.min(P.longJumpMaxSpeed, Math.max(P.longJumpMinSpeed, Math.max(sp, this.recentSpeed) * P.longJumpSpeedMul));
-      this.vel.x = dx * H; this.vel.z = dz * H;
-      this.yaw = Math.atan2(dx, dz);
-    }
-    this.events.push({ type: this.superJump ? 'superJump' : kind === 'long' ? 'longJump' : 'jump', kind });
+    this.vel.y = Math.sqrt(2 * P.gravityUp * P.jumpHeight) * (this.superJump ? 1.3 : 1);
+    this.events.push({ type: this.superJump ? 'superJump' : 'jump', kind });
     this.jumpKind = kind;
     this.jumpT = 0;
     this.superJump = false;
     this.grounded = false;
     this.coyote = 0;
     this.jumpBuf = 0;
-    this.longBuf = 0;
-    this.jumpCut = kind === 'long';
-    this.anim.squashV = kind === 'long' ? 9 : 6;
+    this.keepMomentum = false;
+    this.jumpCut = false;
+    this.anim.squashV = 6;
   }
 
-  /** 地上: 入力方向・速度へ素早く合わせる。走行速度を超える勢い(着地直後)はゆっくり落とす */
+  /** 地上: 入力方向・速度へ素早く合わせる。走行速度を超える勢いはゆっくり落とす */
   _groundControl(dt, w) {
     const sp = Math.hypot(this.vel.x, this.vel.z);
     if (w.mag > 0.01) {
@@ -414,13 +397,6 @@ export class Player {
         armA = -s * 0.6 * Math.min(1, speed / 4);
         b.position.y = Math.abs(Math.cos(a.run * 2)) * 0.07 * Math.min(1, speed / 3);
         b.rotation.x = Math.min(1, speed / P.runSpeed) * 0.18; // 前傾
-      } else if (this.jumpKind === 'long') {
-        // 走り幅跳び: 踏み切りで脚を大きく前後に開き前傾 → 下降に入ると両脚を前へ出して着地準備
-        const k = THREE.MathUtils.smoothstep(-this.vel.y, -3, 4); // 0=上昇, 1=下降
-        footA = [THREE.MathUtils.lerp(1.2, 0.9, k), THREE.MathUtils.lerp(-1.1, 0.7, k)];
-        armA = THREE.MathUtils.lerp(-1.2, 0.6, k);
-        armSpread = THREE.MathUtils.lerp(0.4, 1.6, k);
-        b.rotation.x = THREE.MathUtils.lerp(0.4, -0.15, k);
       } else if (this.jumpKind === 'running' && this.jumpT < 0.3) {
         // 走りながらの踏み切り: 片脚を前に出し、反対の腕を振り上げる
         const k = this.jumpT / 0.3;

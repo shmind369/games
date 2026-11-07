@@ -36,7 +36,6 @@ const fx = new Effects(scene);
 const tpc = new ThirdPersonCamera(camera);
 const input = new Input(document.getElementById('touch'));
 input.canHipFromPad = () => !player.grounded && player.state === 'normal';
-input.canLongJump = () => player.canLongJump();
 let enemies = [];
 
 function resize() {
@@ -77,7 +76,7 @@ function startGame() {
   game.defeated = 0;
   ui.overlay.classList.add('hidden');
   updateHud();
-  toast({ gesture: 'スライドで移動・タップでジャンプ・空中で↓スワイプ!', center: 'パッド中央タップでジャンプ → 下へはらってヒップ!' }[input.layout] || 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
+  toast({ dynamic: '移動中に出るボタンでジャンプ・空中で↓スワイプ!', gesture: 'スライドで移動・タップでジャンプ・空中で↓スワイプ!', center: 'パッド中央タップでジャンプ → 下へはらってヒップ!' }[input.layout] || 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
 }
 
 function respawn() {
@@ -167,12 +166,7 @@ function handlePlayerEvents() {
         fx.sound('superJump');
         fx.burst(player.pos.x, player.pos.y + 0.1, player.pos.z, 0xffffff, 10);
         break;
-      case 'longJump':
-        fx.sound('longJump');
-        fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 8);
-        break;
       case 'land':
-        if (ev.kind === 'long') { fx.sound('land'); fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 8); break; }
         if (ev.speed > 6) { fx.sound('land'); fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 5); }
         break;
       case 'hipStart': fx.sound('hipStart'); break;
@@ -241,9 +235,9 @@ function tick(now) {
   elapsed += frameDt;
 
   // 入力(フレーム単位で受け取り、物理ステップへ渡す)
-  if (input.consumeJump()) { player.pressJump(); fx.unlockAudio(); }
+  if (input.consumeJump()) { player.pressJump(input.jumpKeepsMomentum); fx.unlockAudio(); }
   if (input.consumeHip()) player.pressHip();
-  if (input.consumeLongJump()) { player.pressLongJump(); fx.unlockAudio(); }
+  input.update(frameDt);
   const drag = input.consumeCamDrag();
   if (drag) tpc.addYaw(drag * CC.dragYawSpeed);
 
@@ -296,10 +290,14 @@ updateHud();
 function titleScreen() {
   const L = input.layout;
   const howto = {
+    dynamic:
+      '<div><b>下のパッド</b> ドラッグで移動</div>' +
+      '<div><b>移動中だけ</b> 進む方向側に<br>ジャンプボタンが出る → タップでジャンプ</div>' +
+      '<div><b>ジャンプ中に下へスワイプ</b><br>→ ヒップアタック!</div>' +
+      '<div class="sub">パッドから親指を離しても、少しの間ボタンは<br>その場に残るので押しに行けます</div>',
     gesture:
       '<div><b>指をスライド</b> → 移動</div>' +
       '<div><b>短くタップ</b> → ジャンプ</div>' +
-      '<div><b>走りながらすばやく上へはらう</b> → 走り幅跳び</div>' +
       '<div><b>ジャンプ中にすばやく下へスワイプ</b><br>→ ヒップアタック!</div>' +
       '<div class="sub">画面のどこでもOK・指1本で遊べます</div>',
     center:
@@ -315,9 +313,9 @@ function titleScreen() {
   showOverlay('HIP DROP!',
     '<div class="howto">' + howto +
     '<div class="sub">トゲの敵はヒップアタックでしか倒せない<br>旗のゴールを目指そう</div>' +
-    '<div class="sub pc">PC: WASD移動 / Space ジャンプ / L 走り幅跳び / Shift ヒップアタック</div>' +
+    '<div class="sub pc">PC: WASD移動 / Space ジャンプ / Shift ヒップアタック</div>' +
     '<div class="layoutSel">操作タイプ<br>' +
-    btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
+    btn('dynamic', '動的ボタン') + btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
     '</div></div>',
     'スタート');
   ui.ovText.querySelectorAll('[data-layout]').forEach((b) => b.addEventListener('click', () => {

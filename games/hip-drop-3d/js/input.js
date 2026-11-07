@@ -1,24 +1,26 @@
 // 入力
-//  操作タイプ 'gesture'(既定): 指1本のジェスチャー。画面のどこでも、
-//                              ・15px 以上スライド → 移動(触れた位置にスティックが出る)
-//                              ・動かさずに短く離す → ジャンプ(判定は指を離したとき)
-//                              ・地上で走りながらすばやく上へはらう → 走り幅跳び
-//                              ・空中ですばやく下へはらう → ヒップアタック
-//  操作タイプ 'center'       : 画面下中央に固定の移動パッド。パッドの真ん中をタップでジャンプ、
-//                              空中でパッドを下へすばやくはらうとヒップアタック。
-//  操作タイプ 'classic'      : 左下に仮想スティック + 右下にジャンプボタン(ボタンから下スワイプでヒップ)
+//  操作タイプ 'dynamic'(既定): 画面下中央に固定の移動パッド。移動している間だけ、パッドの
+//                              移動方向側にジャンプボタンが現れる(タップで即ジャンプ)。
+//                              空中でパッド / ボタン / それ以外を下へすばやくはらう → ヒップアタック
+//  操作タイプ 'gesture'      : 指1本のジェスチャー。スライド=移動 / 動かさずに短く離す=ジャンプ
+//  操作タイプ 'center'       : 下中央の固定パッド。パッドの真ん中をタップでジャンプ
+//  操作タイプ 'classic'      : 左下に仮想スティック + 右下にジャンプボタン
 //  共通: パッド以外の場所の下スワイプ=ヒップアタック / 横ドラッグ=カメラ回転
 //  PC: WASD・矢印=移動, Space=ジャンプ, Shift / K=ヒップアタック, マウスドラッグ=カメラ
+//
+//  指の管理: すべて Pointer Events の pointerId で管理する。移動パッドの指・ジャンプボタンの指・
+//  それ以外(カメラ/スワイプ)の指はそれぞれ独立しており、互いの入力を途切れさせない。
 import { INPUT } from './config.js';
+import { DynamicJumpButton } from './jumpButton.js';
 
-const LAYOUT_KEY = 'hipdrop.layout2'; // 既定変更に伴いキーを更新(以前の選択は引き継がない)
-const LAYOUTS = ['gesture', 'center', 'classic'];
+const LAYOUT_KEY = 'hipdrop.layout3'; // 既定変更に伴いキーを更新(以前の選択は引き継がない)
+const LAYOUTS = ['dynamic', 'gesture', 'center', 'classic'];
 
 export function loadLayout() {
   const q = new URLSearchParams(location.search).get('pad');
   if (LAYOUTS.includes(q)) return q;
   try { const v = localStorage.getItem(LAYOUT_KEY); if (LAYOUTS.includes(v)) return v; } catch (_) {}
-  return 'gesture';
+  return 'dynamic';
 }
 
 export class Input {
@@ -28,14 +30,14 @@ export class Input {
     this.jumpHeld = false;
     this._jumpPressed = false;       // 1回分のトリガー(consume で消費)
     this._hipPressed = false;
-    this._longPressed = false;       // 走り幅跳び(上フリック)
+    this.jumpKeepsMomentum = false;  // 直前のジャンプ入力が動的ボタンから(移動の勢いを引き継ぐ)
     this.camDragDx = 0;              // このフレームのカメラドラッグ量 [px]
     this.canHipFromPad = () => true; // パッドのはらいでヒップを出してよいか(main が空中判定を渡す)
-    this.canLongJump = () => true;   // 上フリックを走り幅跳びとして受け付けてよいか(main が走行判定を渡す)
 
     this.stickEl = document.getElementById('stick');
     this.knobEl = document.getElementById('stickKnob');
     this.jumpEl = document.getElementById('jumpBtn');
+    this.dynJump = new DynamicJumpButton(document.getElementById('dynJump'));
 
     this.stick = null;               // { id, cx, cy, fixed, jump, hist, fired }
     this.gest = null;                // ジェスチャー操作中の指 { id, x0, y0, t0, maxD, mode:'pending'|'move' }
@@ -68,6 +70,8 @@ export class Input {
     try { localStorage.setItem(LAYOUT_KEY, layout); } catch (_) {}
     this._releaseStick();
     this.gest = null;
+    this.swipes.clear();
+    this.dynJump.hide();
   }
 
   /** タップで跳ぶ操作タイプでは、指を離しても小ジャンプにしない */
@@ -76,8 +80,19 @@ export class Input {
   // ---- 1フレーム分のトリガー取得 ----
   consumeJump() { const v = this._jumpPressed; this._jumpPressed = false; return v; }
   consumeHip() { const v = this._hipPressed; this._hipPressed = false; return v; }
-  consumeLongJump() { const v = this._longPressed; this._longPressed = false; return v; }
   consumeCamDrag() { const v = this.camDragDx; this.camDragDx = 0; return v; }
+
+  /** 毎フレーム: 動的ジャンプボタンの表示・追従 */
+  update(dt) {
+    if (this.layout !== 'dynamic') return;
+    let dir = null;
+    if (this.stick) {
+      const m = Math.hypot(this.move.x, this.move.y);
+      // 画面上の移動方向(スティックの y+ は画面の上)
+      if (m >= INPUT.jumpBtnShowMin) dir = { x: this.move.x / m, y: -this.move.y / m };
+    }
+    this.dynJump.update(dt, this._padCenter(), dir);
+  }
 
   /** スティックとキーボードを合成した移動入力 */
   getMove() {
@@ -106,16 +121,41 @@ export class Input {
     return x > r.left - pad && x < r.right + pad && y > r.top - pad && y < r.bottom + pad;
   }
 
+  _newSwipe(e, x, y, now, onJump) {
+    this.swipes.set(e.pointerId, { x0: x, y0: y, lx: x, onJump, fired: false, cam: false, hist: [{ x, y, t: now }] });
+  }
+
   _down(e) {
     if (e.target.closest && e.target.closest('.ui-block')) return; // ボタン等のUI
     e.preventDefault();
+    // 同じ指の down が二重に届いた場合は無視
+    if ((this.stick && this.stick.id === e.pointerId) || this.swipes.has(e.pointerId) ||
+        (this.gest && this.gest.id === e.pointerId)) return;
     try { this.root.setPointerCapture(e.pointerId); } catch (_) { /* 合成イベント等 */ }
     const x = e.clientX, y = e.clientY;
     const now = performance.now();
 
-    if (this.layout === 'gesture') {
-      // 1本目の指だけをジェスチャーとして扱う(同じ pointerId の二重 down は無視)
-      if (this.gest && this.gest.id === e.pointerId) return;
+    if (this.layout === 'dynamic') {
+      // 1) 動的ジャンプボタン(表示中のみ。見た目より少し広い判定)→ 即ジャンプ
+      if (this.dynJump.hit(x, y, now)) {
+        this._jumpPressed = true;
+        this.jumpHeld = true;
+        this.jumpKeepsMomentum = true;
+        this.dynJump.press();
+        this._newSwipe(e, x, y, now, true); // そのまま下へはらえばヒップアタック
+        return;
+      }
+      // 2) 移動パッド(固定。2本目の指は掴まない)
+      if (!this.stick) {
+        const c = this._padCenter();
+        if (Math.hypot(x - c.x, y - c.y) <= c.r + INPUT.dynPadGrabMargin) {
+          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
+          this.stickEl.classList.add('active');
+          this._updateStick(x, y);
+          return;
+        }
+      }
+    } else if (this.layout === 'gesture') {
       if (!this.gest) {
         this.gest = { id: e.pointerId, x0: x, y0: y, t0: now, maxD: 0, mode: 'pending', fired: false, hist: [{ x, y, t: now }] };
         return; // タッチ開始時にはジャンプしない
@@ -127,12 +167,12 @@ export class Input {
         const d = Math.hypot(x - c.x, y - c.y);
         if (d <= c.r + INPUT.padGrabMargin) {
           // 固定パッド: 中心は動かさない(真ん中タップを確実に判定するため)
-          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, ox: 0, oy: 0, t0: now, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
+          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
           this.stickEl.classList.add('active');
           if (d <= INPUT.centerJumpRadius) {
-            // 真ん中をタップ → ジャンプ(押している間は高く跳ぶ)
             this._jumpPressed = true;
             this.jumpHeld = true;
+            this.jumpKeepsMomentum = false;
             this.stick.jump = true;
             this.stickEl.classList.add('jump');
           }
@@ -144,13 +184,14 @@ export class Input {
       if (this._onJumpBtn(x, y)) {
         this._jumpPressed = true;
         this.jumpHeld = true;
+        this.jumpKeepsMomentum = false;
         this.jumpEl.classList.add('on');
-        this.swipes.set(e.pointerId, { x0: x, y0: y, lx: x, onJump: true, fired: false, cam: false, hist: [{ x, y, t: now }] });
+        this._newSwipe(e, x, y, now, true);
         return;
       }
       if (!this.stick && e.pointerType !== 'mouse' && this._inClassicStickZone(x, y)) {
         // 押した位置にスティックが出る(フローティング)
-        this.stick = { id: e.pointerId, cx: x, cy: y, ox: 0, oy: 0, t0: now, fixed: false, jump: false, fired: false, hist: [{ x, y, t: now }] };
+        this.stick = { id: e.pointerId, cx: x, cy: y, fixed: false, jump: false, fired: false, hist: [{ x, y, t: now }] };
         this.stickEl.style.left = x + 'px';
         this.stickEl.style.top = y + 'px';
         this.stickEl.classList.add('active');
@@ -159,13 +200,12 @@ export class Input {
       }
     }
     // それ以外: 下スワイプ判定 or カメラドラッグ
-    this.swipes.set(e.pointerId, { x0: x, y0: y, lx: x, onJump: false, fired: false, cam: false, hist: [{ x, y, t: now }] });
+    this._newSwipe(e, x, y, now, false);
   }
 
   _updateStick(x, y) {
     const s = this.stick;
-    // ox,oy: 上フリックで指が動いた分。スティック入力に反映させない(フリックで進路が変わらないように)
-    let dx = x - s.cx - s.ox, dy = y - s.cy - s.oy;
+    let dx = x - s.cx, dy = y - s.cy;
     const R = INPUT.stickRadius;
     const l = Math.hypot(dx, dy);
     if (l > R) {
@@ -183,54 +223,19 @@ export class Input {
     if (m < INPUT.deadZone) { nx = 0; ny = 0; }
     else { const k = (m - INPUT.deadZone) / (1 - INPUT.deadZone) / m; nx *= k; ny *= k; }
     this.move.x = nx; this.move.y = ny;
-    s.lastRel = { x: dx, y: dy };
     this._setKnob(dx, dy);
+  }
+
+  _pushHist(s, x, y) {
+    const now = performance.now();
+    s.hist.push({ x, y, t: now });
+    while (s.hist.length > 2 && now - s.hist[0].t > INPUT.swipeMaxTime * 1000) s.hist.shift();
   }
 
   /**
    * 直近 swipeMaxTime 秒の動きで下スワイプを判定する(押しっぱなしから途中ではらっても発動)。
    * 発動したら true。
    */
-  _pushHist(s, x, y) {
-    const now = performance.now();
-    // rel: その時点で直前まで有効だったスティック入力(中心からの相対位置)。上フリック後の復元に使う
-    const rel = s.cx !== undefined && s.lastRel ? { x: s.lastRel.x, y: s.lastRel.y } : null;
-    s.hist.push({ x, y, t: now, rel });
-    while (s.hist.length > 2 && now - s.hist[0].t > INPUT.swipeMaxTime * 1000) s.hist.shift();
-  }
-
-  /**
-   * 走り幅跳びの上フリック判定。移動量・速さ・方向・時間をすべて満たしたときだけ、測定の基準点を返す。
-   * ゆっくり上へドラッグ(=前進)や歩き出しの勢いとは区別する。
-   */
-  _detectUpFlick(s, x, y) {
-    const now = performance.now();
-    if (s.upT && now - s.upT < INPUT.upFlickRearm * 1000) return null;
-    if (now - s.t0 < INPUT.upFlickArmTime * 1000) return null;
-    // 判定窓 upFlickTime 内で最も古いサンプルから測る
-    let ref = null;
-    for (const h of s.hist) if (now - h.t <= INPUT.upFlickTime * 1000) { ref = h; break; }
-    if (!ref || ref.t === now) return null;
-    const dx = x - ref.x, up = ref.y - y;
-    const dist = Math.hypot(dx, up);
-    const speed = dist / ((now - ref.t) / 1000);
-    const angle = Math.atan2(Math.abs(dx), up) * 180 / Math.PI;
-    if (up >= INPUT.upFlickMinDist && speed >= INPUT.upFlickMinSpeed && angle <= INPUT.upFlickMaxAngle) return ref;
-    return null;
-  }
-
-  _tryLongJump(s, x, y) {
-    const ref = this._detectUpFlick(s, x, y);
-    if (ref && this.canLongJump()) {
-      s.upT = performance.now();
-      // フリックで動いた分はスティック入力から差し引き、フリック前の進路と速さを保つ
-      if (ref.rel) { s.ox = x - s.cx - ref.rel.x; s.oy = y - s.cy - ref.rel.y; }
-      else { s.ox += x - ref.x; s.oy += y - ref.y; }
-      this._longPressed = true;
-      flash(this.stickEl);
-    }
-  }
-
   _detectFlick(s, x, y, minDy) {
     const now = performance.now();
     let ref = s.hist[0];
@@ -254,14 +259,13 @@ export class Input {
       if (g.mode === 'pending' && g.maxD >= INPUT.moveThreshold) {
         // 移動操作に確定: タッチ開始位置を中心にスティックを出す
         g.mode = 'move';
-        this.stick = { id: g.id, cx: g.x0, cy: g.y0, ox: 0, oy: 0, t0: performance.now(), fixed: false, jump: false, fired: false, hist: g.hist };
+        this.stick = { id: g.id, cx: g.x0, cy: g.y0, fixed: false, jump: false, fired: false, hist: g.hist };
         this.stickEl.style.left = g.x0 + 'px';
         this.stickEl.style.top = g.y0 + 'px';
         this.stickEl.classList.add('active');
       }
       this._pushHist(g.mode === 'move' ? this.stick : g, x, y);
       if (g.mode === 'move') {
-        this._tryLongJump(this.stick, x, y); // 地上で走りながら上へはらう → 走り幅跳び
         this._updateStick(x, y);
         // 空中ですばやく下へはらう → ヒップアタック
         if (this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
@@ -273,10 +277,10 @@ export class Input {
     }
     if (this.stick && e.pointerId === this.stick.id) {
       this._pushHist(this.stick, x, y);
-      this._tryLongJump(this.stick, x, y);
       this._updateStick(x, y);
-      // センターパッド: 空中でパッドを下へすばやくはらう → ヒップアタック
-      if (this.layout === 'center' && this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
+      // 固定パッド: 空中でパッドを下へすばやくはらう → ヒップアタック
+      if ((this.layout === 'center' || this.layout === 'dynamic') &&
+          this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
         this._hipPressed = true;
         flash(this.stickEl);
       }
@@ -289,7 +293,7 @@ export class Input {
     this._pushHist(s, x, y);
     if (!s.cam && this._detectFlick(s, x, y, INPUT.swipeMinDy)) {
       this._hipPressed = true;
-      flash(this.layout === 'center' ? this.stickEl : this.jumpEl);
+      flash(this.layout === 'classic' ? this.jumpEl : this.stickEl);
     }
     // ジャンプボタン以外から始めた横ドラッグはカメラ回転
     if (!s.onJump && !s.fired && (s.cam || (Math.abs(dx) > 14 && Math.abs(dx) > Math.abs(dy)))) {
@@ -309,6 +313,7 @@ export class Input {
       if (!cancelled && g.mode === 'pending' && d < INPUT.moveThreshold && dt <= INPUT.tapMaxTime) {
         this._jumpPressed = true;
         this.jumpHeld = true;
+        this.jumpKeepsMomentum = false;
         this._tapFx(g.x0, g.y0);
       }
       if (this.stick && this.stick.id === g.id) this._releaseStick();
@@ -320,8 +325,11 @@ export class Input {
     }
     const s = this.swipes.get(e.pointerId);
     if (s) {
-      if (s.onJump) { this.jumpHeld = false; this.jumpEl.classList.remove('on'); }
       this.swipes.delete(e.pointerId);
+      if (s.onJump) {
+        if (this.layout === 'dynamic') this.dynJump.release();
+        else { this.jumpHeld = false; this.jumpEl.classList.remove('on'); }
+      }
     }
   }
 
@@ -353,9 +361,8 @@ export class Input {
   _key(e, down) {
     const c = e.code;
     if (down) {
-      if (c === 'Space' && !e.repeat) { this._jumpPressed = true; this.jumpHeld = true; }
+      if (c === 'Space' && !e.repeat) { this._jumpPressed = true; this.jumpHeld = true; this.jumpKeepsMomentum = false; }
       if ((c === 'ShiftLeft' || c === 'ShiftRight' || c === 'KeyK' || c === 'KeyJ') && !e.repeat) this._hipPressed = true;
-      if ((c === 'KeyL' || c === 'KeyE') && !e.repeat) this._longPressed = true;
       this.keys.add(c);
       if (c.startsWith('Arrow') || c === 'Space') e.preventDefault();
     } else {
