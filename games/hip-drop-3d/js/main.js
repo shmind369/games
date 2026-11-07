@@ -36,6 +36,7 @@ const fx = new Effects(scene);
 const tpc = new ThirdPersonCamera(camera);
 const input = new Input(document.getElementById('touch'));
 input.canHipFromPad = () => !player.grounded && player.state === 'normal';
+input.canVerticalJump = () => player.isStopped();
 let enemies = [];
 
 function resize() {
@@ -76,7 +77,7 @@ function startGame() {
   game.defeated = 0;
   ui.overlay.classList.add('hidden');
   updateHud();
-  toast({ dynamic: '移動中に出るボタンでジャンプ・空中で↓スワイプ!', gesture: 'スライドで移動・タップでジャンプ・空中で↓スワイプ!', center: 'パッド中央タップでジャンプ → 下へはらってヒップ!' }[input.layout] || 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
+  toast({ release: '倒しきって離す=ジャンプ / 中心=その場ジャンプ', dynamic: '移動中に出るボタンでジャンプ・空中で↓スワイプ!', gesture: 'スライドで移動・タップでジャンプ・空中で↓スワイプ!', center: 'パッド中央タップでジャンプ → 下へはらってヒップ!' }[input.layout] || 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
 }
 
 function respawn() {
@@ -235,7 +236,8 @@ function tick(now) {
   elapsed += frameDt;
 
   // 入力(フレーム単位で受け取り、物理ステップへ渡す)
-  if (input.consumeJump()) { player.pressJump(input.jumpKeepsMomentum); fx.unlockAudio(); }
+  if (input.consumeJump()) { player.pressJump(input.jumpKeepsMomentum, input.consumeJumpDir()); fx.unlockAudio(); }
+  if (input.consumeStop()) player.stopNow();
   if (input.consumeHip()) player.pressHip();
   input.update(frameDt);
   const drag = input.consumeCamDrag();
@@ -290,6 +292,12 @@ updateHud();
 function titleScreen() {
   const L = input.layout;
   const howto = {
+    release:
+      '<div><b>下のパッド</b> ドラッグで移動</div>' +
+      '<div><b>パッドを最大まで倒して指を離す</b><br>→ その方向へジャンプ</div>' +
+      '<div><b>途中で指を離す</b> → その場で止まる</div>' +
+      '<div><b>止まっているときにパッドの中心を押す</b><br>→ その場ジャンプ</div>' +
+      '<div><b>ジャンプ中に下へスワイプ</b> → ヒップアタック!</div>',
     dynamic:
       '<div><b>下のパッド</b> ドラッグで移動</div>' +
       '<div><b>移動中だけ</b> 進む方向側に<br>ジャンプボタンが出る → タップでジャンプ</div>' +
@@ -315,7 +323,7 @@ function titleScreen() {
     '<div class="sub">トゲの敵はヒップアタックでしか倒せない<br>旗のゴールを目指そう</div>' +
     '<div class="sub pc">PC: WASD移動 / Space ジャンプ / Shift ヒップアタック</div>' +
     '<div class="layoutSel">操作タイプ<br>' +
-    btn('dynamic', '動的ボタン') + btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
+    btn('release', '離してジャンプ') + btn('dynamic', '動的ボタン') + btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
     '</div></div>',
     'スタート');
   ui.ovText.querySelectorAll('[data-layout]').forEach((b) => b.addEventListener('click', () => {
