@@ -1,18 +1,23 @@
 // 入力
-//  操作タイプ 'center'(既定): 画面下中央に固定の移動パッド。パッドの真ん中をタップでジャンプ、
+//  操作タイプ 'gesture'(既定): 指1本のジェスチャー。画面のどこでも、
+//                              ・15px 以上スライド → 移動(触れた位置にスティックが出る)
+//                              ・動かさずに短く離す → ジャンプ(判定は指を離したとき)
+//                              ・空中ですばやく下へはらう → ヒップアタック
+//  操作タイプ 'center'       : 画面下中央に固定の移動パッド。パッドの真ん中をタップでジャンプ、
 //                              空中でパッドを下へすばやくはらうとヒップアタック。
 //  操作タイプ 'classic'      : 左下に仮想スティック + 右下にジャンプボタン(ボタンから下スワイプでヒップ)
 //  共通: パッド以外の場所の下スワイプ=ヒップアタック / 横ドラッグ=カメラ回転
 //  PC: WASD・矢印=移動, Space=ジャンプ, Shift / K=ヒップアタック, マウスドラッグ=カメラ
 import { INPUT } from './config.js';
 
-const LAYOUT_KEY = 'hipdrop.layout';
+const LAYOUT_KEY = 'hipdrop.layout2'; // 既定変更に伴いキーを更新(以前の選択は引き継がない)
+const LAYOUTS = ['gesture', 'center', 'classic'];
 
 export function loadLayout() {
   const q = new URLSearchParams(location.search).get('pad');
-  if (q === 'classic' || q === 'center') return q;
-  try { const v = localStorage.getItem(LAYOUT_KEY); if (v === 'classic' || v === 'center') return v; } catch (_) {}
-  return 'center';
+  if (LAYOUTS.includes(q)) return q;
+  try { const v = localStorage.getItem(LAYOUT_KEY); if (LAYOUTS.includes(v)) return v; } catch (_) {}
+  return 'gesture';
 }
 
 export class Input {
@@ -30,6 +35,8 @@ export class Input {
     this.jumpEl = document.getElementById('jumpBtn');
 
     this.stick = null;               // { id, cx, cy, fixed, jump, hist, fired }
+    this.gest = null;                // ジェスチャー操作中の指 { id, x0, y0, t0, maxD, mode:'pending'|'move' }
+    this.tapFxEl = document.getElementById('tapFx');
     this.swipes = new Map();         // pointerId -> { x0, y0, lx, onJump, fired, cam, hist }
     this.keys = new Set();
 
@@ -38,7 +45,15 @@ export class Input {
     root.addEventListener('pointerdown', (e) => this._down(e));
     root.addEventListener('pointermove', (e) => this._moveEv(e));
     root.addEventListener('pointerup', (e) => this._up(e));
-    root.addEventListener('pointercancel', (e) => this._up(e));
+    root.addEventListener('pointercancel', (e) => this._up(e, true));
+    // iOS Safari: ダブルタップ拡大・長押しの選択/虫めがね・ピンチ拡大を抑止。
+    // ゲームの処理は Pointer Events だけで行い、touch 系は既定動作の抑止のみ(二重発火しない)
+    const block = (e) => { if (!(e.target.closest && e.target.closest('.ui-block'))) e.preventDefault(); };
+    root.addEventListener('touchstart', block, { passive: false });
+    root.addEventListener('touchmove', block, { passive: false });
+    root.addEventListener('touchend', block, { passive: false });
+    document.addEventListener('gesturestart', (e) => e.preventDefault());
+    document.addEventListener('dblclick', (e) => e.preventDefault());
     window.addEventListener('keydown', (e) => this._key(e, true));
     window.addEventListener('keyup', (e) => this._key(e, false));
     window.addEventListener('blur', () => { this.keys.clear(); this.jumpHeld = false; });
@@ -49,7 +64,11 @@ export class Input {
     document.body.dataset.layout = layout;
     try { localStorage.setItem(LAYOUT_KEY, layout); } catch (_) {}
     this._releaseStick();
+    this.gest = null;
   }
+
+  /** タップで跳ぶ操作タイプでは、指を離しても小ジャンプにしない */
+  get fullJumpOnTap() { return this.layout !== 'classic'; }
 
   // ---- 1フレーム分のトリガー取得 ----
   consumeJump() { const v = this._jumpPressed; this._jumpPressed = false; return v; }
@@ -90,7 +109,15 @@ export class Input {
     const x = e.clientX, y = e.clientY;
     const now = performance.now();
 
-    if (this.layout === 'center') {
+    if (this.layout === 'gesture') {
+      // 1本目の指だけをジェスチャーとして扱う(同じ pointerId の二重 down は無視)
+      if (this.gest && this.gest.id === e.pointerId) return;
+      if (!this.gest) {
+        this.gest = { id: e.pointerId, x0: x, y0: y, t0: now, maxD: 0, mode: 'pending', fired: false, hist: [{ x, y, t: now }] };
+        return; // タッチ開始時にはジャンプしない
+      }
+      // 2本目以降の指はカメラ回転 / 下スワイプ用(下へ)
+    } else if (this.layout === 'center') {
       if (!this.stick) {
         const c = this._padCenter();
         const d = Math.hypot(x - c.x, y - c.y);
@@ -177,6 +204,29 @@ export class Input {
 
   _moveEv(e) {
     const x = e.clientX, y = e.clientY;
+    const g = this.gest;
+    if (g && e.pointerId === g.id) {
+      g.maxD = Math.max(g.maxD, Math.hypot(x - g.x0, y - g.y0)); // 一度でも閾値を超えたらタップではない
+      if (g.mode === 'pending' && g.maxD >= INPUT.moveThreshold) {
+        // 移動操作に確定: タッチ開始位置を中心にスティックを出す
+        g.mode = 'move';
+        this.stick = { id: g.id, cx: g.x0, cy: g.y0, fixed: false, jump: false, fired: false, hist: g.hist };
+        this.stickEl.style.left = g.x0 + 'px';
+        this.stickEl.style.top = g.y0 + 'px';
+        this.stickEl.classList.add('active');
+      }
+      if (g.mode === 'move') {
+        this._updateStick(x, y);
+        // 空中ですばやく下へはらう → ヒップアタック
+        if (this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
+          this._hipPressed = true;
+          flash(this.stickEl);
+        }
+      } else {
+        g.hist.push({ x, y, t: performance.now() });
+      }
+      return;
+    }
     if (this.stick && e.pointerId === this.stick.id) {
       this._updateStick(x, y);
       // センターパッド: 空中でパッドを下へすばやくはらう → ヒップアタック
@@ -202,7 +252,21 @@ export class Input {
     s.lx = x;
   }
 
-  _up(e) {
+  _up(e, cancelled = false) {
+    const g = this.gest;
+    if (g && e.pointerId === g.id) {
+      this.gest = null; // 先に消しておき、同じ指の up が二重に来ても1回しか判定しない
+      // ジャンプ判定は指を離したときだけ: 閾値未満の移動で、かつ短時間のタップ
+      const dt = (performance.now() - g.t0) / 1000;
+      const d = Math.max(g.maxD, Math.hypot(e.clientX - g.x0, e.clientY - g.y0));
+      if (!cancelled && g.mode === 'pending' && d < INPUT.moveThreshold && dt <= INPUT.tapMaxTime) {
+        this._jumpPressed = true;
+        this.jumpHeld = true;
+        this._tapFx(g.x0, g.y0);
+      }
+      if (this.stick && this.stick.id === g.id) this._releaseStick();
+      return;
+    }
     if (this.stick && e.pointerId === this.stick.id) {
       this._releaseStick();
       return;
@@ -223,6 +287,16 @@ export class Input {
     this.stickEl.style.left = '';
     this.stickEl.style.top = '';
     this._setKnob(0, 0);
+  }
+
+  _tapFx(x, y) {
+    const el = this.tapFxEl;
+    if (!el) return;
+    el.style.left = x + 'px';
+    el.style.top = y + 'px';
+    el.classList.remove('go');
+    void el.offsetWidth;
+    el.classList.add('go');
   }
 
   _setKnob(dx, dy) {

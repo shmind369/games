@@ -69,6 +69,10 @@ export const INPUT = {
   swipeMinDy: 36,           // 下スワイプとみなす移動量 [px]
   swipeMaxTime: 0.35,       // この時間内に動かしたものだけスワイプ扱い [s]
 
+  // ジェスチャー(操作タイプ 'gesture')
+  moveThreshold: 15,        // 指の移動量がこれ以上で「移動」、未満なら「タップ」候補 [px]
+  tapMaxTime: 0.28,         // これより長く触れていたらタップ(ジャンプ)にしない [s]
+
   // センターパッド(操作タイプ 'center')
   centerJumpRadius: 34,     // パッド中心からこの半径 [px] 以内を押したらジャンプ
   padGrabMargin: 36,        // パッドの外周からこの距離までの指もパッド操作として拾う [px]
