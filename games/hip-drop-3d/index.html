@@ -51,6 +51,17 @@
 
     #stickKnob span { display: none; }
 
+    /* ---------- ジェスチャー(指を置いた位置にスティック。待機中は非表示) ---------- */
+    body[data-layout="gesture"] #jumpBtn { display: none; }
+    body[data-layout="gesture"] #stick { opacity: 0; }
+    body[data-layout="gesture"] #stick.active { opacity: 0.9; }
+    #tapFx {
+      position: fixed; width: 70px; height: 70px; margin: -35px 0 0 -35px; border-radius: 50%;
+      border: 4px solid rgba(255,255,255,0.9); opacity: 0; pointer-events: none;
+    }
+    #tapFx.go { animation: tapfx .3s ease-out; }
+    @keyframes tapfx { from { opacity: 1; transform: scale(0.4); } to { opacity: 0; transform: scale(1.3); } }
+
     /* ---------- センターパッド(画面下中央に固定。真ん中タップ=ジャンプ) ---------- */
     body[data-layout="center"] #jumpBtn { display: none; }
     body[data-layout="center"] #stick {
@@ -123,10 +134,11 @@
     #ovBtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #b0213f; }
   </style>
 </head>
-<body data-layout="center">
+<body data-layout="gesture">
   <canvas id="game"></canvas>
   <div id="touch">
     <div id="stick"><div id="stickKnob"><span>JUMP</span></div></div>
+    <div id="tapFx"></div>
     <div id="jumpBtn">JUMP<small>↓スワイプでヒップ</small></div>
   </div>
 

@@ -76,7 +76,7 @@ function startGame() {
   game.defeated = 0;
   ui.overlay.classList.add('hidden');
   updateHud();
-  toast(input.layout === 'center' ? 'パッド中央タップでジャンプ → 下へはらってヒップ!' : 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
+  toast({ gesture: 'スライドで移動・タップでジャンプ・空中で↓スワイプ!', center: 'パッド中央タップでジャンプ → 下へはらってヒップ!' }[input.layout] || 'ジャンプ中に ↓スワイプ で ヒップアタック!', 2.6);
 }
 
 function respawn() {
@@ -251,7 +251,7 @@ function tick(now) {
     while (acc >= PHYS.dt && n < PHYS.maxSubSteps) {
       prevPlayerPos.copy(player.pos);
       const move = game.mode === 'play' ? input.getMove() : { x: 0, y: 0 };
-      player.step(PHYS.dt, move, tpc.yaw, input.jumpHeld, stage);
+      player.step(PHYS.dt, move, tpc.yaw, input.jumpHeld || input.fullJumpOnTap, stage);
       handlePlayerEvents();
       for (const e of enemies) e.step(PHYS.dt);
       if (game.mode === 'play') { combat(); checkGoalAndFall(); }
@@ -287,21 +287,29 @@ prevPlayerPos.copy(player.pos);
 tpc.snap(player.pos, player.yaw);
 updateHud();
 function titleScreen() {
-  const center = input.layout === 'center';
+  const L = input.layout;
+  const howto = {
+    gesture:
+      '<div><b>指をスライド</b> → 移動</div>' +
+      '<div><b>短くタップ</b> → ジャンプ</div>' +
+      '<div><b>ジャンプ中にすばやく下へスワイプ</b><br>→ ヒップアタック!</div>' +
+      '<div class="sub">画面のどこでもOK・指1本で遊べます</div>',
+    center:
+      '<div><b>下のパッド</b> ドラッグで移動</div>' +
+      '<div><b>パッドの真ん中</b> タップでジャンプ</div>' +
+      '<div><b>ジャンプ中にパッドを下へはらう</b><br>→ ヒップアタック!</div>',
+    classic:
+      '<div><b>左下</b> ドラッグで移動</div>' +
+      '<div><b>右下</b> タップでジャンプ</div>' +
+      '<div><b>ジャンプ中に下スワイプ</b><br>→ ヒップアタック!</div>',
+  }[L];
+  const btn = (k, label) => `<button data-layout="${k}" class="${L === k ? 'sel' : ''}">${label}</button>`;
   showOverlay('HIP DROP!',
-    '<div class="howto">' +
-    (center
-      ? '<div><b>下のパッド</b> ドラッグで移動</div>' +
-        '<div><b>パッドの真ん中</b> タップでジャンプ</div>' +
-        '<div><b>ジャンプ中にパッドを下へはらう</b><br>→ ヒップアタック!</div>'
-      : '<div><b>左下</b> ドラッグで移動</div>' +
-        '<div><b>右下</b> タップでジャンプ</div>' +
-        '<div><b>ジャンプ中に下スワイプ</b><br>→ ヒップアタック!</div>') +
+    '<div class="howto">' + howto +
     '<div class="sub">トゲの敵はヒップアタックでしか倒せない<br>旗のゴールを目指そう</div>' +
     '<div class="sub pc">PC: WASD移動 / Space ジャンプ / Shift ヒップアタック</div>' +
-    '<div class="layoutSel">操作タイプ ' +
-    `<button data-layout="center" class="${center ? 'sel' : ''}">センターパッド</button>` +
-    `<button data-layout="classic" class="${center ? '' : 'sel'}">左パッド+ボタン</button>` +
+    '<div class="layoutSel">操作タイプ<br>' +
+    btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
     '</div></div>',
     'スタート');
   ui.ovText.querySelectorAll('[data-layout]').forEach((b) => b.addEventListener('click', () => {
@@ -312,4 +320,4 @@ function titleScreen() {
 titleScreen();
 requestAnimationFrame((t) => { last = t; tick(t); });
 
-window.__hipdrop = { player, enemies: () => enemies, game, stage, tpc };
+window.__hipdrop = { player, enemies: () => enemies, game, stage, tpc, input };
