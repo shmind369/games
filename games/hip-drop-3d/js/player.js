@@ -146,7 +146,20 @@ export class Player {
   }
 
   /** ジャンプ・ヒップアタック入力を受け付ける(フレーム単位で呼ぶ) */
-  pressJump(keepMomentum = false) { this.jumpBuf = P.jumpBuffer; this.keepMomentum = keepMomentum; }
+  /** stickDir: 方向付きジャンプのスティック方向 {x,y}(カメラ基準)。null なら今の水平速度のまま跳ぶ */
+  pressJump(keepMomentum = false, stickDir = null) {
+    this.jumpBuf = P.jumpBuffer; this.keepMomentum = keepMomentum; this.jumpStick = stickDir;
+  }
+
+  /** パッドを途中で離した: 地上ならその場でぴたっと止まる */
+  stopNow() {
+    if (this.state === 'normal' && this.grounded) { this.vel.x = 0; this.vel.z = 0; }
+  }
+
+  /** 止まっているか(パッド中心での垂直ジャンプの条件) */
+  isStopped() {
+    return this.state === 'normal' && this.grounded && Math.hypot(this.vel.x, this.vel.z) < P.stopSpeed;
+  }
   pressHip() { this.hipBuf = P.hipBuffer; }
 
 
@@ -157,6 +170,7 @@ export class Player {
     this.events.length = 0;
     this.stateTime += dt;
     this.jumpBuf = Math.max(0, this.jumpBuf - dt);
+    if (this.jumpBuf === 0) this.jumpStick = null;
     this.hipBuf = Math.max(0, this.hipBuf - dt);
     this.jumpT += dt;
     this.invincible = Math.max(0, this.invincible - dt);
@@ -179,6 +193,7 @@ export class Player {
   }
 
   _stepNormal(dt, move, camYaw, jumpHeld, stage) {
+    this._camYaw = camYaw;
     const w = this.hurtLock > 0 ? { x: 0, z: 0, mag: 0 } : this._wishDir(move, camYaw);
     if (this.grounded) this._groundControl(dt, w);
     else this._airControl(dt, w);
@@ -245,6 +260,16 @@ export class Player {
    */
   _doJump(kind) {
     this.vel.y = Math.sqrt(2 * P.gravityUp * P.jumpHeight) * (this.superJump ? 1.3 : 1);
+    if (this.jumpStick) {
+      // 方向付きジャンプ: スティックを倒していた方向へ、決まった水平速度で跳ぶ
+      const w = this._wishDir(this.jumpStick, this._camYaw || 0);
+      const l = Math.hypot(w.x, w.z) || 1;
+      this.vel.x = (w.x / l) * P.dirJumpSpeed;
+      this.vel.z = (w.z / l) * P.dirJumpSpeed;
+      this.yaw = Math.atan2(w.x, w.z);
+      kind = 'running';
+    }
+    this.jumpStick = null;
     this.events.push({ type: this.superJump ? 'superJump' : 'jump', kind });
     this.jumpKind = kind;
     this.jumpT = 0;

@@ -51,6 +51,24 @@
 
     #stickKnob span { display: none; }
 
+    /* ---------- 離してジャンプ(下中央の固定パッド。最大まで倒して離す=斜めジャンプ / 中心押し=垂直ジャンプ) ---------- */
+    body[data-layout="release"] #jumpBtn { display: none; }
+    body[data-layout="release"] #stick {
+      width: 156px; height: 156px; margin: -78px 0 0 -78px;
+      left: 50%; top: calc(100% - 118px - env(safe-area-inset-bottom));
+      opacity: 0.8; background: rgba(255,255,255,0.16); transition: border-color .08s, box-shadow .08s;
+    }
+    body[data-layout="release"] #stick::before {
+      /* 垂直ジャンプになる中心の範囲 */
+      content: ''; position: absolute; left: 50%; top: 50%; width: 68px; height: 68px; margin: -34px 0 0 -34px;
+      border-radius: 50%; border: 2px dashed rgba(255,255,255,0.6);
+    }
+    body[data-layout="release"] #stickKnob { width: 60px; height: 60px; margin: -30px 0 0 -30px; }
+    /* 最大まで倒している = 今離せばジャンプ */
+    body[data-layout="release"] #stick.max { border-color: #ffe066; box-shadow: 0 0 0 5px rgba(255,224,102,0.55); }
+    body[data-layout="release"] #stick.max #stickKnob { background: #ffe066; }
+    body[data-layout="release"] #stick.jump #stickKnob { box-shadow: 0 0 0 6px rgba(255,224,102,0.7); }
+
     /* ---------- 動的ジャンプボタン(下中央の固定パッド + 移動方向側に出るボタン) ---------- */
     body[data-layout="dynamic"] #jumpBtn { display: none; }
     body[data-layout="dynamic"] #stick {
@@ -158,7 +176,7 @@
     #ovBtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #b0213f; }
   </style>
 </head>
-<body data-layout="dynamic">
+<body data-layout="release">
   <canvas id="game"></canvas>
   <div id="touch">
     <div id="stick"><div id="stickKnob"><span>JUMP</span></div></div>

@@ -1,5 +1,10 @@
 // 入力
-//  操作タイプ 'dynamic'(既定): 画面下中央に固定の移動パッド。移動している間だけ、パッドの
+//  操作タイプ 'release'(既定): 画面下中央の固定パッド。
+//                              ・パッドを最大まで倒した位置で指を離す → その方向へ斜めジャンプ
+//                              ・それ以外の位置で離す → ジャンプせず、その場で止まる
+//                              ・止まっているときにパッドの中心を押す → 垂直ジャンプ(その場ジャンプ)
+//                              ・空中でパッドを下へすばやくはらう / 他の場所で下スワイプ → ヒップアタック
+//  操作タイプ 'dynamic'      : 画面下中央に固定の移動パッド。移動している間だけ、パッドの
 //                              移動方向側にジャンプボタンが現れる(タップで即ジャンプ)。
 //                              空中でパッド / ボタン / それ以外を下へすばやくはらう → ヒップアタック
 //  操作タイプ 'gesture'      : 指1本のジェスチャー。スライド=移動 / 動かさずに短く離す=ジャンプ
@@ -13,14 +18,14 @@
 import { INPUT } from './config.js';
 import { DynamicJumpButton } from './jumpButton.js';
 
-const LAYOUT_KEY = 'hipdrop.layout3'; // 既定変更に伴いキーを更新(以前の選択は引き継がない)
-const LAYOUTS = ['dynamic', 'gesture', 'center', 'classic'];
+const LAYOUT_KEY = 'hipdrop.layout4'; // 既定変更に伴いキーを更新(以前の選択は引き継がない)
+const LAYOUTS = ['release', 'dynamic', 'gesture', 'center', 'classic'];
 
 export function loadLayout() {
   const q = new URLSearchParams(location.search).get('pad');
   if (LAYOUTS.includes(q)) return q;
   try { const v = localStorage.getItem(LAYOUT_KEY); if (LAYOUTS.includes(v)) return v; } catch (_) {}
-  return 'dynamic';
+  return 'release';
 }
 
 export class Input {
@@ -31,6 +36,9 @@ export class Input {
     this._jumpPressed = false;       // 1回分のトリガー(consume で消費)
     this._hipPressed = false;
     this.jumpKeepsMomentum = false;  // 直前のジャンプ入力が動的ボタンから(移動の勢いを引き継ぐ)
+    this.jumpDir = null;             // 方向付きジャンプのスティック方向 {x,y}(パッドを倒して離したとき)
+    this._stopPressed = false;       // パッドを途中で離した: その場で止まる
+    this.canVerticalJump = () => true; // 止まっているか(パッド中心で垂直ジャンプしてよいか。main が渡す)
     this.camDragDx = 0;              // このフレームのカメラドラッグ量 [px]
     this.canHipFromPad = () => true; // パッドのはらいでヒップを出してよいか(main が空中判定を渡す)
 
@@ -79,6 +87,8 @@ export class Input {
 
   // ---- 1フレーム分のトリガー取得 ----
   consumeJump() { const v = this._jumpPressed; this._jumpPressed = false; return v; }
+  consumeStop() { const v = this._stopPressed; this._stopPressed = false; return v; }
+  consumeJumpDir() { const v = this.jumpDir; this.jumpDir = null; return v; }
   consumeHip() { const v = this._hipPressed; this._hipPressed = false; return v; }
   consumeCamDrag() { const v = this.camDragDx; this.camDragDx = 0; return v; }
 
@@ -135,7 +145,27 @@ export class Input {
     const x = e.clientX, y = e.clientY;
     const now = performance.now();
 
-    if (this.layout === 'dynamic') {
+    if (this.layout === 'release') {
+      if (!this.stick) {
+        const c = this._padCenter();
+        const d = Math.hypot(x - c.x, y - c.y);
+        if (d <= c.r + INPUT.padGrabMargin) {
+          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
+          this.stickEl.classList.add('active');
+          // 止まっているときに中心を押す → 垂直ジャンプ(既定: 押した瞬間に跳ぶ)
+          this.stick.centerTap = d <= INPUT.centerJumpRadius && this.canVerticalJump() ? { t: now } : null;
+          if (this.stick.centerTap && !INPUT.centerJumpOnRelease) {
+            this._jumpPressed = true;
+            this.jumpHeld = true;
+            this.jumpKeepsMomentum = false;
+            this.jumpDir = null;
+            this.stickEl.classList.add('jump');
+          }
+          this._updateStick(x, y);
+          return;
+        }
+      }
+    } else if (this.layout === 'dynamic') {
       // 1) 動的ジャンプボタン(表示中のみ。見た目より少し広い判定)→ 即ジャンプ
       if (this.dynJump.hit(x, y, now)) {
         this._jumpPressed = true;
@@ -208,6 +238,10 @@ export class Input {
     let dx = x - s.cx, dy = y - s.cy;
     const R = INPUT.stickRadius;
     const l = Math.hypot(dx, dy);
+    s.tilt = Math.min(1, l / R);   // 倒し具合(デッドゾーン適用前、0..1)
+    s.maxTilt = Math.max(s.maxTilt || 0, s.tilt);
+    s.dirX = l > 0 ? dx / l : 0; s.dirY = l > 0 ? -dy / l : 0;
+    if (this.layout === 'release') this.stickEl.classList.toggle('max', s.tilt >= INPUT.releaseJumpTilt);
     if (l > R) {
       if (!s.fixed) {
         // フローティング: 指が大きく離れたら中心も引っ張って付いてくる
@@ -279,7 +313,7 @@ export class Input {
       this._pushHist(this.stick, x, y);
       this._updateStick(x, y);
       // 固定パッド: 空中でパッドを下へすばやくはらう → ヒップアタック
-      if ((this.layout === 'center' || this.layout === 'dynamic') &&
+      if ((this.layout === 'center' || this.layout === 'dynamic' || this.layout === 'release') &&
           this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
         this._hipPressed = true;
         flash(this.stickEl);
@@ -320,6 +354,29 @@ export class Input {
       return;
     }
     if (this.stick && e.pointerId === this.stick.id) {
+      if (this.layout === 'release') {
+        const st = this.stick;
+        if (!cancelled) this._updateStick(e.clientX, e.clientY); // 離した位置で最終判定
+        const ct = st.centerTap;
+        if (INPUT.centerJumpOnRelease && ct && !cancelled && st.maxTilt * INPUT.stickRadius <= INPUT.centerJumpRadius &&
+            performance.now() - ct.t <= INPUT.tapMaxTime * 1000) {
+          // (centerJumpOnRelease 時)中心を短くタップして離した → 垂直ジャンプ
+          this._jumpPressed = true;
+          this.jumpHeld = true;
+          this.jumpKeepsMomentum = false;
+          this.jumpDir = null;
+        } else if (!cancelled && !st.fired && st.tilt >= INPUT.releaseJumpTilt) {
+          // 最大まで倒した位置で離した → その方向へ斜めジャンプ
+          this._jumpPressed = true;
+          this.jumpHeld = true;
+          this.jumpKeepsMomentum = false;
+          this.jumpDir = { x: st.dirX, y: st.dirY };
+          flash(this.stickEl);
+        } else {
+          // 途中で離した → その場で止まる
+          this._stopPressed = true;
+        }
+      }
       this._releaseStick();
       return;
     }
@@ -338,7 +395,7 @@ export class Input {
     if (this.stick && this.stick.jump && this.layout !== 'center') this.jumpHeld = false;
     this.stick = null;
     this.move.x = 0; this.move.y = 0;
-    this.stickEl.classList.remove('active', 'jump');
+    this.stickEl.classList.remove('active', 'jump', 'max');
     this.stickEl.style.left = '';
     this.stickEl.style.top = '';
     this._setKnob(0, 0);
