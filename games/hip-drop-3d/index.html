@@ -51,6 +51,30 @@
 
     #stickKnob span { display: none; }
 
+    /* ---------- 動的ジャンプボタン(下中央の固定パッド + 移動方向側に出るボタン) ---------- */
+    body[data-layout="dynamic"] #jumpBtn { display: none; }
+    body[data-layout="dynamic"] #stick {
+      width: 156px; height: 156px; margin: -78px 0 0 -78px;
+      left: 50%; top: calc(100% - 118px - env(safe-area-inset-bottom));
+      opacity: 0.8; background: rgba(255,255,255,0.16);
+    }
+    body[data-layout="dynamic"] #stickKnob { width: 62px; height: 62px; margin: -31px 0 0 -31px; }
+    /* 位置は transform だけで動かす(レイアウトを動かさない)。表示/非表示は内側の .face で拡大縮小+フェード */
+    #dynJump { position: fixed; left: 0; top: 0; width: 76px; height: 76px; pointer-events: none; display: none; will-change: transform; }
+    body[data-layout="dynamic"] #dynJump { display: block; }
+    #dynJump .face {
+      width: 100%; height: 100%; border-radius: 50%; box-sizing: border-box;
+      background: radial-gradient(circle at 40% 35%, #ff8fa3, #ff3b6b 72%);
+      border: 4px solid rgba(255,255,255,0.9); box-shadow: 0 5px 0 #b0213f, 0 7px 14px rgba(0,0,0,0.25);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 15px; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,0.25);
+      opacity: 0; transform: scale(0.35);
+      transition: opacity .12s ease-out, transform .14s cubic-bezier(.3,1.6,.6,1), box-shadow .05s;
+    }
+    #dynJump.show .face { opacity: 1; transform: scale(1); }
+    #dynJump.show.frozen .face { box-shadow: 0 5px 0 #b0213f, 0 0 0 5px rgba(255,255,255,0.35); }
+    #dynJump.on .face { transform: scale(0.9) translateY(3px); box-shadow: 0 2px 0 #b0213f; transition-duration: .04s; }
+
     /* ---------- ジェスチャー(指を置いた位置にスティック。待機中は非表示) ---------- */
     body[data-layout="gesture"] #jumpBtn { display: none; }
     body[data-layout="gesture"] #stick { opacity: 0; }
@@ -134,11 +158,12 @@
     #ovBtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #b0213f; }
   </style>
 </head>
-<body data-layout="gesture">
+<body data-layout="dynamic">
   <canvas id="game"></canvas>
   <div id="touch">
     <div id="stick"><div id="stickKnob"><span>JUMP</span></div></div>
     <div id="tapFx"></div>
+    <div id="dynJump"><div class="face">JUMP</div></div>
     <div id="jumpBtn">JUMP<small>↓スワイプでヒップ</small></div>
   </div>
 

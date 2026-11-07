@@ -100,9 +100,6 @@ export class Effects {
       case 'superJump':
         o.type = 'square'; o.frequency.setValueAtTime(330, t); o.frequency.exponentialRampToValueAtTime(1100, t + 0.25);
         env(0.005, 0.25, 0.09); break;
-      case 'longJump':
-        o.type = 'square'; o.frequency.setValueAtTime(260, t); o.frequency.exponentialRampToValueAtTime(820, t + 0.2);
-        env(0.005, 0.22, 0.09); break;
       case 'hipStart':
         o.type = 'triangle'; o.frequency.setValueAtTime(900, t); o.frequency.exponentialRampToValueAtTime(300, t + 0.15);
         env(0.005, 0.15, 0.15); break;

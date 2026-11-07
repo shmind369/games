@@ -19,7 +19,7 @@ export const PLAYER = {
   airDecel: 3,              // 入力なしのときの減速(ゆるやか。急停止しない)
   airBrake: 16,             // 進行方向と逆に入力したときの減速
   airTurnRate: 3.2,         // 空中で進行方向を回せる速さ [rad/s](地上はほぼ即時)
-  airOverspeedDecel: 1.2,   // 走行速度を超えている分(走り幅跳びの勢い)の空中での目減り [m/s^2]
+  airOverspeedDecel: 1.2,   // 走行速度を超えている分の空中での目減り [m/s^2]
   groundOverspeedDecel: 12, // 着地後、走行速度を超えている分を落とす速さ(急減速しない)
 
   // ---- 通常ジャンプ(静止・歩行からのタップ / Space) ----
@@ -31,14 +31,7 @@ export const PLAYER = {
   coyoteTime: 0.1,          // 足場から落ちた直後でもジャンプできる猶予
   jumpBuffer: 0.13,         // 着地直前の入力を覚えておく時間
 
-  // ---- 走り幅跳び(走行中の上フリック / L キー) ----
-  longJumpHeight: 1.9,      // 最高到達点の高さ [m](通常より低く、長く飛ぶ)
-  longJumpGravityMul: 0.65, // 走り幅跳び中の重力倍率(ふわっと伸びる)
-  longJumpSpeedMul: 1.45,   // 直前の走行速度に掛ける水平初速の倍率
-  longJumpMinSpeed: 6.5,    // 水平初速の下限 [m/s]
-  longJumpMaxSpeed: 11,     // 水平初速の上限 [m/s]
-  longJumpMinRunFrac: 0.45, // 走行速度が runSpeed のこの割合以上のときだけ受け付ける
-  speedMemory: 0.18,        // 入力判定にかかった時間で速度が落ちても、直近この秒数の最高速度で踏み切る
+  jumpMomentumGrace: 0.45,  // 動的ジャンプボタン: 親指をパッドから離してこの秒数以内に押したら、直前の走行速度で踏み切る
 
   // ヒップアタック
   hipMinHeight: 0.6,        // 地面からこの高さ未満では発動しない(低すぎると空振りになるため)
@@ -82,13 +75,17 @@ export const INPUT = {
   swipeMinDy: 36,           // 下スワイプとみなす移動量 [px]
   swipeMaxTime: 0.35,       // この時間内に動かしたものだけスワイプ扱い [s]
 
-  // 走り幅跳びの上フリック(全操作タイプのスティック共通)
-  upFlickMinDist: 34,       // 上方向の移動量 [px]
-  upFlickMinSpeed: 450,     // 速さ [px/s](ゆっくり上へドラッグ=前進、とは区別)
-  upFlickMaxAngle: 35,      // 真上からのずれの許容角 [度]
-  upFlickTime: 0.14,        // この時間内の動きで判定 [s]
-  upFlickArmTime: 0.15,     // 移動を始めてからこの時間は判定しない(歩き出しの勢いと区別)[s]
-  upFlickRearm: 0.35,       // 一度発動したら次に受け付けるまでの時間 [s]
+  // 動的ジャンプボタン(操作タイプ 'dynamic')
+  dynPadGrabMargin: 12,     // 移動パッドの外周からこの距離までの指をパッド操作として拾う [px](ボタンの判定と重ならない値)
+  jumpBtnSize: 76,          // ボタンの直径 [px]
+  jumpBtnGap: 26,           // パッド外周とボタンの間隔 [px]
+  jumpBtnHitPad: 12,        // 当たり判定を見た目よりこれだけ広げる [px]
+  jumpBtnShowMin: 0.3,      // スティックの倒し量がこれ以上で「移動中」としてボタンを出す
+  jumpBtnFollow: 12,        // 移動方向への追従の速さ(大きいほど速い)
+  jumpBtnGrace: 0.5,        // 親指をパッドから離してからボタンが消えるまでの猶予 [s](この間は位置を固定)
+  jumpBtnArmTime: 0.06,     // 出現直後この時間はタップを受け付けない(誤タップ防止)[s]
+  jumpBtnMargin: 10,        // 画面端からの余白 [px]
+  jumpBtnBottomSafe: 16,    // 画面下端(ホームバー付近)の追加余白 [px]
 
   // ジェスチャー(操作タイプ 'gesture')
   moveThreshold: 15,        // 指の移動量がこれ以上で「移動」、未満なら「タップ」候補 [px]
