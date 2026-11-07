@@ -33,6 +33,7 @@
 - [drag-magnet-calendar](games/drag-magnet-calendar) — 予定カードをカレンダーの時間軸へドラッグするとマグネットのように時刻へ吸着し、日時入力なしで予定を配置できるカレンダーアプリのプロトタイプ(2D、ゲームではない)
 - [grab-and-glue-3d](games/grab-and-glue-3d) — Three.js製、一人称視点で木材をつかみ・運び・接着して構造物を組み立てる「ウルトラハンド」風の3D建築システムプロトタイプ
 - [hanging-sandbag-3d](games/hanging-sandbag-3d) — Three.js + Rapier製、天井から吊るした剛体サンドバッグをクリック位置に撃力を加えて揺らす物理演算テスト
+- [hip-drop-3d](games/hip-drop-3d) — Three.js製、縦持ち片手操作の三人称3Dジャンプアクション。ジャンプ中の下スワイプで真下へ急降下するヒップアタックで敵を倒しゴールを目指す試作版
 
 ## 公開ページ
 
