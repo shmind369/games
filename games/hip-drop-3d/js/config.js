@@ -68,4 +68,9 @@ export const INPUT = {
   deadZone: 0.12,
   swipeMinDy: 36,           // 下スワイプとみなす移動量 [px]
   swipeMaxTime: 0.35,       // この時間内に動かしたものだけスワイプ扱い [s]
+
+  // センターパッド(操作タイプ 'center')
+  centerJumpRadius: 34,     // パッド中心からこの半径 [px] 以内を押したらジャンプ
+  padGrabMargin: 36,        // パッドの外周からこの距離までの指もパッド操作として拾う [px]
+  padFlickDy: 30,           // 空中でパッドを下へはらってヒップアタックとみなす移動量 [px]
 };
