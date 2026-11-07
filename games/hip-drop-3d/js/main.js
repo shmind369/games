@@ -36,6 +36,7 @@ const fx = new Effects(scene);
 const tpc = new ThirdPersonCamera(camera);
 const input = new Input(document.getElementById('touch'));
 input.canHipFromPad = () => !player.grounded && player.state === 'normal';
+input.canLongJump = () => player.canLongJump();
 let enemies = [];
 
 function resize() {
@@ -166,7 +167,12 @@ function handlePlayerEvents() {
         fx.sound('superJump');
         fx.burst(player.pos.x, player.pos.y + 0.1, player.pos.z, 0xffffff, 10);
         break;
+      case 'longJump':
+        fx.sound('longJump');
+        fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 8);
+        break;
       case 'land':
+        if (ev.kind === 'long') { fx.sound('land'); fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 8); break; }
         if (ev.speed > 6) { fx.sound('land'); fx.burst(player.pos.x, player.pos.y + 0.05, player.pos.z, 0xf3e3c3, 5); }
         break;
       case 'hipStart': fx.sound('hipStart'); break;
@@ -237,6 +243,7 @@ function tick(now) {
   // 入力(フレーム単位で受け取り、物理ステップへ渡す)
   if (input.consumeJump()) { player.pressJump(); fx.unlockAudio(); }
   if (input.consumeHip()) player.pressHip();
+  if (input.consumeLongJump()) { player.pressLongJump(); fx.unlockAudio(); }
   const drag = input.consumeCamDrag();
   if (drag) tpc.addYaw(drag * CC.dragYawSpeed);
 
@@ -292,6 +299,7 @@ function titleScreen() {
     gesture:
       '<div><b>指をスライド</b> → 移動</div>' +
       '<div><b>短くタップ</b> → ジャンプ</div>' +
+      '<div><b>走りながらすばやく上へはらう</b> → 走り幅跳び</div>' +
       '<div><b>ジャンプ中にすばやく下へスワイプ</b><br>→ ヒップアタック!</div>' +
       '<div class="sub">画面のどこでもOK・指1本で遊べます</div>',
     center:
@@ -307,7 +315,7 @@ function titleScreen() {
   showOverlay('HIP DROP!',
     '<div class="howto">' + howto +
     '<div class="sub">トゲの敵はヒップアタックでしか倒せない<br>旗のゴールを目指そう</div>' +
-    '<div class="sub pc">PC: WASD移動 / Space ジャンプ / Shift ヒップアタック</div>' +
+    '<div class="sub pc">PC: WASD移動 / Space ジャンプ / L 走り幅跳び / Shift ヒップアタック</div>' +
     '<div class="layoutSel">操作タイプ<br>' +
     btn('gesture', 'ジェスチャー') + btn('center', 'センターパッド') + btn('classic', '左パッド+ボタン') +
     '</div></div>',

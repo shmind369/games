@@ -2,6 +2,7 @@
 //  操作タイプ 'gesture'(既定): 指1本のジェスチャー。画面のどこでも、
 //                              ・15px 以上スライド → 移動(触れた位置にスティックが出る)
 //                              ・動かさずに短く離す → ジャンプ(判定は指を離したとき)
+//                              ・地上で走りながらすばやく上へはらう → 走り幅跳び
 //                              ・空中ですばやく下へはらう → ヒップアタック
 //  操作タイプ 'center'       : 画面下中央に固定の移動パッド。パッドの真ん中をタップでジャンプ、
 //                              空中でパッドを下へすばやくはらうとヒップアタック。
@@ -27,8 +28,10 @@ export class Input {
     this.jumpHeld = false;
     this._jumpPressed = false;       // 1回分のトリガー(consume で消費)
     this._hipPressed = false;
+    this._longPressed = false;       // 走り幅跳び(上フリック)
     this.camDragDx = 0;              // このフレームのカメラドラッグ量 [px]
     this.canHipFromPad = () => true; // パッドのはらいでヒップを出してよいか(main が空中判定を渡す)
+    this.canLongJump = () => true;   // 上フリックを走り幅跳びとして受け付けてよいか(main が走行判定を渡す)
 
     this.stickEl = document.getElementById('stick');
     this.knobEl = document.getElementById('stickKnob');
@@ -73,6 +76,7 @@ export class Input {
   // ---- 1フレーム分のトリガー取得 ----
   consumeJump() { const v = this._jumpPressed; this._jumpPressed = false; return v; }
   consumeHip() { const v = this._hipPressed; this._hipPressed = false; return v; }
+  consumeLongJump() { const v = this._longPressed; this._longPressed = false; return v; }
   consumeCamDrag() { const v = this.camDragDx; this.camDragDx = 0; return v; }
 
   /** スティックとキーボードを合成した移動入力 */
@@ -123,7 +127,7 @@ export class Input {
         const d = Math.hypot(x - c.x, y - c.y);
         if (d <= c.r + INPUT.padGrabMargin) {
           // 固定パッド: 中心は動かさない(真ん中タップを確実に判定するため)
-          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
+          this.stick = { id: e.pointerId, cx: c.x, cy: c.y, ox: 0, oy: 0, t0: now, fixed: true, jump: false, fired: false, hist: [{ x, y, t: now }] };
           this.stickEl.classList.add('active');
           if (d <= INPUT.centerJumpRadius) {
             // 真ん中をタップ → ジャンプ(押している間は高く跳ぶ)
@@ -146,7 +150,7 @@ export class Input {
       }
       if (!this.stick && e.pointerType !== 'mouse' && this._inClassicStickZone(x, y)) {
         // 押した位置にスティックが出る(フローティング)
-        this.stick = { id: e.pointerId, cx: x, cy: y, fixed: false, jump: false, fired: false, hist: [{ x, y, t: now }] };
+        this.stick = { id: e.pointerId, cx: x, cy: y, ox: 0, oy: 0, t0: now, fixed: false, jump: false, fired: false, hist: [{ x, y, t: now }] };
         this.stickEl.style.left = x + 'px';
         this.stickEl.style.top = y + 'px';
         this.stickEl.classList.add('active');
@@ -160,7 +164,8 @@ export class Input {
 
   _updateStick(x, y) {
     const s = this.stick;
-    let dx = x - s.cx, dy = y - s.cy;
+    // ox,oy: 上フリックで指が動いた分。スティック入力に反映させない(フリックで進路が変わらないように)
+    let dx = x - s.cx - s.ox, dy = y - s.cy - s.oy;
     const R = INPUT.stickRadius;
     const l = Math.hypot(dx, dy);
     if (l > R) {
@@ -178,6 +183,7 @@ export class Input {
     if (m < INPUT.deadZone) { nx = 0; ny = 0; }
     else { const k = (m - INPUT.deadZone) / (1 - INPUT.deadZone) / m; nx *= k; ny *= k; }
     this.move.x = nx; this.move.y = ny;
+    s.lastRel = { x: dx, y: dy };
     this._setKnob(dx, dy);
   }
 
@@ -185,10 +191,48 @@ export class Input {
    * 直近 swipeMaxTime 秒の動きで下スワイプを判定する(押しっぱなしから途中ではらっても発動)。
    * 発動したら true。
    */
+  _pushHist(s, x, y) {
+    const now = performance.now();
+    // rel: その時点で直前まで有効だったスティック入力(中心からの相対位置)。上フリック後の復元に使う
+    const rel = s.cx !== undefined && s.lastRel ? { x: s.lastRel.x, y: s.lastRel.y } : null;
+    s.hist.push({ x, y, t: now, rel });
+    while (s.hist.length > 2 && now - s.hist[0].t > INPUT.swipeMaxTime * 1000) s.hist.shift();
+  }
+
+  /**
+   * 走り幅跳びの上フリック判定。移動量・速さ・方向・時間をすべて満たしたときだけ、測定の基準点を返す。
+   * ゆっくり上へドラッグ(=前進)や歩き出しの勢いとは区別する。
+   */
+  _detectUpFlick(s, x, y) {
+    const now = performance.now();
+    if (s.upT && now - s.upT < INPUT.upFlickRearm * 1000) return null;
+    if (now - s.t0 < INPUT.upFlickArmTime * 1000) return null;
+    // 判定窓 upFlickTime 内で最も古いサンプルから測る
+    let ref = null;
+    for (const h of s.hist) if (now - h.t <= INPUT.upFlickTime * 1000) { ref = h; break; }
+    if (!ref || ref.t === now) return null;
+    const dx = x - ref.x, up = ref.y - y;
+    const dist = Math.hypot(dx, up);
+    const speed = dist / ((now - ref.t) / 1000);
+    const angle = Math.atan2(Math.abs(dx), up) * 180 / Math.PI;
+    if (up >= INPUT.upFlickMinDist && speed >= INPUT.upFlickMinSpeed && angle <= INPUT.upFlickMaxAngle) return ref;
+    return null;
+  }
+
+  _tryLongJump(s, x, y) {
+    const ref = this._detectUpFlick(s, x, y);
+    if (ref && this.canLongJump()) {
+      s.upT = performance.now();
+      // フリックで動いた分はスティック入力から差し引き、フリック前の進路と速さを保つ
+      if (ref.rel) { s.ox = x - s.cx - ref.rel.x; s.oy = y - s.cy - ref.rel.y; }
+      else { s.ox += x - ref.x; s.oy += y - ref.y; }
+      this._longPressed = true;
+      flash(this.stickEl);
+    }
+  }
+
   _detectFlick(s, x, y, minDy) {
     const now = performance.now();
-    s.hist.push({ x, y, t: now });
-    while (s.hist.length > 2 && now - s.hist[0].t > INPUT.swipeMaxTime * 1000) s.hist.shift();
     let ref = s.hist[0];
     for (const h of s.hist) if (h.y < ref.y) ref = h; // 窓内で最も上の点から測る
     const sdx = x - ref.x, sdy = y - ref.y;
@@ -210,24 +254,26 @@ export class Input {
       if (g.mode === 'pending' && g.maxD >= INPUT.moveThreshold) {
         // 移動操作に確定: タッチ開始位置を中心にスティックを出す
         g.mode = 'move';
-        this.stick = { id: g.id, cx: g.x0, cy: g.y0, fixed: false, jump: false, fired: false, hist: g.hist };
+        this.stick = { id: g.id, cx: g.x0, cy: g.y0, ox: 0, oy: 0, t0: performance.now(), fixed: false, jump: false, fired: false, hist: g.hist };
         this.stickEl.style.left = g.x0 + 'px';
         this.stickEl.style.top = g.y0 + 'px';
         this.stickEl.classList.add('active');
       }
+      this._pushHist(g.mode === 'move' ? this.stick : g, x, y);
       if (g.mode === 'move') {
+        this._tryLongJump(this.stick, x, y); // 地上で走りながら上へはらう → 走り幅跳び
         this._updateStick(x, y);
         // 空中ですばやく下へはらう → ヒップアタック
         if (this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
           this._hipPressed = true;
           flash(this.stickEl);
         }
-      } else {
-        g.hist.push({ x, y, t: performance.now() });
       }
       return;
     }
     if (this.stick && e.pointerId === this.stick.id) {
+      this._pushHist(this.stick, x, y);
+      this._tryLongJump(this.stick, x, y);
       this._updateStick(x, y);
       // センターパッド: 空中でパッドを下へすばやくはらう → ヒップアタック
       if (this.layout === 'center' && this._detectFlick(this.stick, x, y, INPUT.padFlickDy) && this.canHipFromPad()) {
@@ -240,6 +286,7 @@ export class Input {
     if (!s) return;
     if (e.pointerType === 'mouse' && e.buttons === 0) return;
     const dx = x - s.x0, dy = y - s.y0;
+    this._pushHist(s, x, y);
     if (!s.cam && this._detectFlick(s, x, y, INPUT.swipeMinDy)) {
       this._hipPressed = true;
       flash(this.layout === 'center' ? this.stickEl : this.jumpEl);
@@ -308,6 +355,7 @@ export class Input {
     if (down) {
       if (c === 'Space' && !e.repeat) { this._jumpPressed = true; this.jumpHeld = true; }
       if ((c === 'ShiftLeft' || c === 'ShiftRight' || c === 'KeyK' || c === 'KeyJ') && !e.repeat) this._hipPressed = true;
+      if ((c === 'KeyL' || c === 'KeyE') && !e.repeat) this._longPressed = true;
       this.keys.add(c);
       if (c.startsWith('Arrow') || c === 'Space') e.preventDefault();
     } else {
