@@ -395,20 +395,28 @@ function moveStick(e) {
   bNub.style.transform = `translate(${dx}px, ${dy}px)`;
 }
 bStick.addEventListener('pointermove', moveStick);
-// ---- 回避から指を離した瞬間のカウンター(回避の種類 → 出すパンチ) ----
-// 回避姿勢がこの重み以上(ある程度避けている)のときに指を離すと、そのままパンチを打つ。
-// ここに足せば、ほかの回避にもカウンターを割り当てられる(例: slipR: { punch: 'straight', ... })
+// ---- 回避から指を離した瞬間のカウンター ----
+// 左右のスリップ中に指を離すと、その瞬間にパンチを打つ。スティックの角度で打ち分ける:
+//   真横(水平から 22.5° 未満)        → 左: ジャブ / 右: 右ストレート
+//   斜め 45°(22.5〜67.5°。上でも下でも) → 左: 左フック / 右: 右フック
+//   それより縦(ダッキング・スウェー寄り) → 出さない
 const RELEASE_COUNTERS = {
-  slipL: { punch: 'jab', label: 'カウンター: 左スリップ → ジャブ' },
+  L: { straight: { punch: 'jab', label: 'カウンター: 左スリップ → ジャブ' }, hook: { punch: 'hookL', label: 'カウンター: 左45° → 左フック' } },
+  R: { straight: { punch: 'straight', label: 'カウンター: 右スリップ → 右ストレート' }, hook: { punch: 'hookR', label: 'カウンター: 右45° → 右フック' } },
 };
-const COUNTER_MIN_WEIGHT = 0.3;
+const COUNTER_MIN_WEIGHT = 0.3;      // 回避姿勢がこれ以上(ある程度避けている)のときだけ
+const COUNTER_HOOK_FROM = 22.5, COUNTER_HOOK_TO = 67.5; // フックになる角度 [度](水平から)
 let counterText = '', counterUntil = 0;
 function tryReleaseCounter() {
   if (!boxer) return false;
-  let best = null;
-  for (const k in boxer.dodgeW) if (!best || boxer.dodgeW[k] > boxer.dodgeW[best]) best = k;
-  const c = RELEASE_COUNTERS[best];
-  if (!c || boxer.dodgeW[best] < COUNTER_MIN_WEIGHT) return false;
+  const T = boxer.dodgeTarget, W = boxer.dodgeW;
+  const S = Math.max(T.slipL, T.slipR), V = T.duck + T.sway;
+  if (S < 1e-3) return false;                                   // 左右のスリップを含まない
+  if (W.slipL + W.slipR + W.duck + W.sway < COUNTER_MIN_WEIGHT) return false; // まだ避けていない
+  const ang = Math.atan(Math.sqrt(V / S)) * 180 / Math.PI;      // 重みは cos² なので角度に戻す
+  const type = ang < COUNTER_HOOK_FROM ? 'straight' : ang <= COUNTER_HOOK_TO ? 'hook' : null;
+  if (!type) return false;
+  const c = RELEASE_COUNTERS[T.slipL >= T.slipR ? 'L' : 'R'][type];
   boxer.throwPunch(c.punch);
   counterText = c.label;
   counterUntil = performance.now() + 800;
