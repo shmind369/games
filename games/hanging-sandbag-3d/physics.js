@@ -86,7 +86,7 @@ export function createSim(RAPIER, cfg = CONFIG) {
       .setMass(cfg.bagMass)
       .setFriction(0.6)
       .setRestitution(0.0)
-      .setCollisionGroups((0x0002 << 16) | 0x0001), // 床とだけ当たる
+      .setCollisionGroups((0x0002 << 16) | 0x0005), // 床(0x0001)とボクサーの体(0x0004)にだけ当たる
     bag
   );
 
@@ -186,8 +186,30 @@ export function createSim(RAPIER, cfg = CONFIG) {
     bag.wakeUp();
   }
 
+  /**
+   * ボクサーの体(キネマティックのカプセル)を追加する。揺れたバッグが体にぶつかって跳ね返る。
+   * 位置は毎ステップ前に setBoxerPos で与える(足元の x, z)
+   */
+  let boxerBody = null, boxerCenterY = 0;
+  function addBoxerBody(radius, halfHeight, x, z) {
+    boxerCenterY = halfHeight + radius;
+    boxerBody = world.createRigidBody(
+      RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(x, boxerCenterY, z)
+    );
+    world.createCollider(
+      RAPIER.ColliderDesc.capsule(halfHeight, radius)
+        .setFriction(0.4)
+        .setCollisionGroups((0x0004 << 16) | 0x0002), // バッグにだけ当たる
+      boxerBody
+    );
+    return boxerBody;
+  }
+  function setBoxerPos(x, z) {
+    if (boxerBody) boxerBody.setNextKinematicTranslation({ x, y: boxerCenterY, z });
+  }
+
   return {
-    RAPIER, world, cfg, ceiling, chain, bag, jointA, jointB,
+    RAPIER, world, cfg, ceiling, chain, bag, jointA, jointB, addBoxerBody, setBoxerPos,
     swivelY, bagCenterY, chainCenterY,
     step, hit, reset, jointErrors, energy, localToWorld,
   };
