@@ -13,7 +13,7 @@ export const CONFIG = {
   dt: 1 / 240,             // 物理の固定時間刻み [s]
   gravity: 9.81,
 
-  ceilingY: 3.2,           // 天井アンカーの高さ [m]
+  ceilingY: 2.7,           // 天井アンカーの高さ [m](身長1.74mのボクサーに合わせ、バッグ 0.85〜1.85m)
 
   chainLength: 0.5,        // チェーン長 [m]
   chainRadius: 0.012,

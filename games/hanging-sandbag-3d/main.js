@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from './vendor/rapier3d-compat.es.js';
 import { CONFIG, createSim } from './physics.js';
+import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -159,6 +160,47 @@ let bagMesh;
   bagGroup.add(sw);
 }
 scene.add(bagGroup);
+
+// ボクサー(assets/boxer_rigged.glb)。サンドバッグの斜め前に構えて立つ飾り(物理には関与しない)。
+// 構えのアイドル(assets/fightIdleUsa.json、2秒ループ)をボーンに再生する
+const BOXER_DIST = 0.78;                       // バッグ中心からの水平距離 [m]
+const BOXER_DIR = new THREE.Vector2(-0.88, 0.48).normalize(); // バッグから見たボクサーの方向(初期カメラの左手前)
+let boxer = null;
+(async () => {
+  try {
+    const [gltf, idle] = await Promise.all([
+      new GLTFLoader().loadAsync('./assets/boxer_rigged.glb'),
+      fetch('./assets/fightIdleUsa.json').then((r) => r.json()),
+    ]);
+    const model = gltf.scene, bones = {};
+    model.traverse((o) => {
+      if (o.isBone) bones[o.name] = o;
+      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
+    });
+    const group = new THREE.Group();
+    group.position.set(BOXER_DIR.x * BOXER_DIST, 0, BOXER_DIR.y * BOXER_DIST);
+    group.rotation.y = Math.atan2(-BOXER_DIR.x, -BOXER_DIR.y); // モデルの正面(+Z)をバッグへ向ける
+    group.add(model);
+    scene.add(group);
+    boxer = { group, model, bones, idle };
+  } catch (e) {
+    console.error('ボクサーモデルの読み込みに失敗しました', e);
+  }
+})();
+const _bq = new THREE.Quaternion();
+function poseBoxer(t) {
+  const keys = boxer.idle.keyframes, end = keys[keys.length - 1].time;
+  const tt = ((t % end) + end) % end;
+  let i = 0;
+  while (i < keys.length - 2 && keys[i + 1].time <= tt) i++;
+  const A = keys[i], B = keys[i + 1], f = (tt - A.time) / ((B.time - A.time) || 1);
+  for (const n in A.pose) {
+    const b = boxer.bones[n];
+    if (b) b.quaternion.set(...A.pose[n]).slerp(_bq.set(...B.pose[n]), f);
+  }
+  const ay = (A.modelPosition || [0, 0, 0])[1], by = (B.modelPosition || [0, 0, 0])[1];
+  boxer.model.position.y = ay + (by - ay) * f;
+}
 
 // 衝撃の可視化(矢印+波紋)
 const fx = [];
@@ -476,6 +518,7 @@ function frame(now) {
   }
   applyCamera();
   updateFx(real);
+  if (boxer) poseBoxer(now / 1000);
   renderer.render(scene, camera);
 
   updateHud();
