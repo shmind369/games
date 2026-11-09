@@ -14,7 +14,7 @@ export const STICK_ZONES = {
   depthAtBig: 0.55,     //                    35% で 0.55
   depthAtMoveIn: 1.0,   //                    65% で 1.0
   moveMinSpeed: 0.45, // 移動に入った直後の速さ(最高速に対する割合)。100% で 1.0
-  passRate: 2.5,      // 倒し量がこれより速く変化している間 [1/秒] は「通過中」とみなし回避を出さない
+  passRate: 4,        // 倒し量がこれより速く変化している間 [1/秒] は「通過中」とみなし回避を出さない
                       // (移動しようと一気に倒すとき、途中の回避ゾーンで一瞬ピクッと避けないように)
 };
 
@@ -33,7 +33,7 @@ export class StickModes {
     const Z = STICK_ZONES;
     const mag = active ? Math.min(1, Math.hypot(x, y)) : 0;
     const r = (mag - this.prevMag) / Math.max(dt, 1e-3);
-    this.rate += (r - this.rate) * Math.min(1, dt * 25);
+    this.rate += (r - this.rate) * Math.min(1, dt * 45); // 指が止まったらすぐ「通過中」を解除(反応を速く)
     this.prevMag = mag;
     // ヒステリシス付きのモード遷移
     switch (this.mode) {
