@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from './vendor/rapier3d-compat.es.js';
 import { CONFIG, createSim } from './physics.js';
-import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
+import { Boxer, BOXER } from './boxer.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -161,46 +161,12 @@ let bagMesh;
 }
 scene.add(bagGroup);
 
-// ボクサー(assets/boxer_rigged.glb)。サンドバッグの斜め前に構えて立つ飾り(物理には関与しない)。
-// 構えのアイドル(assets/fightIdleUsa.json、2秒ループ)をボーンに再生する
-const BOXER_DIST = 0.78;                       // バッグ中心からの水平距離 [m]
-const BOXER_DIR = new THREE.Vector2(-0.88, 0.48).normalize(); // バッグから見たボクサーの方向(初期カメラの左手前)
+// ボクサー(assets/boxer_rigged.glb)。構えたままステップで動き、パンチでバッグを叩ける(boxer.js)
 let boxer = null;
-(async () => {
-  try {
-    const [gltf, idle] = await Promise.all([
-      new GLTFLoader().loadAsync('./assets/boxer_rigged.glb'),
-      fetch('./assets/fightIdleUsa.json').then((r) => r.json()),
-    ]);
-    const model = gltf.scene, bones = {};
-    model.traverse((o) => {
-      if (o.isBone) bones[o.name] = o;
-      if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
-    });
-    const group = new THREE.Group();
-    group.position.set(BOXER_DIR.x * BOXER_DIST, 0, BOXER_DIR.y * BOXER_DIST);
-    group.rotation.y = Math.atan2(-BOXER_DIR.x, -BOXER_DIR.y); // モデルの正面(+Z)をバッグへ向ける
-    group.add(model);
-    scene.add(group);
-    boxer = { group, model, bones, idle };
-  } catch (e) {
-    console.error('ボクサーモデルの読み込みに失敗しました', e);
-  }
-})();
-const _bq = new THREE.Quaternion();
-function poseBoxer(t) {
-  const keys = boxer.idle.keyframes, end = keys[keys.length - 1].time;
-  const tt = ((t % end) + end) % end;
-  let i = 0;
-  while (i < keys.length - 2 && keys[i + 1].time <= tt) i++;
-  const A = keys[i], B = keys[i + 1], f = (tt - A.time) / ((B.time - A.time) || 1);
-  for (const n in A.pose) {
-    const b = boxer.bones[n];
-    if (b) b.quaternion.set(...A.pose[n]).slerp(_bq.set(...B.pose[n]), f);
-  }
-  const ay = (A.modelPosition || [0, 0, 0])[1], by = (B.modelPosition || [0, 0, 0])[1];
-  boxer.model.position.y = ay + (by - ay) * f;
-}
+Boxer.load(scene).then((bx) => {
+  boxer = bx;
+  sim.addBoxerBody(BOXER.capsuleRadius, BOXER.capsuleHalf, bx.pos.x, bx.pos.y);
+}).catch((e) => console.error('ボクサーの読み込みに失敗しました', e));
 
 // 衝撃の可視化(矢印+波紋)
 const fx = [];
@@ -268,7 +234,8 @@ function resize() {
   camera.fov = w < h ? 62 : 50;
   // 下部の操作パネルに隠れないよう、パネルを除いた領域の中央にバッグが来るよう描画範囲をずらす
   const panel = document.getElementById('panel');
-  const covered = panel ? Math.max(0, h - panel.getBoundingClientRect().top) : 0;
+  const covered = document.body.classList.contains('boxerMode') ? 150
+    : panel ? Math.max(0, h - panel.getBoundingClientRect().top) : 0;
   const shift = Math.min(covered * 0.5, h * 0.3);
   camera.setViewOffset(w, h, 0, shift, w, h);
   camera.updateProjectionMatrix();
@@ -394,6 +361,72 @@ document.getElementById('resetBtn').addEventListener('click', () => {
   stats.maxErr = 0; stats.hits = 0; trail.length = 0;
   prevState = readState(); currState = readState();
 });
+// ---- 操作モード: ボクサー操作 / 打撃テスト(従来のパネル) ----
+const modeBtn = document.getElementById('modeBtn');
+function setBoxerMode(on) {
+  document.body.classList.toggle('boxerMode', on);
+  modeBtn.textContent = on ? '打撃テストへ' : 'ボクサー操作へ';
+  resize();
+}
+modeBtn.addEventListener('click', () => setBoxerMode(!document.body.classList.contains('boxerMode')));
+
+// ---- ボクサーの操作: スティック(左下)・JAB / STRAIGHT(右下)・キーボード ----
+const bStick = document.getElementById('bStick'), bNub = document.getElementById('bNub');
+const stickIn = { id: null, cx: 0, cy: 0, x: 0, y: 0 };
+const STICK_R = 48;
+bStick.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  if (stickIn.id !== null) return;
+  try { bStick.setPointerCapture(e.pointerId); } catch (_) { /* 合成イベント等 */ }
+  const r = bStick.getBoundingClientRect();
+  Object.assign(stickIn, { id: e.pointerId, cx: r.left + r.width / 2, cy: r.top + r.height / 2 });
+  moveStick(e);
+});
+function moveStick(e) {
+  if (e.pointerId !== stickIn.id) return;
+  let dx = e.clientX - stickIn.cx, dy = e.clientY - stickIn.cy;
+  const l = Math.hypot(dx, dy);
+  if (l > STICK_R) { dx *= STICK_R / l; dy *= STICK_R / l; }
+  const m = Math.hypot(dx, dy) / STICK_R;
+  stickIn.x = m < 0.12 ? 0 : dx / STICK_R; stickIn.y = m < 0.12 ? 0 : -dy / STICK_R;
+  bNub.style.transform = `translate(${dx}px, ${dy}px)`;
+}
+bStick.addEventListener('pointermove', moveStick);
+const endStick = (e) => {
+  if (e.pointerId !== stickIn.id) return;
+  Object.assign(stickIn, { id: null, x: 0, y: 0 });
+  bNub.style.transform = '';
+};
+bStick.addEventListener('pointerup', endStick);
+bStick.addEventListener('pointercancel', endStick);
+for (const [id, kind] of [['jabBtn', 'jab'], ['strBtn', 'straight']]) {
+  const el = document.getElementById(id);
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (boxer) boxer.throwPunch(kind); });
+}
+const keys = new Set();
+window.addEventListener('keydown', (e) => {
+  keys.add(e.code);
+  if (!e.repeat && boxer) {
+    if (e.code === 'KeyJ' || e.code === 'KeyZ') boxer.throwPunch('jab');
+    if (e.code === 'KeyK' || e.code === 'KeyX') boxer.throwPunch('straight');
+  }
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+});
+window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('blur', () => keys.clear());
+/** ボクサーの移動入力(ワールド座標)。スティックの上 = カメラの向いている方向 */
+function boxerMoveInput() {
+  let x = stickIn.x, y = stickIn.y;
+  if (stickIn.id === null) {
+    x = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+    y = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+  }
+  const l = Math.hypot(x, y);
+  if (l > 1) { x /= l; y /= l; }
+  const fx = -Math.sin(orbit.yaw), fz = -Math.cos(orbit.yaw), rx = Math.cos(orbit.yaw), rz = -Math.sin(orbit.yaw);
+  return { x: fx * y + rx * x, z: fz * y + rz * x };
+}
+
 document.getElementById('panelToggle').addEventListener('click', () => {
   document.getElementById('panel').classList.toggle('collapsed');
   resize();
@@ -490,6 +523,7 @@ function frame(now) {
   const timeScale = ui.slow.checked ? 0.25 : 1;
   accumulator += real * timeScale;
 
+  if (boxer) sim.setBoxerPos(boxer.pos.x, boxer.pos.y); // 体(キネマティック)を今の位置へ
   let steps = 0;
   while (accumulator >= cfg.dt && steps < MAX_STEPS_PER_FRAME) {
     prevState = currState;
@@ -518,7 +552,17 @@ function frame(now) {
   }
   applyCamera();
   updateFx(real);
-  if (boxer) poseBoxer(now / 1000);
+  if (boxer) {
+    boxer.update(real * timeScale, now / 1000, boxerMoveInput(), bagGroup.position);
+    // パンチの当たり判定: グローブがバッグに触れたら、接触点に拳の向きの撃力
+    const hit = boxer.checkHit(real * timeScale, sim.bag.translation(), sim.bag.rotation(), cfg.bagRadius, cfg.bagHeight);
+    if (hit) {
+      sim.hit({ x: hit.point.x, y: hit.point.y, z: hit.point.z },
+        { x: hit.dir.x * hit.impulse, y: hit.dir.y * hit.impulse, z: hit.dir.z * hit.impulse });
+      spawnHitFx(hit.point, hit.dir, hit.impulse, hit.normal);
+      stats.hits++;
+    }
+  }
   renderer.render(scene, camera);
 
   updateHud();
@@ -590,4 +634,4 @@ document.getElementById('loading').remove();
 requestAnimationFrame((t) => { lastTime = t; frame(t); });
 
 // 検証用(コンソールから確認できるように)
-window.__sandbag = { sim, presetStrike, stats };
+window.__sandbag = { sim, presetStrike, stats, get boxer() { return boxer; } };
