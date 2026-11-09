@@ -453,9 +453,10 @@ function boxerControl(frameDt) {
   return { move, dodgeDir, depth };
 }
 // 回避の向き → 各回避の重み。方向はすべて「相手(バッグ)基準」:
-//   相手へ向かう = ダッキング / 左 = ヘッドスリップ左 / 右 = ヘッドスリップ右 / 相手から離れる = スウェー
+//   上(相手へ向かう)= スウェー / 下(相手から離れる)= ダッキング / 左 = ヘッドスリップ左 / 右 = ヘッドスリップ右
+//   (ボクサー操作中はカメラが背中側にあるので、画面の上下 = 相手へ向かう/離れる)
 //   斜めは隣どうしを cos² で混ぜる(向きを回しても姿勢が急に変わらない)
-const DODGE_ANGLES = { duck: 0, slipL: Math.PI / 2, sway: Math.PI, slipR: -Math.PI / 2 };
+const DODGE_ANGLES = { sway: 0, slipL: Math.PI / 2, duck: Math.PI, slipR: -Math.PI / 2 };
 function dodgeWeights(dir, depth) {
   const l = boxer.toLocal(dir.x, dir.z);
   const th = Math.atan2(l.left, l.fwd), out = {};

@@ -15,8 +15,8 @@ export const BOXER = {
   sideSwing: 0.32,       // 横へ踏み出す脚の開き [rad]
   kneeBend: 0.45,        // 踏み出す脚の膝の曲げ [rad]
   idleBounce: 0.012,     // 止まっているときの小さな弾み [m]
-  dodgeIn: 12,           // 回避姿勢へ入る速さ(補間)
-  dodgeOut: 7,           // 回避姿勢から戻る速さ(補間。離すと自然にニュートラルへ)
+  dodgeIn: 30,           // 回避姿勢へ入る速さ(補間。大きいほど速く反応)
+  dodgeOut: 18,          // 回避姿勢から戻る速さ(補間。離すと自然にニュートラルへ)
   turnRate: 10,          // バッグへ向き直る速さ
   minDist: 0.5,          // バッグの吊り位置(真下)からの最小距離 [m]
   maxDist: 4.2,          // 最大距離 [m]
@@ -36,14 +36,15 @@ export const BOXER = {
 //  bones: そのボーンに足す回転 [x, y, z](rad、重み1のとき)。体はモデルの +Z が正面、+X が本人の左
 //  knee : 膝を曲げて腰を落とす量(rad)。太もも前へ・すね後ろへ・足首で戻すので、足の裏は床に付いたまま(足は滑らない)
 export const DODGES = {
-  slipL: { label: 'ヘッドスリップ(左)', knee: 0.22,
-    bones: { Spine: [0.04, 0.16, -0.24], Chest: [0, 0.1, -0.22], Neck: [0, 0, -0.1], Head: [0, 0, 0.14] } },
-  slipR: { label: 'ヘッドスリップ(右)', knee: 0.22,
-    bones: { Spine: [0.04, -0.16, 0.24], Chest: [0, -0.1, 0.22], Neck: [0, 0, 0.1], Head: [0, 0, -0.14] } },
-  duck: { label: 'ダッキング', knee: 0.62,
-    bones: { Spine: [0.3, 0, 0], Chest: [0.22, 0, 0], Neck: [-0.22, 0, 0], Head: [-0.18, 0, 0] } },
-  sway: { label: 'スウェー', knee: 0.16,
-    bones: { Spine: [-0.32, 0, 0], Chest: [-0.24, 0, 0], Neck: [0.22, 0, 0], Head: [0.18, 0, 0] } },
+  // ver2: 傾き量を約2倍に(膝は深くなりすぎないよう約1.4倍)
+  slipL: { label: 'ヘッドスリップ(左)', knee: 0.3,
+    bones: { Spine: [0.08, 0.32, -0.48], Chest: [0, 0.2, -0.44], Neck: [0, 0, -0.2], Head: [0, 0, 0.28] } },
+  slipR: { label: 'ヘッドスリップ(右)', knee: 0.3,
+    bones: { Spine: [0.08, -0.32, 0.48], Chest: [0, -0.2, 0.44], Neck: [0, 0, 0.2], Head: [0, 0, -0.28] } },
+  duck: { label: 'ダッキング', knee: 0.9,
+    bones: { Spine: [0.6, 0, 0], Chest: [0.44, 0, 0], Neck: [-0.44, 0, 0], Head: [-0.36, 0, 0] } },
+  sway: { label: 'スウェー', knee: 0.22,
+    bones: { Spine: [-0.64, 0, 0], Chest: [-0.48, 0, 0], Neck: [0.44, 0, 0], Head: [0.36, 0, 0] } },
 };
 const THIGH = 0.39, SHIN = 0.32; // 脚の長さ(腰を落とす量の計算用)
 
