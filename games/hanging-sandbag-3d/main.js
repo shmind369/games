@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from './vendor/rapier3d-compat.es.js';
 import { CONFIG, createSim } from './physics.js';
-import { Boxer, BOXER } from './boxer.js';
+import { Boxer, BOXER, DODGES } from './boxer.js';
+import { StickModes, STICK_ZONES } from './stickModes.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -224,6 +225,8 @@ function setView(yaw) {
   viewAnimating = true;
 }
 let viewAnimating = false;
+let lastUserOrbit = -1e9; // 最後に手で視点を回した時刻(ボクサー操作中の自動追従を少し止める)
+const FOLLOW_PAUSE_MS = 2500;
 
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
@@ -373,7 +376,7 @@ modeBtn.addEventListener('click', () => setBoxerMode(!document.body.classList.co
 // ---- ボクサーの操作: スティック(左下)・JAB / STRAIGHT(右下)・キーボード ----
 const bStick = document.getElementById('bStick'), bNub = document.getElementById('bNub');
 const stickIn = { id: null, cx: 0, cy: 0, x: 0, y: 0 };
-const STICK_R = 48;
+const STICK_R = 58; // スティックの可動半径 [px](CSS の #bStick の大きさと合わせる)
 bStick.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (stickIn.id !== null) return;
@@ -387,8 +390,8 @@ function moveStick(e) {
   let dx = e.clientX - stickIn.cx, dy = e.clientY - stickIn.cy;
   const l = Math.hypot(dx, dy);
   if (l > STICK_R) { dx *= STICK_R / l; dy *= STICK_R / l; }
-  const m = Math.hypot(dx, dy) / STICK_R;
-  stickIn.x = m < 0.12 ? 0 : dx / STICK_R; stickIn.y = m < 0.12 ? 0 : -dy / STICK_R;
+  // デッドゾーンなどはかけずに生の倒し量を渡す(待機/回避/移動の判定は StickModes が行う)
+  stickIn.x = dx / STICK_R; stickIn.y = -dy / STICK_R;
   bNub.style.transform = `translate(${dx}px, ${dy}px)`;
 }
 bStick.addEventListener('pointermove', moveStick);
@@ -414,17 +417,62 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear());
-/** ボクサーの移動入力(ワールド座標)。スティックの上 = カメラの向いている方向 */
-function boxerMoveInput() {
-  let x = stickIn.x, y = stickIn.y;
-  if (stickIn.id === null) {
-    x = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
-    y = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-  }
-  const l = Math.hypot(x, y);
-  if (l > 1) { x /= l; y /= l; }
+// ---- スティックの倒し量で 待機 / 回避 / 移動 を切り替える(stickModes.js) ----
+const stickModes = new StickModes();
+let stickState = { mode: 'neutral', depth: 0, speed: 0, big: false };
+/** スティック/キーの向き(上 = カメラの向いている方向)をワールドの (x, z) に */
+function camToWorld(x, y) {
   const fx = -Math.sin(orbit.yaw), fz = -Math.cos(orbit.yaw), rx = Math.cos(orbit.yaw), rz = -Math.sin(orbit.yaw);
   return { x: fx * y + rx * x, z: fz * y + rz * x };
+}
+/**
+ * 毎フレームの操作: { move: ワールドの移動入力, dodgeDir: 回避の向き(ワールド)か null, depth: 回避の深さ 0..1 }
+ *  スティック: 0〜15% 待機 / 15〜65% 回避(強さで深さが連続的に変わる) / 65%〜 移動(強さで速さが変わる)
+ *  PC: WASD = 移動(従来どおり) / 矢印キー = 大きな回避
+ */
+function boxerControl(frameDt) {
+  const touching = stickIn.id !== null;
+  stickState = stickModes.update(touching, stickIn.x, stickIn.y, frameDt);
+  let move = { x: 0, z: 0 }, dodgeDir = null, depth = 0;
+  if (stickState.mode === 'move') {
+    const w = camToWorld(stickState.dirX, stickState.dirY);
+    move = { x: w.x * stickState.speed, z: w.z * stickState.speed };
+  } else if (stickState.mode === 'dodge') {
+    dodgeDir = camToWorld(stickState.dirX, stickState.dirY);
+    depth = stickState.depth;
+  }
+  if (!touching) {
+    let x = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+    let y = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+    const l = Math.hypot(x, y);
+    if (l > 0) { const w = camToWorld(x / l, y / l); move = { x: w.x, z: w.z }; }
+    const ax = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
+    const ay = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
+    if (ax || ay) { dodgeDir = camToWorld(ax, ay); depth = 1; }
+  }
+  return { move, dodgeDir, depth };
+}
+// 回避の向き → 各回避の重み。方向はすべて「相手(バッグ)基準」:
+//   相手へ向かう = ダッキング / 左 = ヘッドスリップ左 / 右 = ヘッドスリップ右 / 相手から離れる = スウェー
+//   斜めは隣どうしを cos² で混ぜる(向きを回しても姿勢が急に変わらない)
+const DODGE_ANGLES = { duck: 0, slipL: Math.PI / 2, sway: Math.PI, slipR: -Math.PI / 2 };
+function dodgeWeights(dir, depth) {
+  const l = boxer.toLocal(dir.x, dir.z);
+  const th = Math.atan2(l.left, l.fwd), out = {};
+  for (const k in DODGE_ANGLES) { const c = Math.max(0, Math.cos(th - DODGE_ANGLES[k])); out[k] = c * c * depth; }
+  return out;
+}
+const bStickEl = document.getElementById('bStick'), bModeEl = document.getElementById('bMode');
+function showStickMode(dw) {
+  bStickEl.dataset.mode = stickState.mode;
+  let txt = '待機';
+  if (stickState.mode === 'move') txt = `移動 ${Math.round(stickState.speed * 100)}%`;
+  else if (dw) {
+    let best = null;
+    for (const k in dw) if (!best || dw[k] > dw[best]) best = k;
+    txt = `${stickState.big ? '大きな' : '小さな'}回避: ${DODGES[best].label}`;
+  }
+  if (bModeEl.textContent !== txt) bModeEl.textContent = txt;
 }
 
 document.getElementById('panelToggle').addEventListener('click', () => {
@@ -462,6 +510,7 @@ canvas.addEventListener('pointermove', (e) => {
   }
   if (gesture.type === 'orbit') {
     viewAnimating = false;
+    lastUserOrbit = performance.now();
     orbit.yaw -= (e.clientX - gesture.lx) * 0.008;
     orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + (e.clientY - gesture.ly) * 0.006, -0.5, 1.2);
     Object.assign(orbitGoal, orbit);
@@ -550,10 +599,23 @@ function frame(now) {
     orbit.pitch += (orbitGoal.pitch - orbit.pitch) * k;
     if (Math.abs(orbitGoal.yaw - orbit.yaw) < 1e-3) viewAnimating = false;
   }
+  // ボクサー操作中: カメラをボクサーの背中側(バッグ→ボクサーの延長線上)へ自動で回し、
+  // 画面の上下左右 = 相手(バッグ)基準の前後左右 になるようにする
+  if (boxer && document.body.classList.contains('boxerMode') && performance.now() - lastUserOrbit > FOLLOW_PAUSE_MS && !viewAnimating) {
+    const want = Math.atan2(boxer.pos.x, boxer.pos.y);
+    let d = want - orbit.yaw;
+    d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    orbit.yaw += d * Math.min(1, real * 3);
+    orbitGoal.yaw = orbit.yaw;
+  }
   applyCamera();
   updateFx(real);
   if (boxer) {
-    boxer.update(real * timeScale, now / 1000, boxerMoveInput(), bagGroup.position);
+    const ctl = boxerControl(real);
+    const dw = ctl.dodgeDir ? dodgeWeights(ctl.dodgeDir, ctl.depth) : null;
+    boxer.setDodge(dw);
+    showStickMode(dw);
+    boxer.update(real * timeScale, now / 1000, ctl.move, bagGroup.position);
     // パンチの当たり判定: グローブがバッグに触れたら、接触点に拳の向きの撃力
     const hit = boxer.checkHit(real * timeScale, sim.bag.translation(), sim.bag.rotation(), cfg.bagRadius, cfg.bagHeight);
     if (hit) {

@@ -15,6 +15,8 @@ export const BOXER = {
   sideSwing: 0.32,       // 横へ踏み出す脚の開き [rad]
   kneeBend: 0.45,        // 踏み出す脚の膝の曲げ [rad]
   idleBounce: 0.012,     // 止まっているときの小さな弾み [m]
+  dodgeIn: 12,           // 回避姿勢へ入る速さ(補間)
+  dodgeOut: 7,           // 回避姿勢から戻る速さ(補間。離すと自然にニュートラルへ)
   turnRate: 10,          // バッグへ向き直る速さ
   minDist: 0.5,          // バッグの吊り位置(真下)からの最小距離 [m]
   maxDist: 4.2,          // 最大距離 [m]
@@ -29,6 +31,21 @@ export const BOXER = {
     straight: { url: './assets/rightStraight.json', hand: 'RightHand', fore: 'RightForearm', impulse: 30 },
   },
 };
+
+// ---- 回避動作(それぞれ独立したポーズとして管理。重み 0〜1 で深さが変わる) ----
+//  bones: そのボーンに足す回転 [x, y, z](rad、重み1のとき)。体はモデルの +Z が正面、+X が本人の左
+//  knee : 膝を曲げて腰を落とす量(rad)。太もも前へ・すね後ろへ・足首で戻すので、足の裏は床に付いたまま(足は滑らない)
+export const DODGES = {
+  slipL: { label: 'ヘッドスリップ(左)', knee: 0.22,
+    bones: { Spine: [0.04, 0.16, -0.24], Chest: [0, 0.1, -0.22], Neck: [0, 0, -0.1], Head: [0, 0, 0.14] } },
+  slipR: { label: 'ヘッドスリップ(右)', knee: 0.22,
+    bones: { Spine: [0.04, -0.16, 0.24], Chest: [0, -0.1, 0.22], Neck: [0, 0, 0.1], Head: [0, 0, -0.14] } },
+  duck: { label: 'ダッキング', knee: 0.62,
+    bones: { Spine: [0.3, 0, 0], Chest: [0.22, 0, 0], Neck: [-0.22, 0, 0], Head: [-0.18, 0, 0] } },
+  sway: { label: 'スウェー', knee: 0.16,
+    bones: { Spine: [-0.32, 0, 0], Chest: [-0.24, 0, 0], Neck: [0.22, 0, 0], Head: [0.18, 0, 0] } },
+};
+const THIGH = 0.39, SHIN = 0.32; // 脚の長さ(腰を落とす量の計算用)
 
 const UPPER = ['Hips', 'Spine', 'Chest', 'Neck', 'Head', 'LeftShoulder', 'LeftUpperArm', 'LeftForearm', 'LeftHand',
   'RightShoulder', 'RightUpperArm', 'RightForearm', 'RightHand'];
@@ -74,10 +91,23 @@ export class Boxer {
     this.yaw = 0;
     this.stepPhase = 0;
     this.moveW = 0;                 // フットワークの強さ(0〜1、滑らかに)
+    this.dodgeW = { slipL: 0, slipR: 0, duck: 0, sway: 0 };     // 今の回避の重み(補間後)
+    this.dodgeTarget = { slipL: 0, slipR: 0, duck: 0, sway: 0 }; // 目標の重み
     this.punch = null;              // { kind, t, dur, hit, prevGlove }
     this.queued = null;
     this._glove = new THREE.Vector3();
     this._fore = new THREE.Vector3();
+  }
+
+  /** 回避の目標の重み(各 0〜1)を与える。与えなかったものは 0 へ戻る */
+  setDodge(targets) {
+    for (const k in this.dodgeTarget) this.dodgeTarget[k] = targets && targets[k] ? targets[k] : 0;
+  }
+
+  /** ワールドの方向 (x, z) を、ボクサー基準の (前, 左) に直す */
+  toLocal(x, z) {
+    const s = Math.sin(this.yaw), c = Math.cos(this.yaw);
+    return { fwd: x * s + z * c, left: x * c - z * s };
   }
 
   /** パンチの入力(出している途中なら1回だけ予約) */
@@ -134,6 +164,10 @@ export class Boxer {
     const sf = Math.min(1, speed / BOXER.moveSpeed);
     this.moveW += ((speed > 0.15 ? 1 : 0) - this.moveW) * Math.min(1, dt * 10);
     this.stepPhase += BOXER.stepRate * Math.max(sf, 0.35 * this.moveW) * dt;
+    for (const k in this.dodgeW) {
+      const tgt = this.dodgeTarget[k], cur = this.dodgeW[k];
+      this.dodgeW[k] += (tgt - cur) * Math.min(1, (tgt > cur ? BOXER.dodgeIn : BOXER.dodgeOut) * dt);
+    }
     this._pose(now, speed);
 
     this.group.position.set(this.pos.x, 0, this.pos.y);
@@ -179,6 +213,27 @@ export class Boxer {
       if (upper) upper.quaternion.multiply(_qb.setFromEuler(_e.set(ax, 0, az)));
       if (lower) lower.quaternion.multiply(_qb.setFromEuler(_e.set(BOXER.kneeBend * lift * w, 0, 0)));
       y += BOXER.bob * lift * w;
+    }
+    // ---- 回避動作(その場で。足元の位置は動かさない) ----
+    let knee = 0;
+    for (const k in DODGES) {
+      const wd = this.dodgeW[k];
+      if (wd < 1e-3) continue;
+      const D = DODGES[k];
+      for (const n in D.bones) {
+        const [rx, ry, rz] = D.bones[n];
+        if (B[n]) B[n].quaternion.multiply(_qb.setFromEuler(_e.set(rx * wd, ry * wd, rz * wd)));
+      }
+      knee += D.knee * wd;
+    }
+    if (knee > 1e-3) {
+      // 太もも前へ a・すね後ろへ 2a・足首 a で、足の裏を床と平行に保ったまま腰を落とす
+      for (const side of ['Left', 'Right']) {
+        if (B[side + 'UpperLeg']) B[side + 'UpperLeg'].quaternion.multiply(_qb.setFromEuler(_e.set(-knee, 0, 0)));
+        if (B[side + 'LowerLeg']) B[side + 'LowerLeg'].quaternion.multiply(_qb.setFromEuler(_e.set(2 * knee, 0, 0)));
+        if (B[side + 'Foot']) B[side + 'Foot'].quaternion.multiply(_qb.setFromEuler(_e.set(-knee, 0, 0)));
+      }
+      y -= (THIGH + SHIN) * (1 - Math.cos(knee));
     }
     // 止まっているときも軽く弾む(リズム)
     y += BOXER.idleBounce * Math.abs(Math.sin(now * Math.PI * 1.6)) * (1 - w);
