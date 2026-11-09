@@ -37,6 +37,9 @@ export const BOXER = {
   punches: {
     jab: { url: './assets/leftJabInPlace1.json', hand: 'LeftHand', fore: 'LeftForearm', impulse: 16 },
     straight: { url: './assets/rightStraight.json', hand: 'RightHand', fore: 'RightForearm', impulse: 30 },
+    // フック: クリップが無いので手続きで作る(HOOK を参照)
+    hookL: { hook: 'L', hand: 'LeftHand', fore: 'LeftForearm', impulse: 26 },
+    hookR: { hook: 'R', hand: 'RightHand', fore: 'RightForearm', impulse: 28 },
   },
 };
 
@@ -55,6 +58,22 @@ export const DODGES = {
     bones: { Spine: [-0.64, 0, 0], Chest: [-0.48, 0, 0], Neck: [0.44, 0, 0], Head: [0.36, 0, 0] } },
 };
 const THIGH = 0.39, SHIN = 0.32; // 脚の長さ(腰を落とす量の計算用)
+
+// ---- フック(手続きで作るパンチ) ----
+//  肘を肩の高さまで横へ張り、外から内へ水平に振り抜く。腰と上体を打つ側の反対へ回して体ごと打つ。
+//  方向は胸(Chest)の座標系で指定: +Z = 正面、+X = 本人の左(右フックは X を反転)
+export const HOOK = {
+  dur: 0.42,                       // 全体の長さ [s]
+  tWind: 0.06,                     // 構え → 振りかぶり
+  tStrike: 0.15,                   // 振りかぶり → 振り抜き(インパクト)
+  tHold: 0.21,                     // 振り抜いた形で一瞬止める
+  wind:   { upper: [0.80, -0.15, 0.58], fore: [0.35, 0.05, 0.94], spine: 0.18 },  // 肘を外へ引く
+  strike: { upper: [0.30, 0.0, 0.95],  fore: [-0.78, 0.0, 0.63], spine: -0.6 },  // 拳が顔の前を横切る
+  hipsTurn: -0.22,                 // 腰の回し(振り抜き時)
+  stepIn: 0.33,                    // 体の踏み込み [m](構えの距離 0.78m からでも、回避からのカウンターでも届くように)
+};
+const ARM_REST = { upper: new THREE.Vector3(0.03034, -0.21804, -0.0029).normalize(), fore: new THREE.Vector3(0.02944, -0.16743, 0.00415).normalize() };
+const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _qh2 = new THREE.Quaternion(), _qh3 = new THREE.Quaternion();
 
 const UPPER = ['Hips', 'Spine', 'Chest', 'Neck', 'Head', 'LeftShoulder', 'LeftUpperArm', 'LeftForearm', 'LeftHand',
   'RightShoulder', 'RightUpperArm', 'RightForearm', 'RightHand'];
@@ -126,8 +145,8 @@ export class Boxer {
   /** パンチの入力(出している途中なら1回だけ予約) */
   throwPunch(kind) {
     if (this.punch) { if (this.punch.t > this.punch.dur * 0.45) this.queued = kind; return; }
-    const clip = this.clips[kind];
-    this.punch = { kind, t: 0, dur: clip.keyframes[clip.keyframes.length - 1].time / BOXER.punchRate, hit: false, prevGlove: null };
+    const dur = BOXER.punches[kind].hook ? HOOK.dur : this.clips[kind].keyframes[this.clips[kind].keyframes.length - 1].time / BOXER.punchRate;
+    this.punch = { kind, t: 0, dur, hit: false, prevGlove: null };
   }
 
   /**
@@ -197,6 +216,47 @@ export class Boxer {
     this.group.rotation.y = this.yaw;
   }
 
+  /** フックの姿勢を構えの上に重ねる。戻り値は体の前への踏み込み量 [m] */
+  _hookPose(P) {
+    const B = this.bones, side = BOXER.punches[P.kind].hook, sx = side === 'L' ? 1 : -1, H = HOOK, t = P.t;
+    // 構えに対する重み(入り・抜け)と、振りかぶり→振り抜きの進み
+    let w, k;
+    if (t < H.tWind) { w = t / H.tWind; k = 0; }
+    else if (t < H.tStrike) { w = 1; k = (t - H.tWind) / (H.tStrike - H.tWind); k = k * k * (3 - 2 * k); }
+    else if (t < H.tHold) { w = 1; k = 1; }
+    else { w = Math.max(0, 1 - (t - H.tHold) / (H.dur - H.tHold)); k = 1; }
+    w = w * w * (3 - 2 * w);
+    const pre = side === 'L' ? 'Left' : 'Right';
+    const sh = B[pre + 'Shoulder'], ua = B[pre + 'UpperArm'], fa = B[pre + 'Forearm'];
+    if (sh && ua && fa) {
+      const dir = (key) => {
+        const a = H.wind[key], b = H.strike[key];
+        _v1.set(a[0] * sx, a[1], a[2]).normalize();
+        _v2.set(b[0] * sx, b[1], b[2]).normalize();
+        // 外から内へ水平に回り込むよう、振りかぶりの方向を振り抜きの方向へ k の割合だけ回す
+        const q = new THREE.Quaternion().setFromUnitVectors(_v1, _v2).slerp(_qh3.identity(), 1 - k);
+        return _v1.clone().applyQuaternion(q).normalize();
+      };
+      // 上腕: 胸の座標系の方向 → 肩のローカルへ
+      const shInv = _qh2.copy(sh.quaternion).invert();
+      const du = dir('upper').applyQuaternion(shInv);
+      const restU = ARM_REST.upper.clone(); restU.x *= sx;
+      const qU = new THREE.Quaternion().setFromUnitVectors(restU, du);
+      // 前腕: 胸の座標系の方向 → 上腕のローカルへ
+      const df = dir('fore').applyQuaternion(_qh2.copy(sh.quaternion).multiply(qU).invert());
+      const restF = ARM_REST.fore.clone(); restF.x *= sx;
+      const qF = new THREE.Quaternion().setFromUnitVectors(restF, df);
+      ua.quaternion.slerp(qU, w);
+      fa.quaternion.slerp(qF, w);
+    }
+    // 上体と腰を回して体ごと打つ(左フックは右回り = Y を負へ)
+    const spin = (H.wind.spine + (H.strike.spine - H.wind.spine) * k) * sx * w;
+    if (B.Spine) B.Spine.quaternion.multiply(_qb.setFromEuler(_e.set(0, spin * 0.55, 0)));
+    if (B.Chest) B.Chest.quaternion.multiply(_qb.setFromEuler(_e.set(0, spin * 0.45, 0)));
+    if (B.Hips) B.Hips.quaternion.multiply(_qb.setFromEuler(_e.set(0, H.hipsTurn * k * sx * w, 0)));
+    return H.stepIn * k * w;
+  }
+
   /** 跳びの状態を進める。体が動くのは蹴り出し(push)の間だけ */
   _updateHop(dt, move) {
     const m = Math.min(1, Math.hypot(move.x, move.z));
@@ -236,7 +296,9 @@ export class Boxer {
     let y = idle.y, z = 0;
 
     // ---- パンチ(上半身にクリップを重ねる) ----
-    if (this.punch) {
+    if (this.punch && BOXER.punches[this.punch.kind].hook) {
+      z += this._hookPose(this.punch);
+    } else if (this.punch) {
       const P = this.punch, clip = this.clips[P.kind];
       const s = sampleClip(clip, P.t * BOXER.punchRate, false);
       const w = Math.min(1, P.t / BOXER.blendIn, (P.dur - P.t) / BOXER.blendOut);
