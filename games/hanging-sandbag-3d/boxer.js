@@ -1,19 +1,27 @@
 // 操作できるボクサー
-//  - 構え(fightIdleUsa.json のアイドル)を保ったまま、ステップ(フットワーク)で空間を移動する。常にバッグの方を向く
-//  - ステップは手続き的に付ける: 1歩ごとに小さく弾み、進む向きの側の足が先に出て、反対の足が引き寄せられる
+//  - 構え(fightIdleUsa.json のアイドル)を保ったまま、反復横跳びのようなステップで移動する。常にバッグの方を向く
+//    1回の跳び = 溜め(膝を曲げて沈む。足元は動かない)→ 蹴り出し(地面を蹴って一気に跳ぶ)→ 着地(膝で受け止める)。
+//    スティックを倒している間はこれを繰り返す。体が動くのは蹴り出しの間だけなので、足が床を滑らない
 //  - パンチ(ジャブ / ストレート)はクリップを上半身に重ねる。毎フレーム、グローブの実際の位置を
 //    バッグの物理形状(円筒)と照合し、当たったらその接触点に、拳の進む向きの撃力を加える
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 
 export const BOXER = {
-  moveSpeed: 1.7,        // フットワークの最高速 [m/s]
-  accel: 9,              // 速度の追従の速さ
-  stepRate: 3.2,         // 最高速でのステップ数 [歩/秒]
-  bob: 0.04,             // 1歩ごとの弾み [m]
-  legSwing: 0.42,        // 前後へ踏み出す脚の振り [rad]
-  sideSwing: 0.32,       // 横へ踏み出す脚の開き [rad]
-  kneeBend: 0.45,        // 踏み出す脚の膝の曲げ [rad]
+  // ---- 反復横跳びステップ ----
+  hopLoad: 0.10,         // 溜め(沈み込み)の時間 [s]
+  hopChainLoad: 0.05,    // 連続で跳ぶときの溜め(着地で沈んでいるので短く)[s]
+  hopPush: 0.15,         // 蹴り出して移動する時間 [s]
+  hopLand: 0.10,         // 着地して受け止める時間 [s]
+  hopDistMin: 0.22,      // 1回の跳びの距離(スティック 65% のとき)[m]
+  hopDistMax: 0.55,      // 1回の跳びの距離(スティック 100% のとき)[m]
+  hopHeight: 0.06,       // 跳んだときの浮き [m]
+  loadKnee: 0.48,        // 溜めの膝の曲げ [rad]
+  landKnee: 0.36,        // 着地の膝の曲げ [rad]
+  hopLean: 0.16,         // 蹴り出しで進む向きへ体を傾ける量 [rad]
+  legSwing: 0.42,        // 前後に跳ぶときの脚の振り [rad]
+  sideSwing: 0.36,       // 横に跳ぶときの脚の開き [rad]
+  poseRate: 32,          // 膝・傾きを目標へ寄せる速さ(段差なく切り替える)
   idleBounce: 0.012,     // 止まっているときの小さな弾み [m]
   dodgeIn: 30,           // 回避姿勢へ入る速さ(補間。大きいほど速く反応)
   dodgeOut: 18,          // 回避姿勢から戻る速さ(補間。離すと自然にニュートラルへ)
@@ -90,8 +98,12 @@ export class Boxer {
     this.pos = new THREE.Vector2(-0.69, 0.37); // 床の上の位置 (x, z)
     this.vel = new THREE.Vector2();
     this.yaw = 0;
-    this.stepPhase = 0;
-    this.moveW = 0;                 // フットワークの強さ(0〜1、滑らかに)
+    this.moveW = 0;                 // 跳んでいる度合い(0〜1、滑らかに)
+    this.hop = null;                // { phase: 'load'|'push'|'land', t, dirX, dirZ, s, fromX, fromZ, dist }
+    this.hopKnee = 0;               // 跳びによる膝の曲げ(平滑化)
+    this.hopLeanV = 0;              // 跳びによる体の傾き(平滑化)
+    this.hopLegs = 0;               // 跳びによる脚の開き(平滑化)
+    this.hopY = 0;                  // 跳びによる浮き
     this.dodgeW = { slipL: 0, slipR: 0, duck: 0, sway: 0 };     // 今の回避の重み(補間後)
     this.dodgeTarget = { slipL: 0, slipR: 0, duck: 0, sway: 0 }; // 目標の重み
     this.punch = null;              // { kind, t, dur, hit, prevGlove }
@@ -122,14 +134,9 @@ export class Boxer {
    * move: ワールドの移動入力 {x, z}(長さ0〜1) / bag: バッグの現在位置(THREE.Vector3)
    */
   update(dt, now, move, bag) {
-    // ---- 移動(パンチ中は少し遅く) ----
-    const slow = this.punch ? 0.35 : 1;
-    const tx = move.x * BOXER.moveSpeed * slow, tz = move.z * BOXER.moveSpeed * slow;
-    const k = 1 - Math.exp(-BOXER.accel * dt);
-    this.vel.x += (tx - this.vel.x) * k;
-    this.vel.y += (tz - this.vel.y) * k;
-    this.pos.x += this.vel.x * dt;
-    this.pos.y += this.vel.y * dt;
+    // ---- 移動: 反復横跳び(溜め → 蹴り出し → 着地 を繰り返す) ----
+    const px0 = this.pos.x, pz0 = this.pos.y;
+    this._updateHop(dt, move);
     // バッグの吊り位置(原点)のまわりの範囲に収める
     const r = this.pos.length();
     if (r < BOXER.minDist) this.pos.multiplyScalar(BOXER.minDist / Math.max(r, 1e-4));
@@ -142,8 +149,8 @@ export class Boxer {
       const nx = bd > 1e-4 ? bx / bd : 1, nz = bd > 1e-4 ? bz / bd : 0;
       this.pos.x = bag.x + nx * keep; this.pos.y = bag.z + nz * keep;
       const vn = this.vel.x * nx + this.vel.y * nz;
-      if (vn < 0) { this.vel.x -= vn * nx; this.vel.y -= vn * nz; }
     }
+    this.vel.set((this.pos.x - px0) / Math.max(dt, 1e-4), (this.pos.y - pz0) / Math.max(dt, 1e-4));
 
     // ---- 常にバッグの方を向く ----
     const want = Math.atan2(bag.x - this.pos.x, bag.z - this.pos.y);
@@ -162,9 +169,24 @@ export class Boxer {
 
     // ---- 姿勢 ----
     const speed = this.vel.length();
-    const sf = Math.min(1, speed / BOXER.moveSpeed);
-    this.moveW += ((speed > 0.15 ? 1 : 0) - this.moveW) * Math.min(1, dt * 10);
-    this.stepPhase += BOXER.stepRate * Math.max(sf, 0.35 * this.moveW) * dt;
+    this.moveW += ((this.hop ? 1 : 0) - this.moveW) * Math.min(1, dt * 10);
+    // 跳びの段階ごとの膝・傾き・脚の開きの目標へ、滑らかに寄せる(段差なし)
+    const H = this.hop, kr = Math.min(1, BOXER.poseRate * dt);
+    let kneeT = 0, leanT = 0, legsT = 0;
+    this.hopY = 0;
+    if (H) {
+      if (H.phase === 'load') { kneeT = BOXER.loadKnee * (0.75 + 0.25 * H.s); leanT = -0.04; }
+      else if (H.phase === 'push') {
+        const p = Math.min(1, H.t / BOXER.hopPush);
+        kneeT = p < 0.35 ? 0 : 0.1;            // 一気に脚を伸ばして蹴る
+        leanT = BOXER.hopLean;
+        legsT = Math.sin(Math.PI * p);
+        this.hopY = BOXER.hopHeight * (0.6 + 0.4 * H.s) * Math.sin(Math.PI * p);
+      } else { kneeT = H.t < BOXER.hopLand * 0.5 ? BOXER.landKnee : 0.15; leanT = 0.05; }
+    }
+    this.hopKnee += (kneeT - this.hopKnee) * kr;
+    this.hopLeanV += (leanT - this.hopLeanV) * kr;
+    this.hopLegs += (legsT - this.hopLegs) * kr;
     for (const k in this.dodgeW) {
       const tgt = this.dodgeTarget[k], cur = this.dodgeW[k];
       this.dodgeW[k] += (tgt - cur) * Math.min(1, (tgt > cur ? BOXER.dodgeIn : BOXER.dodgeOut) * dt);
@@ -173,6 +195,38 @@ export class Boxer {
 
     this.group.position.set(this.pos.x, 0, this.pos.y);
     this.group.rotation.y = this.yaw;
+  }
+
+  /** 跳びの状態を進める。体が動くのは蹴り出し(push)の間だけ */
+  _updateHop(dt, move) {
+    const m = Math.min(1, Math.hypot(move.x, move.z));
+    const want = m > 0.05;
+    let H = this.hop;
+    if (!H) {
+      if (!want) return;
+      H = this.hop = { phase: 'load', t: 0, loadDur: BOXER.hopLoad, dirX: move.x / m, dirZ: move.z / m, s: m };
+    }
+    H.t += dt;
+    if (H.phase === 'load') {
+      if (!want) { this.hop = null; return; }               // 溜め中に離した: 跳ばずにその場へ
+      H.dirX = move.x / m; H.dirZ = move.z / m; H.s = m;     // 蹴る直前まで向きを受け付ける
+      if (H.t >= H.loadDur) {
+        const sp = (H.s - 0.6) / 0.4;                        // スティック 60〜100% → 0..1
+        H.dist = BOXER.hopDistMin + (BOXER.hopDistMax - BOXER.hopDistMin) * Math.max(0, Math.min(1, sp));
+        if (this.punch) H.dist *= 0.5;                      // パンチ中は小さく
+        H.phase = 'push'; H.t = 0; H.fromX = this.pos.x; H.fromZ = this.pos.y; H.done = 0;
+      }
+    } else if (H.phase === 'push') {
+      const p = Math.min(1, H.t / BOXER.hopPush);
+      const e = 1 - (1 - p) * (1 - p);                       // 蹴った瞬間がいちばん速く、着地へ向けて減速
+      const dd = (e - H.done) * H.dist;
+      H.done = e;
+      this.pos.x += H.dirX * dd; this.pos.y += H.dirZ * dd;
+      if (p >= 1) { H.phase = 'land'; H.t = 0; }
+    } else if (H.t >= BOXER.hopLand) {
+      if (want) Object.assign(H, { phase: 'load', t: 0, loadDur: BOXER.hopChainLoad, dirX: move.x / m, dirZ: move.z / m, s: m });
+      else this.hop = null;
+    }
   }
 
   _pose(now, speed) {
@@ -191,32 +245,26 @@ export class Boxer {
       z += s.z * w; // ストレートは体ごと前へ踏み込む
     }
 
-    // ---- ステップ(フットワーク) ----
+    // ---- 反復横跳び(蹴り出しで進む向きへ体を傾け、脚を開いて跳ぶ) ----
     const w = this.moveW;
-    if (w > 0.01) {
-      // 進む向きを体の向き基準に(f: 前+ / s: 左+。モデルの左 = +X)
+    const H = this.hop;
+    if (H && H.dirX !== undefined) {
+      // 跳ぶ向きを体の向き基準に(f: 前+ / sd: 左+。モデルの左 = +X)
       const c = Math.cos(this.yaw), sn = Math.sin(this.yaw);
-      const spd = Math.max(speed, 1e-4);
-      const f = (this.vel.x * sn + this.vel.y * c) / spd;
-      const sd = (this.vel.x * c - this.vel.y * sn) / spd;
-      const ph = this.stepPhase % 1;
-      const half = ph < 0.5 ? 0 : 1, h = (ph % 0.5) * 2;   // 前半/後半、その中の進み 0..1
-      const lift = Math.sin(Math.PI * h);
-      // 先に出す足: 前へなら前足(左)、後ろへなら後ろ足(右)、横へならその側の足
-      const leadLeft = Math.abs(sd) > Math.abs(f) ? sd > 0 : f >= 0;
-      const movingLeft = half === 0 ? leadLeft : !leadLeft;  // 後半は反対の足を引き寄せる
-      const legSide = movingLeft ? 1 : -1;
-      const upper = B[movingLeft ? 'LeftUpperLeg' : 'RightUpperLeg'];
-      const lower = B[movingLeft ? 'LeftLowerLeg' : 'RightLowerLeg'];
-      // 前へ: X を負に回すと脚が前へ。横へ: 左脚は Z を正で外へ(右脚は負で外へ)
-      const ax = -f * BOXER.legSwing * lift * w;
-      const az = (sd * legSide > 0 ? 1 : 0.4) * sd * BOXER.sideSwing * lift * w;
-      if (upper) upper.quaternion.multiply(_qb.setFromEuler(_e.set(ax, 0, az)));
-      if (lower) lower.quaternion.multiply(_qb.setFromEuler(_e.set(BOXER.kneeBend * lift * w, 0, 0)));
-      y += BOXER.bob * lift * w;
+      const f = H.dirX * sn + H.dirZ * c, sd = H.dirX * c - H.dirZ * sn;
+      const lean = this.hopLeanV, q = this.hopLegs;
+      if (B.Spine) B.Spine.quaternion.multiply(_qb.setFromEuler(_e.set(f * lean, 0, -sd * lean)));
+      if (q > 1e-3) {
+        // 進む側の脚が先へ伸び、反対の脚が地面を蹴って後ろへ残る
+        const leadLeft = Math.abs(sd) > Math.abs(f) ? sd > 0 : f >= 0;
+        const lead = B[leadLeft ? 'LeftUpperLeg' : 'RightUpperLeg'], trail = B[leadLeft ? 'RightUpperLeg' : 'LeftUpperLeg'];
+        if (lead) lead.quaternion.multiply(_qb.setFromEuler(_e.set(-f * BOXER.legSwing * q, 0, sd * BOXER.sideSwing * q)));
+        if (trail) trail.quaternion.multiply(_qb.setFromEuler(_e.set(f * 0.6 * BOXER.legSwing * q, 0, -sd * 0.6 * BOXER.sideSwing * q)));
+      }
     }
+    y += this.hopY;
     // ---- 回避動作(その場で。足元の位置は動かさない) ----
-    let knee = 0;
+    let knee = this.hopKnee; // 跳びの溜め・着地の膝の曲げも同じ方法で(足の裏を床に付けたまま沈む)
     for (const k in DODGES) {
       const wd = this.dodgeW[k];
       if (wd < 1e-3) continue;
