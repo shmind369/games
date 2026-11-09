@@ -395,8 +395,29 @@ function moveStick(e) {
   bNub.style.transform = `translate(${dx}px, ${dy}px)`;
 }
 bStick.addEventListener('pointermove', moveStick);
+// ---- 回避から指を離した瞬間のカウンター(回避の種類 → 出すパンチ) ----
+// 回避姿勢がこの重み以上(ある程度避けている)のときに指を離すと、そのままパンチを打つ。
+// ここに足せば、ほかの回避にもカウンターを割り当てられる(例: slipR: { punch: 'straight', ... })
+const RELEASE_COUNTERS = {
+  slipL: { punch: 'jab', label: 'カウンター: 左スリップ → ジャブ' },
+};
+const COUNTER_MIN_WEIGHT = 0.3;
+let counterText = '', counterUntil = 0;
+function tryReleaseCounter() {
+  if (!boxer) return false;
+  let best = null;
+  for (const k in boxer.dodgeW) if (!best || boxer.dodgeW[k] > boxer.dodgeW[best]) best = k;
+  const c = RELEASE_COUNTERS[best];
+  if (!c || boxer.dodgeW[best] < COUNTER_MIN_WEIGHT) return false;
+  boxer.throwPunch(c.punch);
+  counterText = c.label;
+  counterUntil = performance.now() + 800;
+  return true;
+}
 const endStick = (e) => {
   if (e.pointerId !== stickIn.id) return;
+  // 回避中に指を離した(キャンセルではなく離した)瞬間 → カウンター
+  if (e.type === 'pointerup' && stickState.mode === 'dodge') tryReleaseCounter();
   Object.assign(stickIn, { id: null, x: 0, y: 0 });
   bNub.style.transform = '';
 };
@@ -415,7 +436,10 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code.startsWith('Arrow')) e.preventDefault();
 });
-window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  if (e.code.startsWith('Arrow')) tryReleaseCounter(); // PC: 矢印で回避 → 離した瞬間にカウンター
+});
 window.addEventListener('blur', () => keys.clear());
 // ---- スティックの倒し量で 待機 / 回避 / 移動 を切り替える(stickModes.js) ----
 const stickModes = new StickModes();
@@ -473,6 +497,7 @@ function showStickMode(dw) {
     for (const k in dw) if (!best || dw[k] > dw[best]) best = k;
     txt = `${stickState.big ? '大きな' : '小さな'}回避: ${DODGES[best].label}`;
   }
+  if (performance.now() < counterUntil) txt = counterText;
   if (bModeEl.textContent !== txt) bModeEl.textContent = txt;
 }
 
