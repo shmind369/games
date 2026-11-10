@@ -28,6 +28,7 @@ export const BOXER = {
   turnRate: 10,          // バッグへ向き直る速さ
   minDist: 0.5,          // バッグの吊り位置(真下)からの最小距離 [m]
   maxDist: 4.2,          // 最大距離 [m]
+  ringHalf: 2.72,        // リングのロープの内側で動ける範囲(中心から x / z それぞれ)[m]。ロープ際で止まる
   punchRate: 1.35,       // パンチのクリップの再生速度
   // ---- コンビネーション ----
   comboMax: 5,           // 1回のコンビネーションで打てる最大数
@@ -199,6 +200,9 @@ export class Boxer {
     const r = this.pos.length();
     if (r < BOXER.minDist) this.pos.multiplyScalar(BOXER.minDist / Math.max(r, 1e-4));
     if (r > BOXER.maxDist) this.pos.multiplyScalar(BOXER.maxDist / r);
+    // リングのロープの内側に収める(ロープ際で止まる)
+    this.pos.x = Math.max(-BOXER.ringHalf, Math.min(BOXER.ringHalf, this.pos.x));
+    this.pos.y = Math.max(-BOXER.ringHalf, Math.min(BOXER.ringHalf, this.pos.y));
     // 揺れているバッグの今の位置にも踏み込まない(体でバッグを押してエネルギーを注ぎ込まないように)。
     // 逆にバッグが迫ってきたら、ボクサーのほうが押しのけられる
     const bx = this.pos.x - bag.x, bz = this.pos.y - bag.z, bd = Math.hypot(bx, bz);
