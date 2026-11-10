@@ -542,6 +542,7 @@ function showStickMode(dw) {
     txt = `${stickState.big ? '大きな' : '小さな'}回避: ${DODGES[best].label}`;
   }
   if (performance.now() < counterUntil) txt = counterText;
+  if (boxer && boxer.punch && boxer.combo >= 2) txt = `コンビネーション ${boxer.combo} 発目` + (boxer.combo >= BOXER.comboMax ? '(最大)' : '');
   if (bModeEl.textContent !== txt) bModeEl.textContent = txt;
 }
 
