@@ -9,6 +9,13 @@ import { GLTFLoader } from './vendor/loaders/GLTFLoader.js';
 
 export const BOXER = {
   // ---- 反復横跳びステップ ----
+  // ---- ダッキング中のパンチの狙い(ローブローにならないよう、上腕を上下に回して相手のボディの高さへ) ----
+  duckRise: 0.45,        // ダッキング中のパンチで伸び上がる割合(沈みの深さを打つ間だけこの割合ぶん戻す)
+  duckRiseIn: 0.07,      // 伸び上がりの立ち上がり [s(クリップ時間)]
+  duckRiseOut: 0.12,     // 打ち終わりに沈みへ戻る時間
+  aimExtFrom: 0.12,      // 肩から拳までの水平距離がこれより短い(構えの位置)うちは補正しない [m]
+  aimExtTo: 0.30,        // ここまで伸びたら補正を全部かける [m]
+  aimMax: 1.0,           // 補正の最大角 [rad]
   hopLoad: 0.10,         // 溜め(沈み込み)の時間 [s]
   hopChainLoad: 0.05,    // 連続で跳ぶときの溜め(着地で沈んでいるので短く)[s]
   hopPush: 0.15,         // 蹴り出して移動する時間 [s]
@@ -90,6 +97,7 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _qh2 = new THREE.Qua
 const UPPER = ['Hips', 'Spine', 'Chest', 'Neck', 'Head', 'LeftShoulder', 'LeftUpperArm', 'LeftForearm', 'LeftHand',
   'RightShoulder', 'RightUpperArm', 'RightForearm', 'RightHand'];
 
+const _aimFrom = new THREE.Vector3(), _aimTo = new THREE.Vector3(), _aimR = new THREE.Quaternion(), _aimPQ = new THREE.Quaternion(), _aimTmp = new THREE.Quaternion();
 const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _e = new THREE.Euler();
 function sampleClip(clip, t, loop) {
   const keys = clip.keyframes, end = keys[keys.length - 1].time || 1;
@@ -143,6 +151,8 @@ export class Boxer {
     this.queue = [];                // 予約したパンチ
     this.combo = 0;                 // 今のコンビネーションで何発目か
     this.press = null;              // コンビネーション中の前への詰め
+    this.pressMin = 0;              // 詰めるのはこの距離まで(0 なら制限なし。CPU は間合いを詰めすぎない)
+    this.aimY = null;               // ダッキング中のパンチの狙いの高さ(ワールド y)。null なら補正しない
     this.avoidCenter = true;        // サンドバッグモード: バッグの真下(原点)には入らない
     this.keepDist = BOXER.capsuleRadius + 0.18 + BOXER.bagGap; // 相手(バッグ/対戦相手)との最小間隔
     this.react = null;              // 被弾のリアクション
@@ -198,8 +208,9 @@ export class Boxer {
     this._updateHop(dt, move);
     // コンビネーション中はバッグへ少しずつ詰める(すり足。下のバッグとの間隔の制限は守る)
     if (this.press) {
-      const P = this.press, step = Math.min(P.left, BOXER.comboStep * dt / BOXER.comboStepTime);
+      const P = this.press; let step = Math.min(P.left, (P.speed || BOXER.comboStep / BOXER.comboStepTime) * dt);
       const dx = bag.x - this.pos.x, dz = bag.z - this.pos.y, dl = Math.hypot(dx, dz) || 1;
+      if (this.pressMin && dl - step < this.pressMin) { step = Math.max(0, dl - this.pressMin); P.left = step; }
       this.pos.x += dx / dl * step; this.pos.y += dz / dl * step;
       P.left -= step;
       if (P.left <= 1e-4) this.press = null;
@@ -271,6 +282,8 @@ export class Boxer {
       const tgt = this.dodgeTarget[k], cur = this.dodgeW[k];
       this.dodgeW[k] += (tgt - cur) * Math.min(1, (tgt > cur ? BOXER.dodgeIn : BOXER.dodgeOut) * dt);
     }
+    this.group.position.set(this.pos.x, 0, this.pos.y);
+    this.group.rotation.y = this.yaw;
     this._pose(now, speed);
 
     // 被弾のリアクション・ダウンの進行
@@ -405,8 +418,13 @@ export class Boxer {
     y += this.hopY;
     // ---- 回避動作(その場で。足元の位置は動かさない) ----
     let knee = this.hopKnee; // 跳びの溜め・着地の膝の曲げも同じ方法で(足の裏を床に付けたまま沈む)
+    // ダッキング中にパンチを出すと、打つ間だけ少し伸び上がる(沈みきったままだと拳が脚の高さにしか届かない)
+    let pw = 0;
+    if (this.punch) { const P = this.punch, end = P.dur * P.rate; pw = Math.max(0, Math.min(1, P.t / BOXER.duckRiseIn, (end - P.t) / BOXER.duckRiseOut)); }
+    if (this.prevPunch) pw = Math.max(pw, 1 - this.prevPunch.fade / BOXER.comboFade);
+    this.duckEff = this.dodgeW.duck * (1 - BOXER.duckRise * pw);
     for (const k in DODGES) {
-      const wd = this.dodgeW[k];
+      const wd = k === 'duck' ? this.duckEff : this.dodgeW[k];
       if (wd < 1e-3) continue;
       const D = DODGES[k];
       for (const n in D.bones) {
@@ -444,6 +462,40 @@ export class Boxer {
       this.model.rotation.x = -e * Math.PI / 2 * 0.97;
       this.model.position.y = y * (1 - t) + 0.12 * t;
     } else this.model.rotation.x = 0;
+    this._duckAim();
+  }
+
+  /**
+   * ダッキング中のパンチは、沈んだ姿勢のままだと拳が相手の脚(ローブロー)に向かってしまう。
+   * 打つ側の上腕だけを上下に回して、拳の通り道を狙いの高さ(相手のボディ)へ向け直す。
+   * 拳が前へ伸びている分だけ効かせるので、構えの位置(顎の前)では腕の形は変わらない。
+   */
+  _duckAim() {
+    const P = this.punch, dw = this.duckEff || 0;
+    if (!P || this.aimY == null || dw < 0.02 || this.down) return;
+    const left = P.kind === 'jab' || P.kind === 'hookL';
+    const ua = this.bones[left ? 'LeftUpperArm' : 'RightUpperArm'], hand = this.bones[BOXER.punches[P.kind].hand];
+    if (!ua || !hand || !ua.parent) return;
+    this.group.updateMatrixWorld(true);
+    ua.getWorldPosition(_v1);
+    hand.getWorldPosition(_v2);
+    const vx = _v2.x - _v1.x, vy = _v2.y - _v1.y, vz = _v2.z - _v1.z, h = Math.hypot(vx, vz);
+    if (h < 1e-3) return;
+    const ext = Math.max(0, Math.min(1, (h - BOXER.aimExtFrom) / (BOXER.aimExtTo - BOXER.aimExtFrom)));
+    if (ext <= 0) return;
+    const len = Math.hypot(h, vy);
+    const cur = Math.atan2(vy, h);
+    const want = Math.atan2(this.aimY - _v1.y, h);
+    const delta = Math.max(-BOXER.aimMax, Math.min(BOXER.aimMax, want - cur)) * Math.min(1, dw) * ext;
+    const el = cur + delta;
+    _aimFrom.set(vx, vy, vz).divideScalar(len);
+    _aimTo.set(vx / h * Math.cos(el), Math.sin(el), vz / h * Math.cos(el));
+    _aimR.setFromUnitVectors(_aimFrom, _aimTo);
+    // 新しい上腕のローカル回転 = 親のワールド回転⁻¹ · R · 親のワールド回転 · 今のローカル回転
+    ua.parent.getWorldQuaternion(_aimPQ);
+    _aimTmp.copy(_aimPQ).invert().multiply(_aimR).multiply(_aimPQ);
+    ua.quaternion.premultiply(_aimTmp);
+    ua.updateMatrixWorld(true);
   }
 
   /**

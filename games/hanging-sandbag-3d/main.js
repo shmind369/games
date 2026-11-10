@@ -139,6 +139,14 @@ const DAMAGE = { jab: 6, straight: 10, hookL: 9, hookR: 9 }; // 頭は ×1.3
 const HEAD_MUL = 1.3;
 const OPP_URL = './assets/box_usa_rigged.glb';
 const oppFocus = new THREE.Vector3(), playerFocus = new THREE.Vector3();
+const BAG_AIM_Y = 1.15, BODY_AIM_UP = 0.08, _aimV = new THREE.Vector3();
+/** 相手のボディ(腹)の高さ。ダッキング中のパンチはここを狙う */
+function bodyAimY(b) {
+  const sp = b.bones && b.bones.Spine;
+  if (!sp) return 1.05;
+  b.group.updateMatrixWorld(true);
+  return sp.getWorldPosition(_aimV).y + BODY_AIM_UP;
+}
 /** 操作を受け付けるか(タイトル中・KO後は受け付けない) */
 function canAct() {
   if (gameMode === 'title') return false;
@@ -763,12 +771,15 @@ function frame(now) {
     else if (!(stickState.mode === 'dodge' && ctl.depth > 0)) prevStickMode = stickState.mode;
     const versus = gameMode === 'versus' && vs.opp;
     if (versus) oppFocus.set(vs.opp.pos.x, 0, vs.opp.pos.y);
+    // ダッキング中のパンチの狙いの高さ: 対戦では相手の腹(Spine の少し上)、サンドバッグでは袋の中ほど
+    boxer.aimY = versus ? bodyAimY(vs.opp) : BAG_AIM_Y;
     boxer.update(real * timeScale, now / 1000, ctl.move, versus ? oppFocus : bagGroup.position);
     if (versus) {
       // ---- 対戦相手(AI)----
       const o = vs.opp;
       playerFocus.set(boxer.pos.x, 0, boxer.pos.y);
       const aiMove = vs.state === 'fight' ? vs.ai.update(real * timeScale, o, boxer) : { x: 0, z: 0 };
+      o.aimY = bodyAimY(boxer);
       o.update(real * timeScale, now / 1000 + 0.37, aiMove, playerFocus);
       // ---- パンチの当たり判定(両方向。回避で頭が動いていれば当たらない)----
       if (vs.state === 'fight') {
