@@ -29,6 +29,16 @@ export const BOXER = {
   minDist: 0.5,          // バッグの吊り位置(真下)からの最小距離 [m]
   maxDist: 4.2,          // 最大距離 [m]
   punchRate: 1.35,       // パンチのクリップの再生速度
+  // ---- コンビネーション ----
+  comboMax: 5,           // 1回のコンビネーションで打てる最大数
+  comboRate: 1.15,       // 2発目以降の再生速度の倍率(つなぎを速く)
+  comboFade: 0.10,       // 前のパンチから次のパンチへ切り替えるときの混ぜ合わせの時間 [s]
+  // 次のパンチを出せるようになる時刻 [s](打ち出してから。拳が伸びきった直後で戻りを切り上げる)
+  cancelAt: { jab: 0.20, straight: 0.28, hookL: 0.20, hookR: 0.20 },
+  sameHandExtra: 0.08,   // 同じ手で続けるときは戻しの分だけ少し遅く [s]
+  comboImpulse: 0.75,    // 2発目以降の撃力の倍率(つなぎのパンチは溜めが小さいぶん軽い。バッグが離れすぎず次も当たる)
+  comboStep: 0.14,       // 2発目以降、1発ごとにバッグへ詰める距離 [m](打たれて離れていくバッグを追いかける)
+  comboStepTime: 0.12,   // その詰める動きの時間 [s]
   blendIn: 0.05, blendOut: 0.14,
   gloveRadius: 0.09,     // グローブの当たり判定の半径 [m](ボクシンググローブの大きさ)
   gloveReach: 0.07,      // 手首(Hand ボーン)からグローブ中心までの長さ [m]
@@ -125,8 +135,11 @@ export class Boxer {
     this.hopY = 0;                  // 跳びによる浮き
     this.dodgeW = { slipL: 0, slipR: 0, duck: 0, sway: 0 };     // 今の回避の重み(補間後)
     this.dodgeTarget = { slipL: 0, slipR: 0, duck: 0, sway: 0 }; // 目標の重み
-    this.punch = null;              // { kind, t, dur, hit, prevGlove }
-    this.queued = null;
+    this.punch = null;              // { kind, t(クリップ時間), rate, dur, hit, prevGlove }
+    this.prevPunch = null;          // コンビネーションで切り上げた前のパンチ(短い間だけ重ねる)
+    this.queue = [];                // 予約したパンチ
+    this.combo = 0;                 // 今のコンビネーションで何発目か
+    this.press = null;              // コンビネーション中の前への詰め
     this.onEvent = null;            // 効果音などのための通知 (type, data): 'swing' / 'push' / 'land'
     this._glove = new THREE.Vector3();
     this._fore = new THREE.Vector3();
@@ -144,10 +157,26 @@ export class Boxer {
   }
 
   /** パンチの入力(出している途中なら1回だけ予約) */
+  /**
+   * パンチの入力。打っている途中の入力は予約しておき、今のパンチが伸びきった直後に戻りを切り上げて次を打つ
+   * (コンビネーション。左右交互ほど速くつながる)。1回のコンビネーションは comboMax 発まで
+   */
   throwPunch(kind) {
-    if (this.punch) { if (this.punch.t > this.punch.dur * 0.45) this.queued = kind; return; }
-    const dur = BOXER.punches[kind].hook ? HOOK.dur : this.clips[kind].keyframes[this.clips[kind].keyframes.length - 1].time / BOXER.punchRate;
-    this.punch = { kind, t: 0, dur, hit: false, prevGlove: null };
+    if (!this.punch) { this.combo = 0; this._startPunch(kind, null); return; }
+    if (this.combo + this.queue.length >= BOXER.comboMax) return; // 5発に達したら、構えに戻るまで受け付けない
+    this.queue.push(kind);
+  }
+
+  _handOf(kind) { return kind === 'jab' || kind === 'hookL' ? 'L' : 'R'; }
+
+  _startPunch(kind, from) {
+    this.combo = (this.combo || 0) + 1;
+    const rate = this.combo > 1 ? BOXER.comboRate : 1;
+    const base = BOXER.punches[kind].hook ? HOOK.dur : this.clips[kind].keyframes[this.clips[kind].keyframes.length - 1].time / BOXER.punchRate;
+    // from: 切り上げた前のパンチ。少しの間、重みを下げながら重ねて、姿勢が飛ばないようにする
+    this.prevPunch = from ? { ...from, fade: 0 } : null;
+    this.punch = { kind, t: 0, rate, dur: base / rate, hit: false, prevGlove: null, combo: this.combo };
+    if (this.combo > 1) this.press = { left: BOXER.comboStep, t: 0 }; // 打ちながら前へ詰める
     if (this.onEvent) this.onEvent('swing', kind);
   }
 
@@ -158,6 +187,14 @@ export class Boxer {
     // ---- 移動: 反復横跳び(溜め → 蹴り出し → 着地 を繰り返す) ----
     const px0 = this.pos.x, pz0 = this.pos.y;
     this._updateHop(dt, move);
+    // コンビネーション中はバッグへ少しずつ詰める(すり足。下のバッグとの間隔の制限は守る)
+    if (this.press) {
+      const P = this.press, step = Math.min(P.left, BOXER.comboStep * dt / BOXER.comboStepTime);
+      const dx = bag.x - this.pos.x, dz = bag.z - this.pos.y, dl = Math.hypot(dx, dz) || 1;
+      this.pos.x += dx / dl * step; this.pos.y += dz / dl * step;
+      P.left -= step;
+      if (P.left <= 1e-4) this.press = null;
+    }
     // バッグの吊り位置(原点)のまわりの範囲に収める
     const r = this.pos.length();
     if (r < BOXER.minDist) this.pos.multiplyScalar(BOXER.minDist / Math.max(r, 1e-4));
@@ -179,12 +216,22 @@ export class Boxer {
     d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
     this.yaw += d * Math.min(1, BOXER.turnRate * dt);
 
-    // ---- パンチの進行 ----
+    // ---- パンチの進行(コンビネーション) ----
+    if (this.prevPunch) {
+      this.prevPunch.t += dt * this.prevPunch.rate;
+      this.prevPunch.fade += dt;
+      if (this.prevPunch.fade >= BOXER.comboFade) this.prevPunch = null;
+    }
     if (this.punch) {
-      this.punch.t += dt;
-      if (this.punch.t >= this.punch.dur) {
-        this.punch = null;
-        if (this.queued) { const q = this.queued; this.queued = null; this.throwPunch(q); }
+      const P = this.punch;
+      P.t += dt * P.rate;
+      const next = this.queue[0];
+      if (next) {
+        // 拳が伸びきったら戻りを切り上げて次へ(同じ手なら少し待つ)
+        const at = BOXER.cancelAt[P.kind] + (this._handOf(next) === this._handOf(P.kind) ? BOXER.sameHandExtra : 0);
+        if (P.t >= at || P.t >= P.dur * P.rate) { this.queue.shift(); this._startPunch(next, P); }
+      } else if (P.t >= P.dur * P.rate) {
+        this.punch = null; this.combo = 0; // 構えに戻った: コンビネーション終わり
       }
     }
 
@@ -219,7 +266,7 @@ export class Boxer {
   }
 
   /** フックの姿勢を構えの上に重ねる。戻り値は体の前への踏み込み量 [m] */
-  _hookPose(P) {
+  _hookPose(P, scale = 1) {
     const B = this.bones, side = BOXER.punches[P.kind].hook, sx = side === 'L' ? 1 : -1, H = HOOK, t = P.t;
     // 構えに対する重み(入り・抜け)と、振りかぶり→振り抜きの進み
     let w, k;
@@ -227,7 +274,7 @@ export class Boxer {
     else if (t < H.tStrike) { w = 1; k = (t - H.tWind) / (H.tStrike - H.tWind); k = k * k * (3 - 2 * k); }
     else if (t < H.tHold) { w = 1; k = 1; }
     else { w = Math.max(0, 1 - (t - H.tHold) / (H.dur - H.tHold)); k = 1; }
-    w = w * w * (3 - 2 * w);
+    w = w * w * (3 - 2 * w) * scale;
     const pre = side === 'L' ? 'Left' : 'Right';
     const sh = B[pre + 'Shoulder'], ua = B[pre + 'UpperArm'], fa = B[pre + 'Forearm'];
     if (sh && ua && fa) {
@@ -298,17 +345,19 @@ export class Boxer {
     for (const n in idle.pose) if (B[n]) B[n].quaternion.copy(idle.pose[n]);
     let y = idle.y, z = 0;
 
-    // ---- パンチ(上半身にクリップを重ねる) ----
-    if (this.punch && BOXER.punches[this.punch.kind].hook) {
-      z += this._hookPose(this.punch);
-    } else if (this.punch) {
-      const P = this.punch, clip = this.clips[P.kind];
+    // ---- パンチ(上半身に重ねる)。コンビネーションの切り替え直後は、前のパンチを薄くしながら先に重ねる ----
+    const applyPunch = (P, scale) => {
+      if (BOXER.punches[P.kind].hook) { z += this._hookPose(P, scale); return; }
+      const clip = this.clips[P.kind];
       const s = sampleClip(clip, P.t * BOXER.punchRate, false);
-      const w = Math.min(1, P.t / BOXER.blendIn, (P.dur - P.t) / BOXER.blendOut);
+      const dur = P.dur * P.rate; // クリップ時間での長さ
+      const w = Math.max(0, Math.min(1, P.t / BOXER.blendIn, (dur - P.t) / BOXER.blendOut)) * scale;
       for (const n of UPPER) if (B[n] && s.pose[n]) B[n].quaternion.slerp(s.pose[n], w);
       y += (s.y - idle.y) * w;
       z += s.z * w; // ストレートは体ごと前へ踏み込む
-    }
+    };
+    if (this.prevPunch) applyPunch(this.prevPunch, 1 - this.prevPunch.fade / BOXER.comboFade);
+    if (this.punch) applyPunch(this.punch, 1);
 
     // ---- 反復横跳び(蹴り出しで進む向きへ体を傾け、脚を開いて跳ぶ) ----
     const w = this.moveW;
@@ -403,6 +452,6 @@ export class Boxer {
     const d = vel.clone();
     d.y *= 0.4;
     d.normalize();
-    return { point, dir: d, normal, impulse: spec.impulse, kind: P.kind };
+    return { point, dir: d, normal, impulse: spec.impulse * (P.combo > 1 ? BOXER.comboImpulse : 1), kind: P.kind };
   }
 }
