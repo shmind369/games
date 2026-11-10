@@ -1,12 +1,13 @@
 // 効果音(WebAudio で合成。音声ファイルは使わない)
 //  hit   : バッグに当たった「ドスッ」(撃力が強いほど重く大きく)+ 革の「パン」
-//  chain : 吊りチェーンの「チャリッ」(強く当たったとき、少し遅れて)
+//  chain : 吊りチェーンの「チャリッ」(強く当たったとき、少し遅れて)※今は CHAIN_SOUND = false で鳴らさない
 //  swing : パンチの風切り音
 //  step  : ステップの蹴り出し / 着地のシューズの音
 //  dodge : 回避に入ったときの短い風切り音
 // iOS Safari は最初のタッチまで音を出せないので、unlock() を操作のたびに呼ぶ(指を離した・タップしたイベントの中で)。
 // iPhone のマナーモード(消音スイッチ)では WebAudio の音が消されるため、音声を「メディア再生」扱いにして鳴るようにする。
 const MUTE_KEY = 'sandbag.muted';
+const CHAIN_SOUND = false; // チェーンの「チャリッ」は一旦なし(true に戻せば鳴る)
 // 0.1 秒の無音 WAV(古い iOS のマナーモード対策で、ループ再生してメディア再生扱いにする)
 const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
 const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -102,7 +103,7 @@ export class Sfx {
     this._noiseSrc(t, 0.12 + 0.05 * k, 'lowpass', 900 + 500 * k, 180, 0.7, 1.4 * k);
     // 革の「パン」: 表面を叩いた高い成分
     this._noiseSrc(t, 0.035, 'bandpass', heavy ? 1700 : 2300, heavy ? 1200 : 1600, 1.2, 1.6 * k);
-    if (impulse > 20) this.chain(Math.min(1, (impulse - 20) / 15), 0.07);
+    if (CHAIN_SOUND && impulse > 20) this.chain(Math.min(1, (impulse - 20) / 15), 0.07);
   }
 
   /** 吊りチェーンの音(強さ 0..1、delay 秒後) */
