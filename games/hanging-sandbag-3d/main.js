@@ -209,7 +209,13 @@ const target = new THREE.Vector3(0, (cfg.ceilingY + sim.bagCenterY - cfg.bagHeig
 const orbit = { yaw: 0.35, pitch: 0.02, dist: 4.2 };
 const orbitGoal = { ...orbit };
 const TARGET_Y_TEST = target.y;  // 打撃テスト: 吊り下げ全体が収まる高さを注視
-const TARGET_Y_BOXER = 1.05;      // ボクサー操作: 低めを注視して、足元までプレイ領域(操作領域より上)に収める
+const TARGET_Y_BOXER = 1.0;
+// ボクサー操作のカメラ(自機とバッグの全身が映る横寄りの構図)
+const CAM_SIDE_ANGLE = 1.0;    // 自機の真後ろから右手側へ回す角度 [rad](約57°。背中が少し見える)
+const CAM_PITCH = 0.12;        // 少し見下ろす
+const CAM_MARGIN = 0.75;       // 横の余白 [m]
+const CAM_HEIGHT_HALF = 1.25;  // 縦に収める高さの半分 [m](床〜バッグ上端)
+const CAM_MIN_DIST = 3.0;      // ボクサー操作: 低めを注視して、足元までプレイ領域(操作領域より上)に収める
 function applyCamera() {
   target.y = document.body.classList.contains('boxerMode') ? TARGET_Y_BOXER : TARGET_Y_TEST;
   const cp = Math.cos(orbit.pitch);
@@ -476,7 +482,7 @@ function boxerControl(frameDt) {
     const w = camToWorld(stickState.dirX, stickState.dirY);
     move = { x: w.x * stickState.speed, z: w.z * stickState.speed };
   } else if (stickState.mode === 'dodge') {
-    dodgeDir = camToWorld(stickState.dirX, stickState.dirY);
+    dodgeDir = { x: stickState.dirX, y: stickState.dirY }; // 回避はスティックの向きそのまま(カメラの向きに関係なく)
     depth = stickState.depth;
   }
   if (!touching) {
@@ -486,7 +492,7 @@ function boxerControl(frameDt) {
     if (l > 0) { const w = camToWorld(x / l, y / l); move = { x: w.x, z: w.z }; }
     const ax = (keys.has('ArrowRight') ? 1 : 0) - (keys.has('ArrowLeft') ? 1 : 0);
     const ay = (keys.has('ArrowUp') ? 1 : 0) - (keys.has('ArrowDown') ? 1 : 0);
-    if (ax || ay) { dodgeDir = camToWorld(ax, ay); depth = 1; }
+    if (ax || ay) { const l = Math.hypot(ax, ay); dodgeDir = { x: ax / l, y: ay / l }; depth = 1; }
   }
   return { move, dodgeDir, depth };
 }
@@ -496,8 +502,9 @@ function boxerControl(frameDt) {
 //   斜めは隣どうしを cos² で混ぜる(向きを回しても姿勢が急に変わらない)
 const DODGE_ANGLES = { duck: 0, slipL: Math.PI / 2, sway: Math.PI, slipR: -Math.PI / 2 };
 function dodgeWeights(dir, depth) {
-  const l = boxer.toLocal(dir.x, dir.z);
-  const th = Math.atan2(l.left, l.fwd), out = {};
+  // スティックの上 = 相手へ向かう(ダッキング) / 下 = 離れる(スウェー) / 左右 = 本人の左右(スリップ)。
+  // カメラが横からでも割り当ては変わらない
+  const th = Math.atan2(-dir.x, dir.y), out = {};
   for (const k in DODGE_ANGLES) { const c = Math.max(0, Math.cos(th - DODGE_ANGLES[k])); out[k] = c * c * depth; }
   return out;
 }
@@ -639,15 +646,35 @@ function frame(now) {
     orbit.pitch += (orbitGoal.pitch - orbit.pitch) * k;
     if (Math.abs(orbitGoal.yaw - orbit.yaw) < 1e-3) viewAnimating = false;
   }
-  // ボクサー操作中: カメラをボクサーの背中側(バッグ→ボクサーの延長線上)へ自動で回し、
-  // 画面の上下左右 = 相手(バッグ)基準の前後左右 になるようにする
-  if (boxer && document.body.classList.contains('boxerMode') && performance.now() - lastUserOrbit > FOLLOW_PAUSE_MS && !viewAnimating) {
-    const want = Math.atan2(boxer.pos.x, boxer.pos.y);
+  // ボクサー操作中: 自機とバッグの全身が常に映るよう、自機の右斜め後ろ(横寄り)から2人の中間を見る。
+  // 自機がどこにいても同じ構図(自機が左・バッグが右)。距離は2人の間隔と画面の幅から決める。手で視点を回すと少し止まる
+  const boxerCam = boxer && document.body.classList.contains('boxerMode');
+  if (boxerCam && performance.now() - lastUserOrbit > FOLLOW_PAUSE_MS && !viewAnimating) {
+    const bx = boxer.pos;                                   // バッグは吊り位置(原点)で考える(揺れで画面が揺れないように)
+    const behind = Math.atan2(bx.x, bx.y);                  // バッグ→自機の向き(= 自機の真後ろ)
+    // 自機の右手側(モデルの -X)へ回した方を選ぶ
+    const rx = -Math.cos(boxer.yaw), rz = Math.sin(boxer.yaw);
+    const a1 = behind + CAM_SIDE_ANGLE, a2 = behind - CAM_SIDE_ANGLE;
+    const want = Math.sin(a1) * rx + Math.cos(a1) * rz >= Math.sin(a2) * rx + Math.cos(a2) * rz ? a1 : a2;
+    // 2人が画面の横幅に収まる距離
+    const sep = Math.hypot(bx.x, bx.y);
+    const vHalf = THREE.MathUtils.degToRad(camera.fov / 2);
+    const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+    const lateral = sep * Math.sin(CAM_SIDE_ANGLE) / 2 + CAM_MARGIN;  // 画面上での2人の横の広がり(半分)+余白
+    const dist = Math.max(CAM_MIN_DIST, lateral / Math.tan(hHalf), CAM_HEIGHT_HALF / Math.tan(vHalf));
+    const k = Math.min(1, real * 3);
     let d = want - orbit.yaw;
     d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
-    orbit.yaw += d * Math.min(1, real * 3);
-    orbitGoal.yaw = orbit.yaw;
+    orbit.yaw += d * k;
+    orbit.pitch += (CAM_PITCH - orbit.pitch) * k;
+    orbit.dist += (dist - orbit.dist) * k;
+    Object.assign(orbitGoal, orbit);
   }
+  if (boxerCam) {
+    // 注視点 = 自機とバッグの中間
+    target.x += (boxer.pos.x / 2 - target.x) * Math.min(1, real * 4);
+    target.z += (boxer.pos.y / 2 - target.z) * Math.min(1, real * 4);
+  } else { target.x = 0; target.z = 0; }
   applyCamera();
   updateFx(real);
   if (boxer) {
@@ -736,4 +763,4 @@ document.getElementById('loading').remove();
 requestAnimationFrame((t) => { lastTime = t; frame(t); });
 
 // 検証用(コンソールから確認できるように)
-window.__sandbag = { sim, presetStrike, stats, get boxer() { return boxer; } };
+window.__sandbag = { sim, presetStrike, stats, camera, get boxer() { return boxer; } };
