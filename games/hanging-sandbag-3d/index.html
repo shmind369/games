@@ -119,6 +119,42 @@
 
     @keyframes hintFade { to { opacity: 0; } }
 
+    /* ---------- タイトル画面 / 結果画面 ---------- */
+    .screen {
+      position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 16px; background: radial-gradient(ellipse at center, rgba(10,14,22,0.55), rgba(4,6,10,0.88));
+      color: #fff; text-align: center; padding: 24px; box-sizing: border-box;
+    }
+    .screen.hidden { display: none; }
+    .screen h1 { margin: 0; font-size: clamp(30px, 9vw, 52px); font-weight: 900; letter-spacing: 2px; text-shadow: 0 4px 0 #922b21, 0 0 24px rgba(255,80,60,0.35); }
+    .screen p { margin: 0 0 8px; color: #c9d1dc; font-size: 13px; }
+    .screen .modeBtn {
+      width: min(300px, 80vw); padding: 16px 0; border-radius: 14px; border: 2px solid rgba(255,255,255,0.85);
+      font-size: 19px; font-weight: 900; letter-spacing: 1px; color: #fff; cursor: pointer; touch-action: manipulation;
+      box-shadow: 0 5px 0 rgba(0,0,0,0.45);
+    }
+    .screen .modeBtn small { display: block; font-size: 11px; font-weight: 600; opacity: 0.85; margin-top: 4px; letter-spacing: 0; }
+    .screen .modeBtn:active { transform: translateY(3px); box-shadow: 0 2px 0 rgba(0,0,0,0.45); }
+    #btnVersus, #btnRematch { background: #c0392b; }
+    #btnSandbag, #btnResultTitle { background: #2a4f9e; }
+    #resultScreen.lose h1 { text-shadow: 0 4px 0 #1b2f73, 0 0 24px rgba(80,120,255,0.35); }
+    /* 対戦の体力バー(プレイ領域の上端) */
+    #vsHud { position: fixed; left: 10px; right: 10px; top: calc(10px + env(safe-area-inset-top)); display: flex; gap: 12px; z-index: 6; pointer-events: none; }
+    #vsHud.hidden { display: none; }
+    #vsHud .side { flex: 1; }
+    #vsHud .name { font-size: 12px; font-weight: 800; color: #fff; text-shadow: 0 1px 3px #000; margin-bottom: 3px; }
+    #vsHud .side.opp .name { text-align: right; }
+    #vsHud .bar { height: 12px; border-radius: 6px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.6); overflow: hidden; }
+    #vsHud .side.opp .bar { transform: scaleX(-1); }
+    #vsHud .fill { height: 100%; width: 100%; background: linear-gradient(90deg, #f1c40f, #2ecc71); transition: width .15s; }
+    #vsHud .bar.hit { animation: hpHit .25s; }
+    @keyframes hpHit { 0% { border-color: #fff; box-shadow: 0 0 10px #ff5040; } 100% { box-shadow: none; } }
+    #titleBtn {
+      position: fixed; left: calc(10px + env(safe-area-inset-left)); bottom: calc(196px + env(safe-area-inset-bottom));
+      height: 34px; padding: 0 12px; border-radius: 17px; border: 1px solid rgba(255,255,255,0.45);
+      background: rgba(10,14,20,0.65); color: #fff; font-size: 13px; font-weight: 700; touch-action: manipulation;
+    }
+
     #loading {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
       background: #1b2027; font-size: 14px; color: #9aa6b4;
@@ -186,11 +222,28 @@
   <div id="boxerUI">
     <div id="ctrlBand"></div>
     <button id="sndBtn" aria-label="音を消す">🔊</button>
+    <button id="titleBtn">≡ タイトル</button>
     <div id="bStick"><div class="zone z15"></div><div class="zone z35"></div><div class="zone z65"></div><div id="bNub"></div></div>
     <div id="bMode">待機</div>
     <button id="jabBtn" class="pBtn">JAB</button>
     <button id="strBtn" class="pBtn">STRAIGHT</button>
     <div id="bHint">スティック 少し倒す=回避(左右=スリップ / 上=ダッキング / 下=スウェー)・大きく倒す=ステップ移動<br>JAB / STRAIGHT でパンチ ・ 画面ドラッグで視点 ・ PC: WASD 移動 / 矢印 回避 / J・K パンチ</div>
+  </div>
+
+  <div id="vsHud" class="hidden">
+    <div class="side"><div class="name">YOU</div><div class="bar"><div class="fill" id="hpP"></div></div></div>
+    <div class="side opp"><div class="name">USA</div><div class="bar"><div class="fill" id="hpO"></div></div></div>
+  </div>
+  <div id="titleScreen" class="screen">
+    <h1>BOXING TEST</h1>
+    <p>モードを選んでください</p>
+    <button class="modeBtn" id="btnVersus">対戦モード<small>相手ボクサーと 1 対 1</small></button>
+    <button class="modeBtn" id="btnSandbag">サンドバッグモード<small>吊り下げサンドバッグで練習</small></button>
+  </div>
+  <div id="resultScreen" class="screen hidden">
+    <h1 id="resultTitle">K.O.</h1>
+    <button class="modeBtn" id="btnRematch">もう一度</button>
+    <button class="modeBtn" id="btnResultTitle">タイトルへ</button>
   </div>
 
   <div id="loading">物理エンジンを読み込み中…</div>

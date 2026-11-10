@@ -5,6 +5,7 @@ import { Boxer, BOXER, DODGES } from './boxer.js';
 import { StickModes, STICK_ZONES } from './stickModes.js';
 import { Sfx } from './sound.js';
 import { buildArena } from './arena.js';
+import { OpponentAI } from './ai.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -129,6 +130,94 @@ for (const ev of ['touchend', 'pointerup', 'click', 'keydown', 'pointerdown']) w
 
 // ボクサー(assets/boxer_rigged.glb)。構えたままステップで動き、パンチでバッグを叩ける(boxer.js)
 let boxer = null;
+// ============================================================
+//  モード: タイトル / サンドバッグ / 対戦
+// ============================================================
+let gameMode = 'title';          // 'title' | 'sandbag' | 'versus'
+const vs = { opp: null, ai: new OpponentAI(), hpP: 100, hpO: 100, state: 'fight', koT: 0, loading: null };
+const DAMAGE = { jab: 6, straight: 10, hookL: 9, hookR: 9 }; // 頭は ×1.3
+const HEAD_MUL = 1.3;
+const OPP_URL = './assets/box_usa_rigged.glb';
+const oppFocus = new THREE.Vector3(), playerFocus = new THREE.Vector3();
+/** 操作を受け付けるか(タイトル中・KO後は受け付けない) */
+function canAct() {
+  if (gameMode === 'title') return false;
+  if (gameMode === 'versus' && vs.state !== 'fight') return false;
+  return true;
+}
+const titleEl = document.getElementById('titleScreen'), resultEl = document.getElementById('resultScreen');
+const vsHud = document.getElementById('vsHud'), hpPEl = document.getElementById('hpP'), hpOEl = document.getElementById('hpO');
+function showHp() {
+  hpPEl.style.width = Math.max(0, vs.hpP) + '%';
+  hpOEl.style.width = Math.max(0, vs.hpO) + '%';
+}
+function flashHp(el) { el.parentElement.classList.remove('hit'); void el.offsetWidth; el.parentElement.classList.add('hit'); }
+async function startMode(mode) {
+  gameMode = mode;
+  titleEl.classList.add('hidden');
+  resultEl.classList.add('hidden');
+  document.body.dataset.mode = mode;
+  const versus = mode === 'versus';
+  bagGroup.visible = chainGroup.visible = !versus;          // 対戦ではサンドバッグを出さない(物理も止める)
+  vsHud.classList.toggle('hidden', !versus);
+  if (boxer) {
+    boxer.avoidCenter = !versus;
+    boxer.keepDist = versus ? 0.5 : BOXER.capsuleRadius + 0.18 + BOXER.bagGap;
+    boxer.down = null; boxer.react = null; boxer.punch = null; boxer.queue.length = 0; boxer.hop = null;
+    boxer.pos.set(versus ? 0 : -0.69, versus ? 0.85 : 0.37);
+  }
+  if (versus) {
+    if (!vs.opp) {
+      vs.loading = vs.loading || Boxer.load(scene, OPP_URL);
+      vs.opp = await vs.loading;
+    }
+    const o = vs.opp;
+    o.group.visible = true;
+    o.avoidCenter = false; o.keepDist = 0.5;
+    o.down = null; o.react = null; o.punch = null; o.queue.length = 0; o.hop = null;
+    o.pos.set(0, -0.85); o.yaw = 0;
+    vs.ai = new OpponentAI();
+    vs.hpP = 100; vs.hpO = 100; vs.state = 'fight'; vs.koT = 0;
+    showHp();
+  } else {
+    if (vs.opp) vs.opp.group.visible = false;
+    sim.reset();
+    prevState = readState(); currState = readState();
+  }
+}
+function toTitle() {
+  gameMode = 'title';
+  document.body.dataset.mode = 'title';
+  resultEl.classList.add('hidden');
+  titleEl.classList.remove('hidden');
+}
+document.getElementById('btnVersus').addEventListener('click', () => { sfx.unlock(); startMode('versus'); });
+document.getElementById('btnSandbag').addEventListener('click', () => { sfx.unlock(); startMode('sandbag'); });
+document.getElementById('titleBtn').addEventListener('click', (e) => { e.stopPropagation(); toTitle(); });
+document.getElementById('btnRematch').addEventListener('click', () => startMode('versus'));
+document.getElementById('btnResultTitle').addEventListener('click', () => toTitle());
+// URL で直接始める(?mode=versus / ?mode=sandbag)。打撃テスト(?test)はサンドバッグ
+{
+  const q = new URLSearchParams(location.search);
+  if (q.has('test') || q.get('mode') === 'sandbag') setTimeout(() => startMode('sandbag'), 0);
+  else if (q.get('mode') === 'versus') setTimeout(() => startMode('versus'), 0);
+}
+
+/** 対戦: パンチが当たったときの処理(attacker → defender) */
+function landPunch(hit, attacker, defender, defenderIsOpp) {
+  const dmg = DAMAGE[hit.kind] * (hit.part === 'head' ? HEAD_MUL : 1) * (hit.combo > 1 ? 0.85 : 1);
+  const side = hit.kind === 'hookL' ? 'R' : hit.kind === 'hookR' ? 'L' : 'F';
+  defender.takeHit(hit.part, side, dmg / 10);
+  spawnHitFx(hit.point, hit.dir, dmg * 3, hit.dir.clone().negate());
+  sfx.hit(dmg * 2.6, hit.kind !== 'jab');
+  if (defenderIsOpp) { vs.hpO -= dmg; vs.ai.onHit(); flashHp(hpOEl); } else { vs.hpP -= dmg; flashHp(hpPEl); }
+  showHp();
+  if (vs.hpO <= 0 || vs.hpP <= 0) {
+    defender.knockDown();
+    vs.state = 'ko'; vs.koAt = performance.now();
+  }
+}
+
 Boxer.load(scene).then((bx) => {
   boxer = bx;
   bx.onEvent = (type, data) => {
@@ -136,6 +225,7 @@ Boxer.load(scene).then((bx) => {
     else if (type === 'push' || type === 'land') sfx.step(type);
   };
   sim.addBoxerBody(BOXER.capsuleRadius, BOXER.capsuleHalf, bx.pos.x, bx.pos.y);
+  if (gameMode !== 'title') startMode(gameMode); // 自機の読み込み前にモードが選ばれていたら、位置などを合わせ直す
 }).catch((e) => console.error('ボクサーの読み込みに失敗しました', e));
 
 // 衝撃の可視化(矢印+波紋)
@@ -390,7 +480,7 @@ const COUNTER_MIN_WEIGHT = 0.3;      // 回避姿勢がこれ以上(ある程度
 const COUNTER_HOOK_FROM = 22.5, COUNTER_HOOK_TO = 67.5; // フックになる角度 [度](水平から)
 let counterText = '', counterUntil = 0;
 function tryReleaseCounter() {
-  if (!boxer) return false;
+  if (!boxer || !canAct()) return false;
   const T = boxer.dodgeTarget, W = boxer.dodgeW;
   const S = Math.max(T.slipL, T.slipR), V = T.duck + T.sway;
   if (S < 1e-3) return false;                                   // 左右のスリップを含まない
@@ -415,12 +505,12 @@ bStick.addEventListener('pointerup', endStick);
 bStick.addEventListener('pointercancel', endStick);
 for (const [id, kind] of [['jabBtn', 'jab'], ['strBtn', 'straight']]) {
   const el = document.getElementById(id);
-  el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (boxer) boxer.throwPunch(kind); });
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (boxer && canAct()) boxer.throwPunch(kind); });
 }
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
-  if (!e.repeat && boxer) {
+  if (!e.repeat && boxer && canAct()) {
     if (e.code === 'KeyJ' || e.code === 'KeyZ') boxer.throwPunch('jab');
     if (e.code === 'KeyK' || e.code === 'KeyX') boxer.throwPunch('straight');
   }
@@ -603,6 +693,7 @@ function frame(now) {
   accumulator += real * timeScale;
 
   if (boxer) sim.setBoxerPos(boxer.pos.x, boxer.pos.y); // 体(キネマティック)を今の位置へ
+  if (gameMode === 'versus') accumulator = 0;           // 対戦ではサンドバッグの物理を止める
   let steps = 0;
   while (accumulator >= cfg.dt && steps < MAX_STEPS_PER_FRAME) {
     prevState = currState;
@@ -633,14 +724,16 @@ function frame(now) {
   // 自機がどこにいても同じ構図(自機が左・バッグが右)。距離は2人の間隔と画面の幅から決める。手で視点を回すと少し止まる
   const boxerCam = boxer && document.body.classList.contains('boxerMode');
   if (boxerCam && performance.now() - lastUserOrbit > FOLLOW_PAUSE_MS && !viewAnimating) {
-    const bx = boxer.pos;                                   // バッグは吊り位置(原点)で考える(揺れで画面が揺れないように)
-    const behind = Math.atan2(bx.x, bx.y);                  // バッグ→自機の向き(= 自機の真後ろ)
+    const bx = boxer.pos;
+    // 相手: サンドバッグは吊り位置(原点)で考える(揺れで画面が揺れないように)。対戦では対戦相手の位置
+    const fx = gameMode === 'versus' && vs.opp ? vs.opp.pos.x : 0, fz = gameMode === 'versus' && vs.opp ? vs.opp.pos.y : 0;
+    const behind = Math.atan2(bx.x - fx, bx.y - fz);        // 相手→自機の向き(= 自機の真後ろ)
     // 自機の右手側(モデルの -X)へ回した方を選ぶ
     const rx = -Math.cos(boxer.yaw), rz = Math.sin(boxer.yaw);
     const a1 = behind + CAM_SIDE_ANGLE, a2 = behind - CAM_SIDE_ANGLE;
     const want = Math.sin(a1) * rx + Math.cos(a1) * rz >= Math.sin(a2) * rx + Math.cos(a2) * rz ? a1 : a2;
     // 2人が画面の横幅に収まる距離
-    const sep = Math.hypot(bx.x, bx.y);
+    const sep = Math.hypot(bx.x - fx, bx.y - fz);
     const vHalf = THREE.MathUtils.degToRad(camera.fov / 2);
     const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
     const lateral = sep * Math.sin(CAM_SIDE_ANGLE) / 2 + CAM_MARGIN;  // 画面上での2人の横の広がり(半分)+余白
@@ -654,22 +747,47 @@ function frame(now) {
     Object.assign(orbitGoal, orbit);
   }
   if (boxerCam) {
-    // 注視点 = 自機とバッグの中間
-    target.x += (boxer.pos.x / 2 - target.x) * Math.min(1, real * 4);
-    target.z += (boxer.pos.y / 2 - target.z) * Math.min(1, real * 4);
+    // 注視点 = 自機と相手(バッグ/対戦相手)の中間
+    const fx = gameMode === 'versus' && vs.opp ? vs.opp.pos.x : 0, fz = gameMode === 'versus' && vs.opp ? vs.opp.pos.y : 0;
+    target.x += ((boxer.pos.x + fx) / 2 - target.x) * Math.min(1, real * 4);
+    target.z += ((boxer.pos.y + fz) / 2 - target.z) * Math.min(1, real * 4);
   } else { target.x = 0; target.z = 0; }
   applyCamera();
   updateFx(real);
   if (boxer) {
-    const ctl = boxerControl(real);
+    const ctl = canAct() ? boxerControl(real) : { move: { x: 0, z: 0 }, dodgeDir: null, depth: 0 };
     const dw = ctl.dodgeDir ? dodgeWeights(ctl.dodgeDir, ctl.depth) : null;
     boxer.setDodge(dw);
     showStickMode(dw);
     if (stickState.mode === 'dodge' && ctl.depth > 0 && prevStickMode !== 'dodgeOn') { sfx.dodge(); prevStickMode = 'dodgeOn'; }
     else if (!(stickState.mode === 'dodge' && ctl.depth > 0)) prevStickMode = stickState.mode;
-    boxer.update(real * timeScale, now / 1000, ctl.move, bagGroup.position);
+    const versus = gameMode === 'versus' && vs.opp;
+    if (versus) oppFocus.set(vs.opp.pos.x, 0, vs.opp.pos.y);
+    boxer.update(real * timeScale, now / 1000, ctl.move, versus ? oppFocus : bagGroup.position);
+    if (versus) {
+      // ---- 対戦相手(AI)----
+      const o = vs.opp;
+      playerFocus.set(boxer.pos.x, 0, boxer.pos.y);
+      const aiMove = vs.state === 'fight' ? vs.ai.update(real * timeScale, o, boxer) : { x: 0, z: 0 };
+      o.update(real * timeScale, now / 1000 + 0.37, aiMove, playerFocus);
+      // ---- パンチの当たり判定(両方向。回避で頭が動いていれば当たらない)----
+      if (vs.state === 'fight') {
+        const h1 = boxer.checkBodyHit(real * timeScale, o);
+        if (h1) landPunch(h1, boxer, o, true);
+        const h2 = vs.state === 'fight' ? o.checkBodyHit(real * timeScale, boxer) : null;
+        if (h2) landPunch(h2, o, boxer, false);
+      } else if (vs.state === 'ko') {
+        if (performance.now() - vs.koAt > 1600) { // 倒れてから 1.6 秒(実時間)で結果を出す
+          vs.state = 'result';
+          const win = vs.hpO <= 0;
+          document.getElementById('resultTitle').textContent = win ? 'K.O.  YOU WIN!' : 'K.O.  YOU LOSE';
+          resultEl.classList.toggle('lose', !win);
+          resultEl.classList.remove('hidden');
+        }
+      }
+    }
     // パンチの当たり判定: グローブがバッグに触れたら、接触点に拳の向きの撃力
-    const hit = boxer.checkHit(real * timeScale, sim.bag.translation(), sim.bag.rotation(), cfg.bagRadius, cfg.bagHeight);
+    const hit = versus ? null : boxer.checkHit(real * timeScale, sim.bag.translation(), sim.bag.rotation(), cfg.bagRadius, cfg.bagHeight);
     if (hit) {
       sim.hit({ x: hit.point.x, y: hit.point.y, z: hit.point.z },
         { x: hit.dir.x * hit.impulse, y: hit.dir.y * hit.impulse, z: hit.dir.z * hit.impulse });
@@ -758,4 +876,4 @@ document.getElementById('loading').remove();
 requestAnimationFrame((t) => { lastTime = t; frame(t); });
 
 // 検証用(コンソールから確認できるように)
-window.__sandbag = { sim, presetStrike, stats, camera, sfx, arena, get boxer() { return boxer; } };
+window.__sandbag = { sim, presetStrike, stats, camera, sfx, arena, vs, startMode, get boxer() { return boxer; }, get mode() { return gameMode; } };

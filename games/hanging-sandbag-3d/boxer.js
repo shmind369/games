@@ -63,8 +63,9 @@ export const DODGES = {
     bones: { Spine: [0.08, 0.32, -0.48], Chest: [0, 0.2, -0.44], Neck: [0, 0, -0.2], Head: [0, 0, 0.28] } },
   slipR: { label: 'ヘッドスリップ(右)', knee: 0.3,
     bones: { Spine: [0.08, -0.32, 0.48], Chest: [0, -0.2, 0.44], Neck: [0, 0, 0.2], Head: [0, 0, -0.28] } },
-  duck: { label: 'ダッキング', knee: 0.9,
-    bones: { Spine: [0.6, 0, 0], Chest: [0.44, 0, 0], Neck: [-0.44, 0, 0], Head: [-0.36, 0, 0] } },
+  // ダッキングは相手のパンチ(拳の高さ 約1.24m)の下へ頭を沈められる深さに(膝を深く、前傾は控えめに)
+  duck: { label: 'ダッキング', knee: 1.4,
+    bones: { Spine: [0.5, 0, 0], Chest: [0.36, 0, 0], Neck: [-0.4, 0, 0], Head: [-0.32, 0, 0] } },
   sway: { label: 'スウェー', knee: 0.22,
     bones: { Spine: [-0.64, 0, 0], Chest: [-0.48, 0, 0], Neck: [0.44, 0, 0], Head: [0.36, 0, 0] } },
 };
@@ -102,9 +103,10 @@ function sampleClip(clip, t, loop) {
 }
 
 export class Boxer {
-  static async load(scene) {
+  /** url: モデル(19ボーンの共通骨格。自機 = boxer_rigged.glb、対戦相手 = box_usa_rigged.glb) */
+  static async load(scene, url = './assets/boxer_rigged.glb') {
     const [gltf, idle, jab, straight] = await Promise.all([
-      new GLTFLoader().loadAsync('./assets/boxer_rigged.glb'),
+      new GLTFLoader().loadAsync(url),
       fetch('./assets/fightIdleUsa.json').then((r) => r.json()),
       fetch(BOXER.punches.jab.url).then((r) => r.json()),
       fetch(BOXER.punches.straight.url).then((r) => r.json()),
@@ -141,6 +143,10 @@ export class Boxer {
     this.queue = [];                // 予約したパンチ
     this.combo = 0;                 // 今のコンビネーションで何発目か
     this.press = null;              // コンビネーション中の前への詰め
+    this.avoidCenter = true;        // サンドバッグモード: バッグの真下(原点)には入らない
+    this.keepDist = BOXER.capsuleRadius + 0.18 + BOXER.bagGap; // 相手(バッグ/対戦相手)との最小間隔
+    this.react = null;              // 被弾のリアクション
+    this.down = null;               // ダウン(KO)
     this.onEvent = null;            // 効果音などのための通知 (type, data): 'swing' / 'push' / 'land'
     this._glove = new THREE.Vector3();
     this._fore = new THREE.Vector3();
@@ -163,6 +169,7 @@ export class Boxer {
    * (コンビネーション。左右交互ほど速くつながる)。1回のコンビネーションは comboMax 発まで
    */
   throwPunch(kind) {
+    if (this.down) return;
     if (!this.punch) { this.combo = 0; this._startPunch(kind, null); return; }
     if (this.combo + this.queue.length >= BOXER.comboMax) return; // 5発に達したら、構えに戻るまで受け付けない
     this.queue.push(kind);
@@ -187,6 +194,7 @@ export class Boxer {
   update(dt, now, move, bag) {
     // ---- 移動: 反復横跳び(溜め → 蹴り出し → 着地 を繰り返す) ----
     const px0 = this.pos.x, pz0 = this.pos.y;
+    if (this.down) { move = { x: 0, z: 0 }; this.hop = null; this.punch = null; this.queue.length = 0; }
     this._updateHop(dt, move);
     // コンビネーション中はバッグへ少しずつ詰める(すり足。下のバッグとの間隔の制限は守る)
     if (this.press) {
@@ -198,7 +206,7 @@ export class Boxer {
     }
     // バッグの吊り位置(原点)のまわりの範囲に収める
     const r = this.pos.length();
-    if (r < BOXER.minDist) this.pos.multiplyScalar(BOXER.minDist / Math.max(r, 1e-4));
+    if (this.avoidCenter && r < BOXER.minDist) this.pos.multiplyScalar(BOXER.minDist / Math.max(r, 1e-4)); // サンドバッグの真下には入らない
     if (r > BOXER.maxDist) this.pos.multiplyScalar(BOXER.maxDist / r);
     // リングのロープの内側に収める(ロープ際で止まる)
     this.pos.x = Math.max(-BOXER.ringHalf, Math.min(BOXER.ringHalf, this.pos.x));
@@ -206,7 +214,7 @@ export class Boxer {
     // 揺れているバッグの今の位置にも踏み込まない(体でバッグを押してエネルギーを注ぎ込まないように)。
     // 逆にバッグが迫ってきたら、ボクサーのほうが押しのけられる
     const bx = this.pos.x - bag.x, bz = this.pos.y - bag.z, bd = Math.hypot(bx, bz);
-    const keep = BOXER.capsuleRadius + 0.18 + BOXER.bagGap;
+    const keep = this.keepDist;
     if (bd < keep) {
       const nx = bd > 1e-4 ? bx / bd : 1, nz = bd > 1e-4 ? bz / bd : 0;
       this.pos.x = bag.x + nx * keep; this.pos.y = bag.z + nz * keep;
@@ -265,8 +273,22 @@ export class Boxer {
     }
     this._pose(now, speed);
 
+    // 被弾のリアクション・ダウンの進行
+    if (this.react) { this.react.t += dt; if (this.react.t > 0.45) this.react = null; }
+    if (this.down) this.down.t += dt;
+
     this.group.position.set(this.pos.x, 0, this.pos.y);
     this.group.rotation.y = this.yaw;
+  }
+
+  /** 被弾: 頭(または体)が打たれた向きへ弾かれる。part: 'head' | 'body', side: 'L'(左から)/'R'/'F'(正面) */
+  takeHit(part, side, power = 1) {
+    this.react = { t: 0, part, side, power: Math.min(1.4, power) };
+  }
+
+  /** ダウン(KO): 後ろへ倒れる */
+  knockDown() {
+    this.down = { t: 0 };
   }
 
   /** フックの姿勢を構えの上に重ねる。戻り値は体の前への踏み込み量 [m] */
@@ -404,8 +426,74 @@ export class Boxer {
     }
     // 止まっているときも軽く弾む(リズム)
     y += BOXER.idleBounce * Math.abs(Math.sin(now * Math.PI * 1.6)) * (1 - w);
+    // ---- 被弾のリアクション(頭・上体が打たれた向きへ弾かれ、すぐ戻る) ----
+    if (this.react) {
+      const R = this.react, k = Math.sin(Math.min(1, R.t / 0.07) * Math.PI / 2) * Math.exp(-Math.max(0, R.t - 0.07) * 9) * R.power;
+      const head = R.part === 'head';
+      const side = R.side === 'L' ? -1 : R.side === 'R' ? 1 : 0; // 左から打たれたら右へ(-Z ロール)
+      if (B.Neck) B.Neck.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.5 * k : 0.1 * k, side * 0.3 * k, side * 0.35 * k)));
+      if (B.Head) B.Head.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.3 * k : 0, side * 0.25 * k, 0)));
+      if (B.Spine) B.Spine.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.12 * k : 0.35 * k, 0, side * 0.12 * k)));
+      z -= 0.05 * k;
+    }
     this.model.position.y = y;
     this.model.position.z = z;
+    // ---- ダウン: 後ろへ倒れて仰向けに ----
+    if (this.down) {
+      const t = Math.min(1, this.down.t / 0.7), e = t * t;
+      this.model.rotation.x = -e * Math.PI / 2 * 0.97;
+      this.model.position.y = y * (1 - t) + 0.12 * t;
+    } else this.model.rotation.x = 0;
+  }
+
+  /**
+   * 相手の体へのパンチの当たり判定。グローブの通り道(前フレーム→今フレーム)を、相手の頭・胸・腹の球と照合する。
+   * 相手が回避していれば、その分だけ頭が実際に動いているので当たらない。当たったら { part, point, dir, kind, damageMul }
+   */
+  checkBodyHit(dt, target) {
+    const P = this.punch;
+    if (!P || P.hit || !target || target.down) return null;
+    const spec = BOXER.punches[P.kind];
+    const hand = this.bones[spec.hand], fore = this.bones[spec.fore];
+    if (!hand || !fore) return null;
+    this.group.updateMatrixWorld(true);
+    target.group.updateMatrixWorld(true);
+    hand.getWorldPosition(this._glove);
+    fore.getWorldPosition(this._fore);
+    const dir = this._glove.clone().sub(this._fore).normalize();
+    const glove = this._glove.clone().addScaledVector(dir, BOXER.gloveReach);
+    const prev = P.prevGlove;
+    P.prevGlove = glove.clone();
+    if (!prev || P.t < 0.06) return null;
+    const vel = glove.clone().sub(prev);
+    if (vel.lengthSq() / Math.max(dt * dt, 1e-6) < 0.25) return null;
+    const TB = target.bones, parts = [];
+    const c = new THREE.Vector3();
+    // 頭: あご(首の付け根)から頭頂までのカプセル。回避すると首ごと動くので外れる
+    if (TB.Head && TB.Neck) {
+      const a = new THREE.Vector3(), b = new THREE.Vector3();
+      TB.Neck.getWorldPosition(a); TB.Head.getWorldPosition(b); b.y += 0.12;
+      parts.push({ part: 'head', a, b, r: 0.085 });
+    }
+    // 体(ボディ)は腹のまわりだけ。今のパンチ(ジャブ・ストレート・フック)は頭の高さを打つので、頭を外せば体にも当たらない
+    if (TB.Spine) { TB.Spine.getWorldPosition(c); parts.push({ part: 'body', a: c.clone(), b: c.clone(), r: 0.15 }); }
+    const closest = (pt, S) => { // 線分 a-b 上で pt に最も近い点
+      const ab = S.b.clone().sub(S.a), l2 = ab.lengthSq();
+      const t = l2 > 1e-9 ? Math.max(0, Math.min(1, pt.clone().sub(S.a).dot(ab) / l2)) : 0;
+      return S.a.clone().addScaledVector(ab, t);
+    };
+    const n = Math.max(1, Math.ceil(prev.distanceTo(glove) / 0.02));
+    for (let i = 1; i <= n; i++) {
+      const pt = prev.clone().lerp(glove, i / n);
+      for (const S of parts) {
+        const q = closest(pt, S);
+        if (pt.distanceTo(q) <= S.r + BOXER.gloveRadius && vel.dot(q.clone().sub(pt)) > 0) {
+          P.hit = true;
+          return { part: S.part, point: pt, dir: vel.clone().normalize(), kind: P.kind, combo: P.combo };
+        }
+      }
+    }
+    return null;
   }
 
   /**
