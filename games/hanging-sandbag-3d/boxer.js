@@ -127,6 +127,7 @@ export class Boxer {
     this.dodgeTarget = { slipL: 0, slipR: 0, duck: 0, sway: 0 }; // 目標の重み
     this.punch = null;              // { kind, t, dur, hit, prevGlove }
     this.queued = null;
+    this.onEvent = null;            // 効果音などのための通知 (type, data): 'swing' / 'push' / 'land'
     this._glove = new THREE.Vector3();
     this._fore = new THREE.Vector3();
   }
@@ -147,6 +148,7 @@ export class Boxer {
     if (this.punch) { if (this.punch.t > this.punch.dur * 0.45) this.queued = kind; return; }
     const dur = BOXER.punches[kind].hook ? HOOK.dur : this.clips[kind].keyframes[this.clips[kind].keyframes.length - 1].time / BOXER.punchRate;
     this.punch = { kind, t: 0, dur, hit: false, prevGlove: null };
+    if (this.onEvent) this.onEvent('swing', kind);
   }
 
   /**
@@ -275,6 +277,7 @@ export class Boxer {
         H.dist = BOXER.hopDistMin + (BOXER.hopDistMax - BOXER.hopDistMin) * Math.max(0, Math.min(1, sp));
         if (this.punch) H.dist *= 0.5;                      // パンチ中は小さく
         H.phase = 'push'; H.t = 0; H.fromX = this.pos.x; H.fromZ = this.pos.y; H.done = 0;
+        if (this.onEvent) this.onEvent('push');
       }
     } else if (H.phase === 'push') {
       const p = Math.min(1, H.t / BOXER.hopPush);
@@ -282,7 +285,7 @@ export class Boxer {
       const dd = (e - H.done) * H.dist;
       H.done = e;
       this.pos.x += H.dirX * dd; this.pos.y += H.dirZ * dd;
-      if (p >= 1) { H.phase = 'land'; H.t = 0; }
+      if (p >= 1) { H.phase = 'land'; H.t = 0; if (this.onEvent) this.onEvent('land'); }
     } else if (H.t >= BOXER.hopLand) {
       if (want) Object.assign(H, { phase: 'load', t: 0, loadDur: BOXER.hopChainLoad, dirX: move.x / m, dirZ: move.z / m, s: m });
       else this.hop = null;
