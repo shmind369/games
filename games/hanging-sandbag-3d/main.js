@@ -4,6 +4,7 @@ import { CONFIG, createSim } from './physics.js';
 import { Boxer, BOXER, DODGES } from './boxer.js';
 import { StickModes, STICK_ZONES } from './stickModes.js';
 import { Sfx } from './sound.js';
+import { buildArena } from './arena.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -19,70 +20,24 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1b2027);
-scene.fog = new THREE.Fog(0x1b2027, 8, 18);
+scene.background = new THREE.Color(0x07090d); // 暗い会場
+scene.fog = new THREE.Fog(0x07090d, 10, 28);
 
 const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 50);
 
-scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x3a3128, 0.55));
-const key = new THREE.DirectionalLight(0xffffff, 1.6);
-key.position.set(2.5, 5, 3.5);
+scene.add(new THREE.HemisphereLight(0xc8d4ff, 0x15120f, 0.45));
+// 主光源(真上寄りのリングの照明)。影はリング全体を覆う
+const key = new THREE.DirectionalLight(0xfff6e8, 1.45);
+key.position.set(1.5, 7, 2.5);
 key.castShadow = true;
-key.shadow.mapSize.set(1024, 1024);
-key.shadow.camera.left = -3; key.shadow.camera.right = 3;
-key.shadow.camera.top = 4; key.shadow.camera.bottom = -2;
-key.shadow.camera.near = 0.5; key.shadow.camera.far = 12;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -4.2; key.shadow.camera.right = 4.2;
+key.shadow.camera.top = 4.2; key.shadow.camera.bottom = -4.2;
+key.shadow.camera.near = 1; key.shadow.camera.far = 14;
 scene.add(key);
 
-// 床
-{
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(20, 20),
-    new THREE.MeshStandardMaterial({ color: 0x3b3f46, roughness: 0.95 })
-  );
-  floor.rotation.x = -Math.PI / 2;
-  floor.receiveShadow = true;
-  scene.add(floor);
-  const grid = new THREE.GridHelper(10, 20, 0x5b6370, 0x474d57);
-  grid.position.y = 0.002;
-  scene.add(grid);
-  // 方向の目印(正面 +Z 側 / 側面 +X 側)
-  const mk = (txt, x, z, rotY) => {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
-    const g = c.getContext('2d');
-    g.fillStyle = 'rgba(255,255,255,0.55)'; g.font = 'bold 40px system-ui'; g.textAlign = 'center';
-    g.fillText(txt, 128, 46);
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.3),
-      new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthWrite: false }));
-    m.rotation.x = -Math.PI / 2; m.rotation.z = rotY; m.position.set(x, 0.005, z);
-    scene.add(m);
-  };
-  mk('正面 FRONT', 0, 1.3, 0);
-  mk('側面 SIDE', 1.3, 0, Math.PI / 2);
-}
-
-// 天井(固定剛体)
-{
-  const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(3, 0.1, 3),
-    new THREE.MeshStandardMaterial({ color: 0x4a515c, roughness: 0.9, emissive: 0x262b33 })
-  );
-  slab.position.set(0, cfg.ceilingY + 0.05, 0);
-  slab.receiveShadow = true;
-  scene.add(slab);
-  const bracket = new THREE.Mesh(
-    new THREE.BoxGeometry(0.16, 0.04, 0.16),
-    new THREE.MeshStandardMaterial({ color: 0x9aa3ad, metalness: 0.7, roughness: 0.35 })
-  );
-  bracket.position.set(0, cfg.ceilingY - 0.0, 0);
-  scene.add(bracket);
-  const eye = new THREE.Mesh(
-    new THREE.TorusGeometry(0.025, 0.007, 8, 16),
-    bracket.material
-  );
-  eye.position.set(0, cfg.ceilingY - 0.03, 0);
-  scene.add(eye);
-}
+// 会場: ボクシングリング(arena.js)。サンドバッグはリング中央の照明トラスの梁から吊る
+buildArena(scene, cfg.ceilingY);
 
 const metal = new THREE.MeshStandardMaterial({ color: 0xb8c0c9, metalness: 0.85, roughness: 0.3 });
 
