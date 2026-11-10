@@ -4,8 +4,12 @@
 //  swing : パンチの風切り音
 //  step  : ステップの蹴り出し / 着地のシューズの音
 //  dodge : 回避に入ったときの短い風切り音
-// iOS Safari は最初のタッチまで音を出せないので、unlock() を最初の操作で呼ぶ。
+// iOS Safari は最初のタッチまで音を出せないので、unlock() を操作のたびに呼ぶ(指を離した・タップしたイベントの中で)。
+// iPhone のマナーモード(消音スイッチ)では WebAudio の音が消されるため、音声を「メディア再生」扱いにして鳴るようにする。
 const MUTE_KEY = 'sandbag.muted';
+// 0.1 秒の無音 WAV(古い iOS のマナーモード対策で、ループ再生してメディア再生扱いにする)
+const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 export class Sfx {
   constructor() {
@@ -15,8 +19,10 @@ export class Sfx {
     this._noise = null;
   }
 
-  /** 最初のユーザー操作で呼ぶ(AudioContext を作って再開する) */
+  /** ユーザー操作(指を離した・タップ・キー)のたびに呼ぶ。AudioContext を作る/再開する */
   unlock() {
+    // iOS 17 以降: 音声を「再生」扱いに(マナーモードでも鳴る)
+    try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch (_) {}
     if (!this.ctx) {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
@@ -31,7 +37,25 @@ export class Sfx {
       for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
       this._noise = buf;
     }
-    if (this.ctx.state === 'suspended') this.ctx.resume();
+    // 'suspended' だけでなく、着信などで止められた 'interrupted' からも戻す
+    if (this.ctx.state !== 'running') { try { this.ctx.resume().catch(() => {}); } catch (_) {} }
+    if (!this._kicked) {
+      // 操作の中で無音を1回鳴らして、iOS の音声のロックを解除する
+      try {
+        const b = this.ctx.createBuffer(1, 1, 22050), src = this.ctx.createBufferSource();
+        src.buffer = b; src.connect(this.ctx.destination); src.start(0);
+        this._kicked = true;
+      } catch (_) {}
+    }
+    // 古い iOS(audioSession が無い)のマナーモード対策: 無音の <audio> をループ再生しておく
+    if (IS_IOS && !navigator.audioSession && !this._silentEl) {
+      try {
+        const a = new Audio(SILENT_WAV);
+        a.loop = true; a.setAttribute('playsinline', ''); a.setAttribute('webkit-playsinline', '');
+        const pr = a.play(); if (pr && pr.catch) pr.catch(() => { this._silentEl = null; });
+        this._silentEl = a;
+      } catch (_) {}
+    }
   }
 
   setMuted(m) {

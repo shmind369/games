@@ -165,7 +165,8 @@ scene.add(bagGroup);
 
 // 効果音(sound.js)。iOS は最初のタッチまで音を出せないので、最初の操作で有効にする
 const sfx = new Sfx();
-for (const ev of ['pointerdown', 'touchend', 'keydown']) window.addEventListener(ev, () => sfx.unlock(), { capture: true, passive: true });
+// iOS は「指を離した / タップ / キー」の中でしか音を有効にできないので、それらのイベントで毎回呼ぶ(止められても次の操作で戻る)
+for (const ev of ['touchend', 'pointerup', 'click', 'keydown', 'pointerdown']) window.addEventListener(ev, () => sfx.unlock(), { capture: true, passive: true });
 
 // ボクサー(assets/boxer_rigged.glb)。構えたままステップで動き、パンチでバッグを叩ける(boxer.js)
 let boxer = null;
@@ -522,8 +523,14 @@ const bStickEl = document.getElementById('bStick'), bModeEl = document.getElemen
 let prevStickMode = 'neutral'; // 回避に入った瞬間だけ風切り音を鳴らすため
 // 音のオン/オフ(操作領域の右上。設定は端末に保存)
 const sndBtn = document.getElementById('sndBtn');
-const showSnd = () => { sndBtn.textContent = sfx.muted ? '🔇' : '🔊'; sndBtn.setAttribute('aria-label', sfx.muted ? '音を出す' : '音を消す'); };
-sndBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); sfx.unlock(); sfx.setMuted(!sfx.muted); showSnd(); });
+const showSnd = () => {
+  sndBtn.textContent = sfx.muted ? '🔇 消音中' : '🔊 音あり';
+  sndBtn.classList.toggle('off', sfx.muted);
+  sndBtn.setAttribute('aria-label', sfx.muted ? '音を出す' : '音を消す');
+};
+// 切り替えは click(iOS で音を有効にできるイベント)で行う
+sndBtn.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+sndBtn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); sfx.unlock(); sfx.setMuted(!sfx.muted); showSnd(); if (!sfx.muted) setTimeout(() => sfx.hit(18), 60); });
 showSnd();
 function showStickMode(dw) {
   bStickEl.dataset.mode = stickState.mode;

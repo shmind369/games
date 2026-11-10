@@ -78,9 +78,10 @@
     }
     #sndBtn {
       position: fixed; right: calc(10px + env(safe-area-inset-right)); bottom: calc(196px + env(safe-area-inset-bottom));
-      width: 40px; height: 40px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.35);
-      background: rgba(10,14,20,0.6); color: #fff; font-size: 18px; line-height: 1; padding: 0; touch-action: none;
+      height: 34px; padding: 0 12px; border-radius: 17px; border: 1px solid rgba(255,255,255,0.45);
+      background: rgba(10,14,20,0.65); color: #fff; font-size: 13px; font-weight: 700; line-height: 1; touch-action: manipulation;
     }
+    #sndBtn.off { color: #ffb4a8; border-color: rgba(255,140,120,0.7); }
     /* 移動パッド: 画面下の中央。以前(140px)の1.2倍 = 168px、可動半径 70px */
     #bStick {
       position: fixed; left: 50%; margin-left: -84px; bottom: calc(26px + env(safe-area-inset-bottom));
