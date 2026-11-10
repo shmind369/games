@@ -208,7 +208,10 @@ function updateFx(dt) {
 const target = new THREE.Vector3(0, (cfg.ceilingY + sim.bagCenterY - cfg.bagHeight / 2) / 2, 0);
 const orbit = { yaw: 0.35, pitch: 0.02, dist: 4.2 };
 const orbitGoal = { ...orbit };
+const TARGET_Y_TEST = target.y;  // 打撃テスト: 吊り下げ全体が収まる高さを注視
+const TARGET_Y_BOXER = 1.05;      // ボクサー操作: 低めを注視して、足元までプレイ領域(操作領域より上)に収める
 function applyCamera() {
+  target.y = document.body.classList.contains('boxerMode') ? TARGET_Y_BOXER : TARGET_Y_TEST;
   const cp = Math.cos(orbit.pitch);
   camera.position.set(
     target.x + Math.sin(orbit.yaw) * cp * orbit.dist,
@@ -228,6 +231,7 @@ let viewAnimating = false;
 let lastUserOrbit = -1e9; // 最後に手で視点を回した時刻(ボクサー操作中の自動追従を少し止める)
 const FOLLOW_PAUSE_MS = 2500;
 
+const CTRL_BAND_H = 236; // ボクサー操作中の下部の操作領域の高さ [px](index.html の #ctrlBand と合わせる)。その上をプレイ領域にする
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
@@ -237,7 +241,7 @@ function resize() {
   camera.fov = w < h ? 62 : 50;
   // 下部の操作パネルに隠れないよう、パネルを除いた領域の中央にバッグが来るよう描画範囲をずらす
   const panel = document.getElementById('panel');
-  const covered = document.body.classList.contains('boxerMode') ? 150
+  const covered = document.body.classList.contains('boxerMode') ? CTRL_BAND_H
     : panel ? Math.max(0, h - panel.getBoundingClientRect().top) : 0;
   const shift = Math.min(covered * 0.5, h * 0.3);
   camera.setViewOffset(w, h, 0, shift, w, h);
@@ -372,11 +376,13 @@ function setBoxerMode(on) {
   resize();
 }
 modeBtn.addEventListener('click', () => setBoxerMode(!document.body.classList.contains('boxerMode')));
+// 上部のナビゲーション(モード切替ボタン)はボクサー操作中は出さない。打撃テストのパネルは URL に ?test を付けると開ける
+if (new URLSearchParams(location.search).has('test')) setBoxerMode(false);
 
 // ---- ボクサーの操作: スティック(左下)・JAB / STRAIGHT(右下)・キーボード ----
 const bStick = document.getElementById('bStick'), bNub = document.getElementById('bNub');
 const stickIn = { id: null, cx: 0, cy: 0, x: 0, y: 0 };
-const STICK_R = 58; // スティックの可動半径 [px](CSS の #bStick の大きさと合わせる)
+const STICK_R = 70; // スティックの可動半径 [px](CSS の #bStick 168px と合わせる。以前の 58px の1.2倍)
 bStick.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   if (stickIn.id !== null) return;

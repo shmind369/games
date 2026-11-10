@@ -69,22 +69,30 @@
     #boxerUI { display: none; }
     body.boxerMode #boxerUI { display: block; }
     body.boxerMode #panel { display: none; }
+    /* ボクサー操作中は上部のナビゲーション(数値表示・軌跡マップ・モード切替)を出さず、上は全部プレイ領域にする */
+    body.boxerMode #hud, body.boxerMode #minimap, body.boxerMode #modeBtn { display: none; }
+    /* 下部の操作領域(移動パッド・攻撃ボタン)。高さは main.js の CTRL_BAND_H と合わせる */
+    #ctrlBand {
+      position: fixed; left: 0; right: 0; bottom: 0; height: calc(236px + env(safe-area-inset-bottom)); pointer-events: none;
+      background: linear-gradient(to top, rgba(8,11,16,0.78) 0%, rgba(8,11,16,0.55) 78%, rgba(8,11,16,0) 100%);
+    }
+    /* 移動パッド: 画面下の中央。以前(140px)の1.2倍 = 168px、可動半径 70px */
     #bStick {
-      position: fixed; left: calc(18px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom));
-      width: 140px; height: 140px; border-radius: 50%; touch-action: none;
+      position: fixed; left: 50%; margin-left: -84px; bottom: calc(26px + env(safe-area-inset-bottom));
+      width: 168px; height: 168px; border-radius: 50%; touch-action: none;
       background: rgba(255,255,255,0.10); border: 2px solid rgba(255,255,255,0.45);
     }
-    /* 倒し量の境目(15% / 35% / 65%)の目安の輪。半径 = 可動半径 58px × 割合 */
+    /* 倒し量の境目(15% / 35% / 65%)の目安の輪。直径 = 可動半径 70px × 割合 × 2 */
     #bStick .zone { position: absolute; left: 50%; top: 50%; border-radius: 50%; pointer-events: none; border: 1px dashed rgba(255,255,255,0.35); }
-    #bStick .z15 { width: 17px; height: 17px; margin: -9px 0 0 -9px; }
-    #bStick .z35 { width: 41px; height: 41px; margin: -21px 0 0 -21px; border-color: rgba(120,200,255,0.5); }
-    #bStick .z65 { width: 75px; height: 75px; margin: -38px 0 0 -38px; border: 1px solid rgba(255,209,102,0.7); }
+    #bStick .z15 { width: 21px; height: 21px; margin: -11px 0 0 -11px; }
+    #bStick .z35 { width: 49px; height: 49px; margin: -25px 0 0 -25px; border-color: rgba(120,200,255,0.5); }
+    #bStick .z65 { width: 91px; height: 91px; margin: -46px 0 0 -46px; border: 1px solid rgba(255,209,102,0.7); }
     #bStick[data-mode="dodge"] { border-color: rgba(120,200,255,0.9); }
     #bStick[data-mode="move"] { border-color: rgba(255,209,102,0.95); }
-    #bMode { position: fixed; left: calc(8px + env(safe-area-inset-left)); bottom: calc(164px + env(safe-area-inset-bottom));
-      width: 220px; text-align: left !important; white-space: nowrap; text-align: center; font-size: 12px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
+    #bMode { position: fixed; left: 50%; margin-left: -130px; bottom: calc(200px + env(safe-area-inset-bottom));
+      width: 260px; white-space: nowrap; text-align: center; font-size: 12px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
     #bNub {
-      position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%;
+      position: absolute; left: 50%; top: 50%; width: 62px; height: 62px; margin: -31px 0 0 -31px; border-radius: 50%;
       background: rgba(255,255,255,0.85); pointer-events: none;
     }
     .pBtn {
@@ -92,9 +100,16 @@
       border: 3px solid rgba(255,255,255,0.85); box-shadow: 0 4px 10px rgba(0,0,0,0.35);
     }
     .pBtn:active { transform: scale(0.92); }
-    #jabBtn { right: calc(108px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom)); width: 74px; height: 74px; font-size: 13px; background: #c0392b; }
-    #strBtn { right: calc(18px + env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); width: 84px; height: 84px; font-size: 12px; background: #922b21; }
-    #bHint { animation: hintFade 1s 8s forwards; position: fixed; left: 0; right: 0; bottom: calc(186px + env(safe-area-inset-bottom)); text-align: center; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; }
+    /* 攻撃ボタン: パッドの左右(パッドの中心と同じ高さ)。左手側 = JAB、右手側 = STRAIGHT */
+    #jabBtn { left: max(calc(8px + env(safe-area-inset-left)), calc(50% - 176px)); bottom: calc(71px + env(safe-area-inset-bottom)); width: 78px; height: 78px; font-size: 13px; background: #c0392b; }
+    #strBtn { right: max(calc(8px + env(safe-area-inset-right)), calc(50% - 176px)); bottom: calc(71px + env(safe-area-inset-bottom)); width: 78px; height: 78px; font-size: 11px; background: #922b21; }
+    /* 幅の狭い画面(iPhone SE など)では、パッドの大きさは保ったままボタンを小さくして重ならないように */
+    @media (max-width: 360px) {
+      #jabBtn, #strBtn { width: 62px; height: 62px; bottom: calc(79px + env(safe-area-inset-bottom)); font-size: 10px; letter-spacing: 0; }
+      #jabBtn { left: calc(6px + env(safe-area-inset-left)); }
+      #strBtn { right: calc(6px + env(safe-area-inset-right)); }
+    }
+    #bHint { animation: hintFade 1s 8s forwards; position: fixed; left: 0; right: 0; bottom: calc(246px + env(safe-area-inset-bottom)); text-align: center; color: rgba(255,255,255,0.6); font-size: 11px; pointer-events: none; }
 
     @keyframes hintFade { to { opacity: 0; } }
 
@@ -163,6 +178,7 @@
 
   <button id="modeBtn">打撃テストへ</button>
   <div id="boxerUI">
+    <div id="ctrlBand"></div>
     <div id="bStick"><div class="zone z15"></div><div class="zone z35"></div><div class="zone z65"></div><div id="bNub"></div></div>
     <div id="bMode">待機</div>
     <button id="jabBtn" class="pBtn">JAB</button>
