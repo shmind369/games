@@ -3,6 +3,7 @@ import RAPIER from './vendor/rapier3d-compat.es.js';
 import { CONFIG, createSim } from './physics.js';
 import { Boxer, BOXER, DODGES } from './boxer.js';
 import { StickModes, STICK_ZONES } from './stickModes.js';
+import { Sfx } from './sound.js';
 
 await RAPIER.init();
 const sim = createSim(RAPIER, CONFIG);
@@ -162,10 +163,18 @@ let bagMesh;
 }
 scene.add(bagGroup);
 
+// 効果音(sound.js)。iOS は最初のタッチまで音を出せないので、最初の操作で有効にする
+const sfx = new Sfx();
+for (const ev of ['pointerdown', 'touchend', 'keydown']) window.addEventListener(ev, () => sfx.unlock(), { capture: true, passive: true });
+
 // ボクサー(assets/boxer_rigged.glb)。構えたままステップで動き、パンチでバッグを叩ける(boxer.js)
 let boxer = null;
 Boxer.load(scene).then((bx) => {
   boxer = bx;
+  bx.onEvent = (type, data) => {
+    if (type === 'swing') sfx.swing(data);
+    else if (type === 'push' || type === 'land') sfx.step(type);
+  };
   sim.addBoxerBody(BOXER.capsuleRadius, BOXER.capsuleHalf, bx.pos.x, bx.pos.y);
 }).catch((e) => console.error('ボクサーの読み込みに失敗しました', e));
 
@@ -301,6 +310,7 @@ function strike(point, dir, normal, strength) {
   }
   d.normalize();
   sim.hit({ x: point.x, y: point.y, z: point.z }, { x: d.x * strength, y: d.y * strength, z: d.z * strength });
+  sfx.hit(strength, strength >= 28);
   spawnHitFx(point, d, strength, normal);
   stats.hits++;
 }
@@ -509,6 +519,12 @@ function dodgeWeights(dir, depth) {
   return out;
 }
 const bStickEl = document.getElementById('bStick'), bModeEl = document.getElementById('bMode');
+let prevStickMode = 'neutral'; // 回避に入った瞬間だけ風切り音を鳴らすため
+// 音のオン/オフ(操作領域の右上。設定は端末に保存)
+const sndBtn = document.getElementById('sndBtn');
+const showSnd = () => { sndBtn.textContent = sfx.muted ? '🔇' : '🔊'; sndBtn.setAttribute('aria-label', sfx.muted ? '音を出す' : '音を消す'); };
+sndBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); sfx.unlock(); sfx.setMuted(!sfx.muted); showSnd(); });
+showSnd();
 function showStickMode(dw) {
   bStickEl.dataset.mode = stickState.mode;
   let txt = '待機';
@@ -682,6 +698,8 @@ function frame(now) {
     const dw = ctl.dodgeDir ? dodgeWeights(ctl.dodgeDir, ctl.depth) : null;
     boxer.setDodge(dw);
     showStickMode(dw);
+    if (stickState.mode === 'dodge' && ctl.depth > 0 && prevStickMode !== 'dodgeOn') { sfx.dodge(); prevStickMode = 'dodgeOn'; }
+    else if (!(stickState.mode === 'dodge' && ctl.depth > 0)) prevStickMode = stickState.mode;
     boxer.update(real * timeScale, now / 1000, ctl.move, bagGroup.position);
     // パンチの当たり判定: グローブがバッグに触れたら、接触点に拳の向きの撃力
     const hit = boxer.checkHit(real * timeScale, sim.bag.translation(), sim.bag.rotation(), cfg.bagRadius, cfg.bagHeight);
@@ -689,6 +707,7 @@ function frame(now) {
       sim.hit({ x: hit.point.x, y: hit.point.y, z: hit.point.z },
         { x: hit.dir.x * hit.impulse, y: hit.dir.y * hit.impulse, z: hit.dir.z * hit.impulse });
       spawnHitFx(hit.point, hit.dir, hit.impulse, hit.normal);
+      sfx.hit(hit.impulse, hit.kind !== 'jab');
       stats.hits++;
     }
   }
@@ -763,4 +782,4 @@ document.getElementById('loading').remove();
 requestAnimationFrame((t) => { lastTime = t; frame(t); });
 
 // 検証用(コンソールから確認できるように)
-window.__sandbag = { sim, presetStrike, stats, camera, get boxer() { return boxer; } };
+window.__sandbag = { sim, presetStrike, stats, camera, sfx, get boxer() { return boxer; } };
