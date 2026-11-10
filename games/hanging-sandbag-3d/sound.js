@@ -8,6 +8,9 @@
 // iPhone のマナーモード(消音スイッチ)では WebAudio の音が消されるため、音声を「メディア再生」扱いにして鳴るようにする。
 const MUTE_KEY = 'sandbag.muted';
 const CHAIN_SOUND = false; // チェーンの「チャリッ」は一旦なし(true に戻せば鳴る)
+const STEP_SOUND = false;  // ステップ(移動)の足音は一旦なし
+const DODGE_SOUND = false; // 回避の風切り音は一旦なし
+const SWING_GAIN = 0.8;    // パンチの風切り音の大きさ(以前は 1.6。控えめに)
 // 0.1 秒の無音 WAV(古い iOS のマナーモード対策で、ループ再生してメディア再生扱いにする)
 const SILENT_WAV = 'data:audio/wav;base64,UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YSADAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgA==';
 const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -122,12 +125,12 @@ export class Sfx {
     if (!this.ready) return;
     const t = this.ctx.currentTime, hook = kind && kind.startsWith('hook');
     const dur = kind === 'jab' ? 0.11 : hook ? 0.2 : 0.15;
-    this._noiseSrc(t, dur, 'bandpass', hook ? 700 : 900, hook ? 1800 : 2400, 1.4, 1.6, 0.03);
+    this._noiseSrc(t, dur, 'bandpass', hook ? 700 : 900, hook ? 1800 : 2400, 1.4, SWING_GAIN, 0.03);
   }
 
   /** ステップ: push=蹴り出し(キュッ) / land=着地(トン) */
   step(type) {
-    if (!this.ready) return;
+    if (!STEP_SOUND || !this.ready) return;
     const t = this.ctx.currentTime;
     if (type === 'push') {
       this._noiseSrc(t, 0.05, 'bandpass', 3200, 4200, 3, 1.4);
@@ -139,7 +142,7 @@ export class Sfx {
 
   /** 回避に入ったときの短い風切り音 */
   dodge() {
-    if (!this.ready) return;
+    if (!DODGE_SOUND || !this.ready) return;
     const t = this.ctx.currentTime;
     this._noiseSrc(t, 0.12, 'bandpass', 1400, 600, 1.0, 1.4, 0.02);
   }
