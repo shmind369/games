@@ -37,7 +37,11 @@ key.shadow.camera.near = 1; key.shadow.camera.far = 14;
 scene.add(key);
 
 // 会場: ボクシングリング(arena.js)。サンドバッグはリング中央の照明トラスの梁から吊る
-buildArena(scene, cfg.ceilingY);
+const arena = buildArena(scene, cfg.ceilingY);
+// 自機を隠しているロープ・ポスト・パッドを半透明にするための、自機の点(頭・胴・手足)
+const OCC_BONES = ['Head', 'Neck', 'Chest', 'Hips', 'LeftHand', 'RightHand', 'LeftFoot', 'RightFoot', 'LeftLowerLeg', 'RightLowerLeg'];
+const occPts = OCC_BONES.map(() => new THREE.Vector3());
+const occHeadTop = new THREE.Vector3();
 
 const metal = new THREE.MeshStandardMaterial({ color: 0xb8c0c9, metalness: 0.85, roughness: 0.3 });
 
@@ -674,6 +678,15 @@ function frame(now) {
       stats.hits++;
     }
   }
+  // カメラと自機の間に入ってきたリングのロープ・ポスト・パッドを、滑らかに半透明にする(当たり判定は変えない)
+  if (boxer) {
+    camera.updateMatrixWorld();
+    boxer.group.updateMatrixWorld(true);
+    const pts = [];
+    OCC_BONES.forEach((n, i) => { const b = boxer.bones[n]; if (b) { b.getWorldPosition(occPts[i]); pts.push(occPts[i]); } });
+    if (boxer.bones.Head) { occHeadTop.copy(occPts[0]); occHeadTop.y += 0.14; pts.push(occHeadTop); }
+    arena.fader.update(camera, pts, real, window.innerWidth, window.innerHeight);
+  }
   renderer.render(scene, camera);
 
   updateHud();
@@ -745,4 +758,4 @@ document.getElementById('loading').remove();
 requestAnimationFrame((t) => { lastTime = t; frame(t); });
 
 // 検証用(コンソールから確認できるように)
-window.__sandbag = { sim, presetStrike, stats, camera, sfx, get boxer() { return boxer; } };
+window.__sandbag = { sim, presetStrike, stats, camera, sfx, arena, get boxer() { return boxer; } };

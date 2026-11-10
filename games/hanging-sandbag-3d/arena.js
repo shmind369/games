@@ -6,7 +6,9 @@ import * as THREE from 'three';
 
 export const RING = {
   half: 3.05,          // コーナーポストの位置(リング中心から)[m]
-  ropeHeights: [0.45, 0.8, 1.15, 1.5],
+  // ロープの高さ(下から)。ver2: 以前の上から3本目(0.8m)を最上段にし、残り3本をマットとの間に等間隔で配置
+  //  (以前: 0.45 / 0.8 / 1.15 / 1.5 → 今: 0.2 / 0.4 / 0.6 / 0.8)
+  ropeHeights: [0.2, 0.4, 0.6, 0.8],
   ropeColors: [0xd63031, 0xf2f2f2, 0x2a62d6, 0xf2f2f2],
   platformH: 1.0,      // 台の高さ(会場の床はマットの 1m 下)
   apron: 0.6,          // ロープの外側のエプロンの幅 [m]
@@ -74,27 +76,34 @@ export function buildArena(scene, ceilingY) {
   const postMat = new THREE.MeshStandardMaterial({ color: 0xb8c0c9, metalness: 0.8, roughness: 0.35 });
   const padColors = [0xd63031, 0xf2f2f2, 0x2a62d6, 0xf2f2f2]; // 赤コーナー・白・青コーナー・白
   const corners = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+  // ポストとパッドはロープの高さに合わせる(最上段の少し上まで / パッドは最下段の少し下から最上段の上まで)
   const top = R.ropeHeights[R.ropeHeights.length - 1] + 0.12;
+  const padBottom = Math.max(0.05, R.ropeHeights[0] - 0.1);
+  const occluders = []; // カメラと自機の間に入ったら半透明にするもの { mesh, a, b }(a-b: 判定に使う線分)
   corners.forEach(([sx, sz], i) => {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, top, 14), postMat);
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, top, 14), postMat.clone());
     post.position.set(sx * R.half, top / 2, sz * R.half); post.castShadow = true;
     group.add(post);
-    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.2, top - 0.3, 0.2),
+    occluders.push({ mesh: post, a: new THREE.Vector3(sx * R.half, 0, sz * R.half), b: new THREE.Vector3(sx * R.half, top, sz * R.half), r: 0.07 });
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(0.2, top - padBottom, 0.2),
       new THREE.MeshStandardMaterial({ color: padColors[i], roughness: 0.7 }));
-    pad.position.set(sx * (R.half - 0.08), (top - 0.3) / 2 + 0.3, sz * (R.half - 0.08)); pad.rotation.y = Math.PI / 4; pad.castShadow = true;
+    const px = sx * (R.half - 0.08), pz = sz * (R.half - 0.08);
+    pad.position.set(px, (top + padBottom) / 2, pz); pad.rotation.y = Math.PI / 4; pad.castShadow = true;
     group.add(pad);
+    occluders.push({ mesh: pad, a: new THREE.Vector3(px, padBottom, pz), b: new THREE.Vector3(px, top, pz), r: 0.14 });
   });
   R.ropeHeights.forEach((y, li) => {
     const ropeMat = new THREE.MeshStandardMaterial({ color: R.ropeColors[li], roughness: 0.55 });
     for (let i = 0; i < 4; i++) {
       const [ax, az] = corners[i], [bx, bz] = corners[(i + 1) % 4];
       const len = Math.hypot(bx - ax, bz - az) * R.half;
-      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, len, 8), ropeMat);
+      const rope = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, len, 8), ropeMat.clone()); // 1本ずつ透明度を変えられるよう別マテリアル
       rope.position.set((ax + bx) / 2 * R.half, y, (az + bz) / 2 * R.half);
       rope.rotation.z = Math.PI / 2;
       rope.rotation.y = Math.atan2(-(bz - az), bx - ax);
       rope.castShadow = true;
       group.add(rope);
+      occluders.push({ mesh: rope, a: new THREE.Vector3(ax * R.half, y, az * R.half), b: new THREE.Vector3(bx * R.half, y, bz * R.half), r: 0.03 });
     }
   });
 
@@ -147,5 +156,68 @@ export function buildArena(scene, ceilingY) {
   }
   group.add(crowd);
 
-  return { group, floorY };
+  return { group, floorY, fader: new OccluderFader(occluders) };
+}
+
+/**
+ * 自機を隠しているリングのロープ・コーナーポスト・パッドを、滑らかに半透明にする(見た目だけ。当たり判定は変えない)
+ *  - 自機の画面上の範囲(頭・胴・手足の点を投影した四角)と、各物体の線分を投影したものが重なり、
+ *    かつその重なった点が自機よりカメラに近いときだけ「隠している」とみなす(ロープに触れているだけ・後ろにあるだけでは透過しない)
+ *  - 不透明度は 100% ⇄ 25% の間を補間で滑らかに変化させる。戻ったら元のマテリアル設定に復元する
+ */
+export const FADE = {
+  minOpacity: 0.22,   // 隠している間の不透明度
+  fadeIn: 7,          // 薄くなる速さ(補間)
+  fadeOut: 4,         // 元に戻る速さ(補間。ゆっくり戻す)
+  samples: 28,        // ロープ1本あたりの判定点の数
+  screenPad: 14,      // 自機の画面上の範囲を広げる量 [px]
+};
+class OccluderFader {
+  constructor(list) {
+    this.list = list.map((o) => {
+      const m = o.mesh.material;
+      return { ...o, mat: m, orig: { transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite }, op: 1 };
+    });
+    this._v = new THREE.Vector3();
+    this._p = new THREE.Vector3();
+  }
+
+  /**
+   * camera: カメラ / points: 自機の点(ワールド)の配列 / dt: 秒 / W, H: 画面の大きさ [px]
+   */
+  update(camera, points, dt, W, H) {
+    // 自機の画面上の範囲と、カメラからの距離
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, near = Infinity;
+    for (const p of points) {
+      this._v.copy(p).project(camera);
+      const sx = (this._v.x + 1) / 2 * W, sy = (1 - this._v.y) / 2 * H;
+      x0 = Math.min(x0, sx); x1 = Math.max(x1, sx); y0 = Math.min(y0, sy); y1 = Math.max(y1, sy);
+      near = Math.min(near, camera.position.distanceTo(p));
+    }
+    x0 -= FADE.screenPad; x1 += FADE.screenPad; y0 -= FADE.screenPad; y1 += FADE.screenPad;
+    for (const o of this.list) {
+      let hide = false;
+      const n = o.mesh.geometry.type === 'CylinderGeometry' && o.r < 0.05 && o.a.y === o.b.y ? FADE.samples : 10;
+      for (let i = 0; i <= n && !hide; i++) {
+        this._p.lerpVectors(o.a, o.b, i / n);
+        const d = camera.position.distanceTo(this._p);
+        if (d >= near - o.r) continue;                 // 自機より奥(または同じ深さ)なら隠していない
+        this._v.copy(this._p).project(camera);
+        if (this._v.z > 1) continue;
+        const sx = (this._v.x + 1) / 2 * W, sy = (1 - this._v.y) / 2 * H;
+        if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) hide = true;
+      }
+      const target = hide ? FADE.minOpacity : 1;
+      o.op += (target - o.op) * Math.min(1, (target < o.op ? FADE.fadeIn : FADE.fadeOut) * dt);
+      if (o.op > 0.995) o.op = 1;
+      const m = o.mat;
+      if (o.op < 1) {
+        if (!m.transparent || m.depthWrite) { m.transparent = true; m.depthWrite = false; m.needsUpdate = true; }
+        m.opacity = o.op;
+      } else if (m.transparent !== o.orig.transparent || m.opacity !== o.orig.opacity) {
+        // 完全に戻ったら元の設定に復元
+        m.transparent = o.orig.transparent; m.opacity = o.orig.opacity; m.depthWrite = o.orig.depthWrite; m.needsUpdate = true;
+      }
+    }
+  }
 }
