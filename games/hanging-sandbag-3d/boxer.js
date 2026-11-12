@@ -49,6 +49,7 @@ export const BOXER = {
   comboStepTime: 0.12,   // その詰める動きの時間 [s]
   blendIn: 0.05, blendOut: 0.14,
   gloveRadius: 0.09,     // グローブの当たり判定の半径 [m](ボクシンググローブの大きさ)
+  bodyHitTop: 0.10,      // ボディに当たるのは拳が腹(Spine)からこの高さまで [m]
   gloveReach: 0.07,      // 手首(Hand ボーン)からグローブ中心までの長さ [m]
   capsuleRadius: 0.22, capsuleHalf: 0.55, // 体の当たり判定(バッグがぶつかる)
   bagGap: 0.06,          // 体とバッグの間に必ず空ける隙間 [m]
@@ -89,8 +90,8 @@ export const HOOK = {
   tWind: 0.06,                     // 構え → 振りかぶり
   tStrike: 0.15,                   // 振りかぶり → 振り抜き(インパクト)
   tHold: 0.21,                     // 振り抜いた形で一瞬止める
-  wind:   { upper: [0.80, -0.15, 0.58], fore: [0.35, 0.05, 0.94], spine: 0.18 },  // 肘を外へ引く
-  strike: { upper: [0.30, 0.0, 0.95],  fore: [-0.78, 0.0, 0.63], spine: -0.6 },  // 拳が顔の前を横切る
+  wind:   { upper: [0.80, -0.02, 0.58], fore: [0.35, 0.10, 0.94], spine: 0.18 },  // 肘を外へ引く
+  strike: { upper: [0.30, 0.16, 0.95],  fore: [-0.78, 0.04, 0.63], spine: -0.6 },  // 拳が顔の前を横切る
   hipsTurn: -0.22,                 // 腰の回し(振り抜き時)
   stepIn: 0.33,                    // 体の踏み込み [m](構えの距離 0.78m からでも、回避からのカウンターでも届くように)
 };
@@ -110,6 +111,64 @@ export const UPPERCUT = {
   hipsTurn: -0.18,
   stepIn: 0.32,
 };
+// ---- 下半身(全身)のレイヤー: 腰の体重移動・回転と、足を床に付けたままの脚の IK ----
+//  腰の移動はモデルの座標系 [m](+X = 本人の左、+Z = 前)、回転 [rad](yaw + = 本人の左へ回る)。オーソドックス(左足が前)
+export const BODY = {
+  spineKeep: 0.8,        // 腰を回した分のうち、上体で戻す割合(残りは上体ごと回る)
+  rearStay: 0.65,        // 踏み込みのとき、後ろ足(右)をその場に残す割合(蹴り脚が伸びる)
+  reactZ: 0.06,          // 被弾で腰が後ろへ押される量 [m]
+  liftSpeed: 1.2,        // この速さ [m/s] 以上で踏み込むと前足を浮かせきる
+  liftHeight: 0.05,      // 前足を浮かせる高さ [m]
+  heelUp: 0.05,          // 後ろ足のかかとを上げる量 [m](足首の高さ)
+  heelTilt: 0.55,        // そのときのつま先側への傾き [rad]
+  punch: {
+    // imp: 腰が乗りきる時刻 / hold: 保つ時間 [s(パンチの時間)]
+    jab:      { imp: 0.15, hold: 0.04, x: 0.015, y: 0.0, z: 0.06, yaw: -0.14 },               // 左足へ少し乗って前へ
+    straight: { imp: 0.22, hold: 0.06, x: 0.04,  y: -0.015, z: 0.11, yaw: 0.42, heel: 1 },                // 右の腰を前へ送り、後ろ足で蹴って前足へ乗る
+    hookL:    { imp: 0.15, hold: 0.06, x: -0.02, y: -0.02, z: 0.07, yaw: -0.40, roll: -0.05 },  // 左足を軸に腰を右へ切る
+    hookR:    { imp: 0.15, hold: 0.06, x: 0.05,  y: -0.02, z: 0.05, yaw: 0.42,  roll: 0.05, heel: 0.9 },   // 右の腰を回して前足へ
+    upperL:   { imp: 0.18, hold: 0.06, x: 0.03,  y: 0.02,  z: 0.04, yaw: -0.30, roll: 0.06 },   // 沈みから伸び上がりつつ腰を切る
+    upperR:   { imp: 0.18, hold: 0.06, x: 0.04,  y: 0.02,  z: 0.06, yaw: 0.34,  roll: -0.06, heel: 0.8 },
+  },
+  dodge: {
+    slipL: { x: 0.10,  y: -0.03, z: 0.0 },    // 左の脚へ体重を移す
+    slipR: { x: -0.10, y: -0.03, z: 0.0 },
+    duck:  { x: 0.0,   y: -0.03, z: -0.07 },  // 腰を引いて沈む
+    sway:  { x: -0.02, y: -0.03, z: -0.10 },  // 後ろ足へ体重を移す
+  },
+  legs: [
+    { upper: 'LeftUpperLeg', lower: 'LeftLowerLeg', foot: 'LeftFoot', rear: false, target: new THREE.Vector3(), footQ: new THREE.Quaternion() },
+    { upper: 'RightUpperLeg', lower: 'RightLowerLeg', foot: 'RightFoot', rear: true, target: new THREE.Vector3(), footQ: new THREE.Quaternion() },
+  ],
+};
+const _bl = { q1: new THREE.Quaternion(), q2: new THREE.Quaternion(), q3: new THREE.Quaternion(), q4: new THREE.Quaternion(), q5: new THREE.Quaternion(), fwd: new THREE.Vector3() };
+const _ik = { a: new THREE.Vector3(), b: new THREE.Vector3(), c: new THREE.Vector3(), t: new THREE.Vector3(), u: new THREE.Vector3(), v: new THREE.Vector3(), n: new THREE.Vector3(), q: new THREE.Quaternion(), pq: new THREE.Quaternion() };
+/** ボーンをワールドの回転 R だけ回す(自分の付け根を中心に) */
+function rotateBoneWorld(bone, R) {
+  bone.parent.getWorldQuaternion(_ik.pq);
+  const pinv = _ik.pq.clone().invert();
+  bone.quaternion.premultiply(pinv.multiply(R).multiply(_ik.pq));
+  bone.updateMatrixWorld(true);
+}
+/** 2関節 IK: 太もも(ul)・すね(ll)を回して、足首(ft)を target へ。膝の曲がる面は今の膝の向きを保つ */
+function solveLegIK(ul, ll, ft, target) {
+  ul.getWorldPosition(_ik.a); ll.getWorldPosition(_ik.b); ft.getWorldPosition(_ik.c);
+  const la = _ik.a.distanceTo(_ik.b), lb = _ik.b.distanceTo(_ik.c);
+  const d = Math.max(Math.abs(la - lb) + 1e-3, Math.min(la + lb - 1e-3, _ik.a.distanceTo(target)));
+  // 膝の角度を合わせる
+  _ik.u.subVectors(_ik.a, _ik.b).normalize(); _ik.v.subVectors(_ik.c, _ik.b).normalize();
+  const cur = Math.acos(Math.max(-1, Math.min(1, _ik.u.dot(_ik.v))));
+  const want = Math.acos(Math.max(-1, Math.min(1, (la * la + lb * lb - d * d) / (2 * la * lb))));
+  _ik.n.crossVectors(_ik.u, _ik.v);
+  if (_ik.n.lengthSq() > 1e-10 && Math.abs(want - cur) > 1e-5) {
+    _ik.n.normalize();
+    rotateBoneWorld(ll, _ik.q.setFromAxisAngle(_ik.n, want - cur));
+  }
+  // 脚全体を target の方向へ向ける
+  ft.getWorldPosition(_ik.c);
+  _ik.u.subVectors(_ik.c, _ik.a).normalize(); _ik.v.subVectors(target, _ik.a).normalize();
+  rotateBoneWorld(ul, _ik.q.setFromUnitVectors(_ik.u, _ik.v));
+}
 const ARM_REST = { upper: new THREE.Vector3(0.03034, -0.21804, -0.0029).normalize(), fore: new THREE.Vector3(0.02944, -0.16743, 0.00415).normalize() };
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _qh2 = new THREE.Quaternion(), _qh3 = new THREE.Quaternion();
 
@@ -171,7 +230,9 @@ export class Boxer {
     this.combo = 0;                 // 今のコンビネーションで何発目か
     this.press = null;              // コンビネーション中の前への詰め
     this.pressMin = 0;              // 詰めるのはこの距離まで(0 なら制限なし。CPU は間合いを詰めすぎない)
-    this.aimY = null;               // ダッキング中のパンチの狙いの高さ(ワールド y)。null なら補正しない
+    this.aimY = null;
+    this._hipsIdleQ = new THREE.Quaternion(); // 下半身レイヤー用: アイドルの腰の向き
+    this.reactK = 0;               // ダッキング中のパンチの狙いの高さ(ワールド y)。null なら補正しない
     this.avoidCenter = true;        // サンドバッグモード: バッグの真下(原点)には入らない
     this.keepDist = BOXER.capsuleRadius + 0.18 + BOXER.bagGap; // 相手(バッグ/対戦相手)との最小間隔
     this.react = null;              // 被弾のリアクション
@@ -303,6 +364,7 @@ export class Boxer {
     }
     this.group.position.set(this.pos.x, 0, this.pos.y);
     this.group.rotation.y = this.yaw;
+    this._dt = dt;
     this._pose(now, speed);
 
     // 被弾のリアクション・ダウンの進行
@@ -408,8 +470,10 @@ export class Boxer {
     const B = this.bones;
     const idle = sampleClip(this.idle, now, true);
     for (const n in idle.pose) if (B[n]) B[n].quaternion.copy(idle.pose[n]);
+    if (B.Hips) this._hipsIdleQ.copy(B.Hips.quaternion); // 足の置き場所を決める基準(パンチで腰を回しても足は動かさない)
     let y = idle.y, z = 0;
     this.procKnee = 0;
+    this.reactK = 0;
 
     // ---- パンチ(上半身に重ねる)。コンビネーションの切り替え直後は、前のパンチを薄くしながら先に重ねる ----
     const applyPunch = (P, scale) => {
@@ -479,7 +543,7 @@ export class Boxer {
       if (B.Neck) B.Neck.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.5 * k : 0.1 * k, side * 0.3 * k, side * 0.35 * k)));
       if (B.Head) B.Head.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.3 * k : 0, side * 0.25 * k, 0)));
       if (B.Spine) B.Spine.quaternion.multiply(_qb.setFromEuler(_e.set(head ? -0.12 * k : 0.35 * k, 0, side * 0.12 * k)));
-      z -= 0.05 * k;
+      this.reactK = k * (head ? 0.7 : 1); // 体ごと後ろへ(下半身のレイヤーで腰を引く)
     }
     this.model.position.y = y;
     this.model.position.z = z;
@@ -489,7 +553,88 @@ export class Boxer {
       this.model.rotation.x = -e * Math.PI / 2 * 0.97;
       this.model.position.y = y * (1 - t) + 0.12 * t;
     } else this.model.rotation.x = 0;
+    this._bodyLayer(z);
     this._duckAim();
+  }
+
+  /** パンチの「乗り」の強さ 0〜1(インパクトまでに立ち上がり、少し保って、打ち終わりへ戻る) */
+  _punchEnv(P) {
+    const C = BODY.punch[P.kind], end = P.dur * P.rate, t = P.t;
+    const ss = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+    if (t < C.imp) return ss(t / C.imp);
+    return 1 - ss((t - C.imp - C.hold) / Math.max(0.05, end - C.imp - C.hold));
+  }
+
+  /**
+   * 下半身(全身)のレイヤー: 腰(Hips)を動かして体重移動・腰の回転を付け、脚は IK で足の裏を床に付けたまま曲げ伸ばしする。
+   *  - パンチ: 打つ向きへ腰を回し、前へ体重を乗せて沈む(手打ちにしない)。踏み込みでは後ろ足を残して蹴り脚を伸ばす
+   *  - 回避: スリップは避ける側の脚へ、スウェーは後ろ足へ、ダッキングは腰を引いて沈む
+   *  - 被弾: 腰ごと後ろへ押される
+   * stepZ: 今の体全体の踏み込み量 [m](model.position.z)
+   */
+  _bodyLayer(stepZ) {
+    const B = this.bones, H = B.Hips;
+    if (!H || this.down) return;
+    if (!this._hipsBase) this._hipsBase = H.position.clone();
+    H.position.copy(this._hipsBase);
+    // ---- 腰の目標(モデルの座標系: +X = 本人の左、+Z = 前) ----
+    let x = 0, y = 0, z = 0, yaw = 0, roll = 0, heel = 0;
+    const addP = (P, s) => {
+      const C = BODY.punch[P.kind]; if (!C || s <= 0) return;
+      const e = this._punchEnv(P) * s;
+      x += C.x * e; y += C.y * e; z += C.z * e; yaw += C.yaw * e; roll += (C.roll || 0) * e; heel += (C.heel || 0) * e;
+    };
+    if (this.prevPunch) addP(this.prevPunch, 1 - this.prevPunch.fade / BOXER.comboFade);
+    if (this.punch) addP(this.punch, 1);
+    for (const k in BODY.dodge) {
+      const D = BODY.dodge[k], w = k === 'duck' ? (this.duckEff ?? this.dodgeW.duck) : this.dodgeW[k];
+      if (w < 1e-3) continue;
+      x += D.x * w; y += D.y * w; z += D.z * w; roll += (D.roll || 0) * w;
+    }
+    z -= BODY.reactZ * this.reactK; y -= 0.02 * this.reactK;
+    // 踏み込みの速さ → 前足を少し浮かせて踏み出す(床を滑らせない)
+    const dz = stepZ - (this._prevStepZ ?? stepZ); this._prevStepZ = stepZ;
+    const liftT = Math.min(1, Math.abs(dz) / Math.max(1e-3, this._dt || 1 / 60) / BODY.liftSpeed);
+    this.footLift = (this.footLift || 0) + (liftT - (this.footLift || 0)) * Math.min(1, (this._dt || 1 / 60) * 30);
+    if (Math.abs(x) + Math.abs(y) + Math.abs(z) + Math.abs(yaw) + Math.abs(roll) + Math.abs(stepZ) + this.footLift < 1e-4) return;
+
+    // ---- 足の置き場所(腰を回す前の向きで決める。パンチの腰の回転では足は動かさない) ----
+    const qFinal = _bl.q1.copy(H.quaternion);
+    H.quaternion.copy(this._hipsIdleQ);
+    this.group.updateMatrixWorld(true);
+    const legs = BODY.legs;
+    for (const L of legs) {
+      const foot = B[L.foot]; if (!foot) continue;
+      foot.getWorldPosition(L.target); foot.getWorldQuaternion(L.footQ);
+      // 踏み込みでは後ろ足を残す(蹴り脚が伸びる)。届かない分は IK が伸ばしきりで止める
+      if (L.rear && stepZ > 0) L.target.addScaledVector(_bl.fwd.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)), -stepZ * BODY.rearStay);
+      if (!L.rear) L.target.y += BODY.liftHeight * this.footLift;
+      if (L.rear) L.target.y += BODY.heelUp * Math.min(1, heel); // 後ろ足のかかとを上げる(つま先で床を押す)
+    }
+    H.quaternion.copy(qFinal);
+    // ---- 腰を動かす・回す(上体は回した分の一部を戻して、狙いが大きくずれないように) ----
+    H.position.set(this._hipsBase.x + x, this._hipsBase.y + y, this._hipsBase.z + z);
+    const qOff = _bl.q2.setFromEuler(_e.set(0, yaw, roll));
+    H.quaternion.premultiply(qOff);
+    if (B.Spine) {
+      const back = _bl.q3.copy(qOff).invert();
+      _bl.q4.identity().slerp(back, BODY.spineKeep);
+      _bl.q5.copy(H.quaternion).invert().multiply(_bl.q4).multiply(H.quaternion);
+      B.Spine.quaternion.premultiply(_bl.q5);
+    }
+    this.group.updateMatrixWorld(true);
+    // ---- 脚の IK(2関節): 足を元の位置へ戻し、足の裏の向きも保つ ----
+    for (const L of legs) {
+      const ul = B[L.upper], ll = B[L.lower], ft = B[L.foot];
+      if (!ul || !ll || !ft) continue;
+      solveLegIK(ul, ll, ft, L.target);
+      // 足の裏の向きは元のまま(後ろ足はかかとを上げた分だけつま先側へ倒す)
+      _bl.q2.copy(L.footQ);
+      if (L.rear && heel > 1e-3) _bl.q2.premultiply(_bl.q3.setFromAxisAngle(_bl.fwd.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw)), BODY.heelTilt * Math.min(1, heel)));
+      ll.getWorldQuaternion(_bl.q1);
+      ft.quaternion.copy(_bl.q1.invert().multiply(_bl.q2));
+      ft.updateMatrixWorld(true);
+    }
   }
 
   /**
@@ -566,6 +711,8 @@ export class Boxer {
       const pt = prev.clone().lerp(glove, i / n);
       for (const S of parts) {
         const q = closest(pt, S);
+        // 体の球は腹の高さの拳だけ(頭の高さのパンチが胸の上をかすって「ボディ」にならないように)
+        if (S.part === 'body' && pt.y > S.a.y + BOXER.bodyHitTop) continue;
         if (pt.distanceTo(q) <= S.r + BOXER.gloveRadius && vel.dot(q.clone().sub(pt)) > 0) {
           P.hit = true;
           return { part: S.part, point: pt, dir: vel.clone().normalize(), kind: P.kind, combo: P.combo };
