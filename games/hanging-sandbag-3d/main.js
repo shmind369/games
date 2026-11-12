@@ -135,7 +135,7 @@ let boxer = null;
 // ============================================================
 let gameMode = 'title';          // 'title' | 'sandbag' | 'versus'
 const vs = { opp: null, ai: new OpponentAI(), hpP: 100, hpO: 100, state: 'fight', koT: 0, loading: null };
-const DAMAGE = { jab: 6, straight: 10, hookL: 9, hookR: 9 }; // 頭は ×1.3
+const DAMAGE = { jab: 6, straight: 10, hookL: 9, hookR: 9, upperL: 9, upperR: 11 }; // 頭は ×1.3
 const HEAD_MUL = 1.3;
 const OPP_URL = './assets/box_usa_rigged.glb';
 const oppFocus = new THREE.Vector3(), playerFocus = new THREE.Vector3();
@@ -475,43 +475,17 @@ function moveStick(e) {
   bNub.style.transform = `translate(${dx}px, ${dy}px)`;
 }
 bStick.addEventListener('pointermove', moveStick);
-// ---- 回避から指を離した瞬間のカウンター ----
-// 左右のスリップ中に指を離すと、その瞬間にパンチを打つ。スティックの角度で打ち分ける:
-//   真横(水平から 22.5° 未満)        → 左: ジャブ / 右: 右ストレート
-//   斜め 45°(22.5〜67.5°。上でも下でも) → 左: 左フック / 右: 右フック
-//   それより縦(ダッキング・スウェー寄り) → 出さない
-const RELEASE_COUNTERS = {
-  L: { straight: { punch: 'jab', label: 'カウンター: 左スリップ → ジャブ' }, hook: { punch: 'hookL', label: 'カウンター: 左45° → 左フック' } },
-  R: { straight: { punch: 'straight', label: 'カウンター: 右スリップ → 右ストレート' }, hook: { punch: 'hookR', label: 'カウンター: 右45° → 右フック' } },
-};
-const COUNTER_MIN_WEIGHT = 0.3;      // 回避姿勢がこれ以上(ある程度避けている)のときだけ
-const COUNTER_HOOK_FROM = 22.5, COUNTER_HOOK_TO = 67.5; // フックになる角度 [度](水平から)
-let counterText = '', counterUntil = 0;
-function tryReleaseCounter() {
-  if (!boxer || !canAct()) return false;
-  const T = boxer.dodgeTarget, W = boxer.dodgeW;
-  const S = Math.max(T.slipL, T.slipR), V = T.duck + T.sway;
-  if (S < 1e-3) return false;                                   // 左右のスリップを含まない
-  if (W.slipL + W.slipR + W.duck + W.sway < COUNTER_MIN_WEIGHT) return false; // まだ避けていない
-  const ang = Math.atan(Math.sqrt(V / S)) * 180 / Math.PI;      // 重みは cos² なので角度に戻す
-  const type = ang < COUNTER_HOOK_FROM ? 'straight' : ang <= COUNTER_HOOK_TO ? 'hook' : null;
-  if (!type) return false;
-  const c = RELEASE_COUNTERS[T.slipL >= T.slipR ? 'L' : 'R'][type];
-  boxer.throwPunch(c.punch);
-  counterText = c.label;
-  counterUntil = performance.now() + 800;
-  return true;
-}
 const endStick = (e) => {
   if (e.pointerId !== stickIn.id) return;
-  // 回避中に指を離した(キャンセルではなく離した)瞬間 → カウンター
-  if (e.type === 'pointerup' && stickState.mode === 'dodge') tryReleaseCounter();
   Object.assign(stickIn, { id: null, x: 0, y: 0 });
   bNub.style.transform = '';
 };
 bStick.addEventListener('pointerup', endStick);
 bStick.addEventListener('pointercancel', endStick);
-for (const [id, kind] of [['jabBtn', 'jab'], ['strBtn', 'straight']]) {
+// ---- 攻撃は 6 つのボタンのみ(移動パッドは移動と回避だけ)----
+const PUNCH_BUTTONS = [['ljabBtn', 'jab'], ['rjabBtn', 'straight'], ['lhookBtn', 'hookL'], ['rhookBtn', 'hookR'], ['lupBtn', 'upperL'], ['rupBtn', 'upperR']];
+const PUNCH_KEYS = { KeyJ: 'jab', KeyZ: 'jab', KeyK: 'straight', KeyX: 'straight', KeyU: 'hookL', KeyI: 'hookR', KeyN: 'upperL', KeyM: 'upperR' };
+for (const [id, kind] of PUNCH_BUTTONS) {
   const el = document.getElementById(id);
   el.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); if (boxer && canAct()) boxer.throwPunch(kind); });
 }
@@ -519,14 +493,12 @@ const keys = new Set();
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (!e.repeat && boxer && canAct()) {
-    if (e.code === 'KeyJ' || e.code === 'KeyZ') boxer.throwPunch('jab');
-    if (e.code === 'KeyK' || e.code === 'KeyX') boxer.throwPunch('straight');
+    if (PUNCH_KEYS[e.code]) boxer.throwPunch(PUNCH_KEYS[e.code]);
   }
   if (e.code.startsWith('Arrow')) e.preventDefault();
 });
 window.addEventListener('keyup', (e) => {
   keys.delete(e.code);
-  if (e.code.startsWith('Arrow')) tryReleaseCounter(); // PC: 矢印で回避 → 離した瞬間にカウンター
 });
 window.addEventListener('blur', () => keys.clear());
 // ---- スティックの倒し量で 待機 / 回避 / 移動 を切り替える(stickModes.js) ----
@@ -598,7 +570,6 @@ function showStickMode(dw) {
     for (const k in dw) if (!best || dw[k] > dw[best]) best = k;
     txt = `${stickState.big ? '大きな' : '小さな'}回避: ${DODGES[best].label}`;
   }
-  if (performance.now() < counterUntil) txt = counterText;
   if (boxer && boxer.punch && boxer.combo >= 2) txt = `コンビネーション ${boxer.combo} 発目` + (boxer.combo >= BOXER.comboMax ? '(最大)' : '');
   if (bModeEl.textContent !== txt) bModeEl.textContent = txt;
 }
