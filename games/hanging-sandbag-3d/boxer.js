@@ -42,7 +42,7 @@ export const BOXER = {
   comboRate: 1.15,       // 2発目以降の再生速度の倍率(つなぎを速く)
   comboFade: 0.10,       // 前のパンチから次のパンチへ切り替えるときの混ぜ合わせの時間 [s]
   // 次のパンチを出せるようになる時刻 [s](打ち出してから。拳が伸びきった直後で戻りを切り上げる)
-  cancelAt: { jab: 0.20, straight: 0.28, hookL: 0.20, hookR: 0.20, upperL: 0.22, upperR: 0.22 },
+  cancelAt: { jab: 0.20, straight: 0.28, hookL: 0.24, hookR: 0.24, upperL: 0.26, upperR: 0.26 },
   sameHandExtra: 0.08,   // 同じ手で続けるときは戻しの分だけ少し遅く [s]
   comboImpulse: 0.75,    // 2発目以降の撃力の倍率(つなぎのパンチは溜めが小さいぶん軽い。バッグが離れすぎず次も当たる)
   comboStep: 0.14,       // 2発目以降、1発ごとにバッグへ詰める距離 [m](打たれて離れていくバッグを追いかける)
@@ -86,11 +86,11 @@ const THIGH = 0.39, SHIN = 0.32; // 脚の長さ(腰を落とす量の計算用)
 //  肘を肩の高さまで横へ張り、外から内へ水平に振り抜く。腰と上体を打つ側の反対へ回して体ごと打つ。
 //  方向は胸(Chest)の座標系で指定: +Z = 正面、+X = 本人の左(右フックは X を反転)
 export const HOOK = {
-  dur: 0.42,                       // 全体の長さ [s]
-  tWind: 0.06,                     // 構え → 振りかぶり
-  tStrike: 0.15,                   // 振りかぶり → 振り抜き(インパクト)
-  tHold: 0.21,                     // 振り抜いた形で一瞬止める
-  wind:   { upper: [0.80, -0.02, 0.58], fore: [0.35, 0.10, 0.94], spine: 0.18 },  // 肘を外へ引く
+  dur: 0.46,                       // 全体の長さ [s]
+  tWind: 0.10,                     // 構え → 振りかぶり(大きく引く)
+  tStrike: 0.19,                   // 振りかぶり → 振り抜き(インパクト)
+  tHold: 0.25,                     // 振り抜いた形で一瞬止める
+  wind:   { upper: [0.92, 0.0, 0.05], fore: [0.55, 0.15, 0.82], spine: 0.45 },   // 肘を横から後ろへ大きく引き、肩を打つ側と反対へ開く
   strike: { upper: [0.30, 0.16, 0.95],  fore: [-0.78, 0.04, 0.63], spine: -0.6 },  // 拳が顔の前を横切る
   hipsTurn: -0.22,                 // 腰の回し(振り抜き時)
   stepIn: 0.33,                    // 体の踏み込み [m](構えの距離 0.78m からでも、回避からのカウンターでも届くように)
@@ -99,15 +99,15 @@ export const HOOK = {
 //  膝を沈めて打つ側へ体を落とし、拳を腰の高さまで下げる → 脚で伸び上がりながら、肘を前へ出して拳を下から真上へ突き上げる。
 //  方向の指定は HOOK と同じ(胸の座標系: +Z = 正面、+X = 本人の左。右は X を反転)
 export const UPPERCUT = {
-  dur: 0.44,
-  tWind: 0.09,                     // 構え → 沈み込み(拳を下げる)
-  tStrike: 0.18,                   // 沈み込み → 突き上げ(インパクト)
-  tHold: 0.24,
-  wind:   { upper: [0.30, -0.92, 0.10], fore: [0.05, -0.25, 0.97], spine: 0.16 },  // 肘を下へ、拳は腰の前
+  dur: 0.48,
+  tWind: 0.13,                     // 構え → 沈み込み(拳を下げる。大きく引く)
+  tStrike: 0.22,                   // 沈み込み → 突き上げ(インパクト)
+  tHold: 0.28,
+  wind:   { upper: [0.35, -0.80, -0.45], fore: [0.10, -0.55, 0.83], spine: 0.40 }, // 肘を下から後ろへ引き、拳は腰の横まで下げる
   strike: { upper: [-0.10, -0.06, 0.99], fore: [-0.16, 0.88, 0.44], spine: -0.36 }, // 肘を前へ、拳は顎の高さへ真上に
-  knee: { wind: 0.36, strike: 0.04 },        // 膝: 沈んでから伸び上がる
-  lean: { wind: 0.16, strike: -0.06 },       // 上体の前後(+ = 前傾)
-  roll: { wind: -0.20, strike: 0.06 },       // 打つ側への体の傾き(左アッパーは左へ沈む)
+  knee: { wind: 0.52, strike: 0.04 },        // 膝: 深く沈んでから伸び上がる
+  lean: { wind: 0.24, strike: -0.06 },       // 上体の前後(+ = 前傾)
+  roll: { wind: -0.32, strike: 0.06 },       // 打つ側への体の傾き(左アッパーは左へ沈む)
   hipsTurn: -0.18,
   stepIn: 0.32,
 };
@@ -125,10 +125,15 @@ export const BODY = {
     // imp: 腰が乗りきる時刻 / hold: 保つ時間 [s(パンチの時間)]
     jab:      { imp: 0.15, hold: 0.04, x: 0.015, y: 0.0, z: 0.06, yaw: -0.14 },               // 左足へ少し乗って前へ
     straight: { imp: 0.22, hold: 0.06, x: 0.04,  y: -0.015, z: 0.11, yaw: 0.42, heel: 1 },                // 右の腰を前へ送り、後ろ足で蹴って前足へ乗る
-    hookL:    { imp: 0.15, hold: 0.06, x: -0.02, y: -0.02, z: 0.07, yaw: -0.40, roll: -0.05 },  // 左足を軸に腰を右へ切る
-    hookR:    { imp: 0.15, hold: 0.06, x: 0.05,  y: -0.02, z: 0.05, yaw: 0.42,  roll: 0.05, heel: 0.9 },   // 右の腰を回して前足へ
-    upperL:   { imp: 0.18, hold: 0.06, x: 0.03,  y: 0.02,  z: 0.04, yaw: -0.30, roll: 0.06 },   // 沈みから伸び上がりつつ腰を切る
-    upperR:   { imp: 0.18, hold: 0.06, x: 0.04,  y: 0.02,  z: 0.06, yaw: 0.34,  roll: -0.06, heel: 0.8 },
+    // from: 腰を切り始める時刻(振りかぶりの後)/ wind: 振りかぶり(テイクバック)で腰を逆へ溜める量
+    hookL:    { from: 0.10, imp: 0.19, hold: 0.06, x: -0.02, y: -0.02, z: 0.07, yaw: -0.40, roll: -0.05,
+                wind: { x: 0.04, y: -0.03, z: -0.02, yaw: 0.30 } },                                   // 左足に溜めて、左足を軸に腰を右へ切る
+    hookR:    { from: 0.10, imp: 0.19, hold: 0.06, x: 0.05,  y: -0.02, z: 0.05, yaw: 0.42,  roll: 0.05, heel: 0.9,
+                wind: { x: -0.05, y: -0.03, z: -0.04, yaw: -0.32 } },                                 // 後ろ足に溜めて、右の腰を回して前足へ
+    upperL:   { from: 0.13, imp: 0.22, hold: 0.06, x: 0.03,  y: 0.02,  z: 0.04, yaw: -0.30, roll: 0.06,
+                wind: { x: 0.05, y: -0.02, z: -0.02, yaw: 0.22 } },                                   // 左へ沈んで溜め、伸び上がりつつ腰を切る
+    upperR:   { from: 0.13, imp: 0.22, hold: 0.06, x: 0.04,  y: 0.02,  z: 0.06, yaw: 0.34,  roll: -0.06, heel: 0.8,
+                wind: { x: -0.05, y: -0.02, z: -0.04, yaw: -0.24 } },
   },
   dodge: {
     slipL: { x: 0.10,  y: -0.03, z: 0.0 },    // 左の脚へ体重を移す
@@ -559,10 +564,18 @@ export class Boxer {
 
   /** パンチの「乗り」の強さ 0〜1(インパクトまでに立ち上がり、少し保って、打ち終わりへ戻る) */
   _punchEnv(P) {
-    const C = BODY.punch[P.kind], end = P.dur * P.rate, t = P.t;
+    const C = BODY.punch[P.kind], end = P.dur * P.rate, t = P.t, from = C.from || 0;
     const ss = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
-    if (t < C.imp) return ss(t / C.imp);
+    if (t < C.imp) return ss((t - from) / (C.imp - from));
     return 1 - ss((t - C.imp - C.hold) / Math.max(0.05, end - C.imp - C.hold));
+  }
+
+  /** 振りかぶり(テイクバック)の強さ 0〜1: 引ききるまで立ち上がり、振り出しで 0 へ */
+  _windEnv(P) {
+    const C = BODY.punch[P.kind]; if (!C || !C.wind) return 0;
+    const ss = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+    const t = P.t, a = C.from, b = C.imp;
+    return t < a ? ss(t / a) : 1 - ss((t - a) / (b - a));
   }
 
   /**
@@ -583,6 +596,7 @@ export class Boxer {
       const C = BODY.punch[P.kind]; if (!C || s <= 0) return;
       const e = this._punchEnv(P) * s;
       x += C.x * e; y += C.y * e; z += C.z * e; yaw += C.yaw * e; roll += (C.roll || 0) * e; heel += (C.heel || 0) * e;
+      if (C.wind) { const W = C.wind, v = this._windEnv(P) * s; x += W.x * v; y += W.y * v; z += W.z * v; yaw += W.yaw * v; }
     };
     if (this.prevPunch) addP(this.prevPunch, 1 - this.prevPunch.fade / BOXER.comboFade);
     if (this.punch) addP(this.punch, 1);

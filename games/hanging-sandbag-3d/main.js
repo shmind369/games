@@ -553,9 +553,9 @@ let prevStickMode = 'neutral'; // 回避に入った瞬間だけ風切り音を�
 // 音のオン/オフ(操作領域の右上。設定は端末に保存)
 const sndBtn = document.getElementById('sndBtn');
 const showSnd = () => {
-  sndBtn.textContent = sfx.muted ? '🔇 消音中' : '🔊 音あり';
+  sndBtn.textContent = sfx.muted ? '🔇 Sound OFF' : '🔊 Sound ON';
   sndBtn.classList.toggle('off', sfx.muted);
-  sndBtn.setAttribute('aria-label', sfx.muted ? '音を出す' : '音を消す');
+  sndBtn.setAttribute('aria-label', sfx.muted ? 'Sound ON' : 'Sound OFF');
 };
 // 切り替えは click(iOS で音を有効にできるイベント)で行う
 sndBtn.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
