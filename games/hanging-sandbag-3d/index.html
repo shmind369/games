@@ -107,14 +107,25 @@
       border: 3px solid rgba(255,255,255,0.85); box-shadow: 0 4px 10px rgba(0,0,0,0.35);
     }
     .pBtn:active { transform: scale(0.92); }
-    /* 攻撃ボタン: パッドの左右(パッドの中心と同じ高さ)。左手側 = JAB、右手側 = STRAIGHT */
-    #jabBtn { left: max(calc(8px + env(safe-area-inset-left)), calc(50% - 176px)); bottom: calc(71px + env(safe-area-inset-bottom)); width: 78px; height: 78px; font-size: 13px; background: #c0392b; }
-    #strBtn { right: max(calc(8px + env(safe-area-inset-right)), calc(50% - 176px)); bottom: calc(71px + env(safe-area-inset-bottom)); width: 78px; height: 78px; font-size: 11px; background: #922b21; }
+    /* 攻撃ボタン(6つ): パッドの左に左手(JAB / HOOK / UPPER)、右に右手。上から JAB・HOOK・UPPER、真ん中の段は少し外側へ */
+    .pBtn { width: 64px; height: 64px; font-size: 12px; letter-spacing: 0; line-height: 1.1; background: #c0392b; padding: 0; }
+    .pBtn.r1 { bottom: calc(156px + env(safe-area-inset-bottom)); }
+    .pBtn.r2 { bottom: calc(84px + env(safe-area-inset-bottom)); }
+    .pBtn.r3 { bottom: calc(12px + env(safe-area-inset-bottom)); }
+    .pBtn.L.r1, .pBtn.L.r3 { left: max(calc(18px + env(safe-area-inset-left)), calc(50% - 160px)); }
+    .pBtn.L.r2 { left: max(calc(4px + env(safe-area-inset-left)), calc(50% - 182px)); }
+    .pBtn.R.r1, .pBtn.R.r3 { right: max(calc(18px + env(safe-area-inset-right)), calc(50% - 160px)); }
+    .pBtn.R.r2 { right: max(calc(4px + env(safe-area-inset-right)), calc(50% - 182px)); }
     /* 幅の狭い画面(iPhone SE など)では、パッドの大きさは保ったままボタンを小さくして重ならないように */
     @media (max-width: 360px) {
-      #jabBtn, #strBtn { width: 62px; height: 62px; bottom: calc(79px + env(safe-area-inset-bottom)); font-size: 10px; letter-spacing: 0; }
-      #jabBtn { left: calc(6px + env(safe-area-inset-left)); }
-      #strBtn { right: calc(6px + env(safe-area-inset-right)); }
+      .pBtn { width: 54px; height: 54px; font-size: 10px; }
+      .pBtn.r1 { bottom: calc(150px + env(safe-area-inset-bottom)); }
+      .pBtn.r2 { bottom: calc(86px + env(safe-area-inset-bottom)); }
+      .pBtn.r3 { bottom: calc(22px + env(safe-area-inset-bottom)); }
+      .pBtn.L.r1, .pBtn.L.r3 { left: calc(14px + env(safe-area-inset-left)); }
+      .pBtn.L.r2 { left: calc(3px + env(safe-area-inset-left)); }
+      .pBtn.R.r1, .pBtn.R.r3 { right: calc(14px + env(safe-area-inset-right)); }
+      .pBtn.R.r2 { right: calc(3px + env(safe-area-inset-right)); }
     }
     #bHint { animation: hintFade 1s 8s forwards; position: fixed; left: 0; right: 0; bottom: calc(246px + env(safe-area-inset-bottom)); text-align: center; color: rgba(255,255,255,0.85); font-size: 11px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,0.95), 0 0 6px rgba(0,0,0,0.8); }
 
@@ -226,9 +237,13 @@
     <button id="titleBtn">≡ タイトル</button>
     <div id="bStick"><div class="zone z15"></div><div class="zone z35"></div><div class="zone z65"></div><div id="bNub"></div></div>
     <div id="bMode">待機</div>
-    <button id="jabBtn" class="pBtn">JAB</button>
-    <button id="strBtn" class="pBtn">STRAIGHT</button>
-    <div id="bHint">スティック 少し倒す=回避(左右=スリップ / 上=ダッキング / 下=スウェー)・大きく倒す=ステップ移動<br>JAB / STRAIGHT でパンチ ・ 画面ドラッグで視点 ・ PC: WASD 移動 / 矢印 回避 / J・K パンチ</div>
+    <button id="ljabBtn" class="pBtn L r1">L JAB</button>
+    <button id="lhookBtn" class="pBtn L r2">L HOOK</button>
+    <button id="lupBtn" class="pBtn L r3">L UPPER</button>
+    <button id="rjabBtn" class="pBtn R r1">R JAB</button>
+    <button id="rhookBtn" class="pBtn R r2">R HOOK</button>
+    <button id="rupBtn" class="pBtn R r3">R UPPER</button>
+    <div id="bHint">スティック 少し倒す=回避(左右=スリップ / 上=ダッキング / 下=スウェー)・大きく倒す=ステップ移動<br>6つのボタンでパンチ ・ 画面ドラッグで視点 ・ PC: WASD 移動 / 矢印 回避 / J・K ジャブ / U・I フック / N・M アッパー</div>
   </div>
 
   <div id="vsHud" class="hidden">
