@@ -35,6 +35,7 @@
 - [hanging-sandbag-3d](games/hanging-sandbag-3d) — Three.js + Rapier製、天井から吊るした剛体サンドバッグをクリック位置に撃力を加えて揺らす物理演算テスト
 - [hip-drop-3d](games/hip-drop-3d) — Three.js製、縦持ち片手操作の三人称3Dジャンプアクション。ジャンプ中の下スワイプで真下へ急降下するヒップアタックで敵を倒しゴールを目指す試作版
 - [vr-missions-boxer](games/vr-missions-boxer) — VR MISSIONS 3D // SNEAKING の自機をボクサーのモデルに置き換えた版(構え・歩き・パンチのモーション付き)
+- [school-walk-3d](games/school-walk-3d) — Three.js製、手描きの間取り図をもとにした学校(1階)を一人称視点で歩けるスマホ縦画面向けウォークスルー
 
 ## 公開ページ
 
