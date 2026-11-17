@@ -13,13 +13,13 @@ const EYE = 1.5;
 const rooms = [
   { name: '押入', r: [0, 0, 0.81, 1.72], type: 'closet' },
   { name: '押入', r: [0, 1.72, 0.81, 2.53], type: 'closet' },
-  { name: '和室 4.5畳', r: [0.81, 0, 3.63, 2.53], type: 'tatami', layout: 'j45' },
-  { name: '和室 6.0帖', r: [0, 2.53, 3.63, 5.17], type: 'tatami', layout: 'j6' },
-  { name: '廊下', r: [3.63, 0, 4.45, 5.17], type: 'hall' },
-  { name: '階段', r: [4.45, 0, 7.78, 0.88], type: 'stair' },
-  { name: '廊下', r: [4.45, 0.88, 7.78, 1.61], type: 'hall' },
-  { name: 'トイレ', r: [7.78, 0, 8.565, 1.61], type: 'toilet' },
-  { name: '和室 7.0畳', r: [4.45, 1.61, 8.105, 5.17], type: 'tatami', layout: 'j7' },
+  { name: '和室 4.5畳', r: [0.81, 0, 3.63, 2.53], type: 'tatami', layout: 'j45', wall: 'plasterBlue' },
+  { name: '和室 6.0帖', r: [0, 2.53, 3.63, 5.17], type: 'tatami', layout: 'j6', wall: 'plasterBlue' },
+  { name: '廊下', r: [3.63, 0, 4.45, 5.17], type: 'hall', wall: 'plasterHall' },
+  { name: '階段', r: [4.45, 0, 7.78, 0.88], type: 'stair', wall: 'plasterHall' },
+  { name: '廊下', r: [4.45, 0.88, 7.78, 1.61], type: 'hall', wall: 'plasterHall' },
+  { name: 'トイレ', r: [7.78, 0, 8.565, 1.61], type: 'toilet', wall: 'plasterWhite' },
+  { name: '和室 7.0畳', r: [4.45, 1.61, 8.105, 5.17], type: 'tatami', layout: 'j7', wall: 'plasterCream' },
 ];
 const BAL_N = [3.63, -2.795, 4.9, 0];      // 北のバルコニー(グレーチング床)
 const BAL_S = [3.85, 5.17, 8.05, 6.95];    // 南のバルコニー
@@ -49,14 +49,14 @@ const openings = [];
 const op = (o, c, a, b, kind, y0, y1, s = 1, opt = {}) => openings.push({ o, c, a, b, kind, y0, y1, s, ...opt });
 op('v', 0.81, 0.15, 1.57, 'closet', 0, UCHI, 1);
 op('h', 2.53, 0.06, 0.75, 'closet', 0, UCHI, 1);
-op('v', 3.63, 1.25, 2.45, 'fusuma', 0, UCHI);
-op('v', 3.63, 3.95, 5.05, 'fusuma', 0, UCHI);
-op('v', 4.45, 2.05, 3.75, 'fusuma', 0, UCHI);
-op('h', 0, 3.70, 4.35, 'door', 0, 1.95, 1);
-op('v', 7.78, 0.92, 1.56, 'door', 0, 1.9, -1);
+op('v', 3.63, 1.25, 2.45, 'fusuma', 0, UCHI, 1, { stack: 'b' });
+op('v', 3.63, 3.95, 5.05, 'fusuma', 0, UCHI, 1, { stack: 'b' });
+op('v', 4.45, 2.05, 3.75, 'fusuma', 0, UCHI, 1, { stack: 'b' });
+op('h', 0, 3.715, 4.365, 'hatch', 0, 1.0, 1); // 廊下の突き当たりの小さな扉
+op('v', 7.78, 0.92, 1.56, 'hatch', 0, 1.9, -1, { knobY: 0.95, knobAt: 'a', win: true }); // トイレの戸(閉)
 op('h', 5.17, 5.35, 7.15, 'sweep', 0, UCHI, -1);
 op('h', 0, 1.9, 3.1, 'window', 0.85, UCHI, 1, { shoji: true });
-op('h', 0, 4.95, 7.6, 'window', 0.3, UCHI, 1);
+op('h', 0, 5.05, 5.5, 'window', 1.0, 1.75, 1, { woodFrame: true }); // 階段上の小窓
 op('v', 0, 3.35, 4.25, 'window', 0.85, UCHI, 1, { shoji: true });
 op('h', 5.17, 1.3, 3.0, 'window', 0.85, UCHI, -1, { shoji: true });
 op('v', 8.105, 4.0, 4.75, 'window', 0.85, UCHI, -1, { shoji: true });
@@ -112,13 +112,22 @@ function noise(g, w, h, n, a, cols, s = 3) {
   }
   g.globalAlpha = 1;
 }
-const texPlaster = canvasTex(256, 256, (g, w, h) => { // 聚楽壁
-  g.fillStyle = '#d9c7a3'; g.fillRect(0, 0, w, h);
-  noise(g, w, h, 6000, 0.5, ['#c4ae86', '#e8dabb', '#b89f74', '#a08860'], 2);
+const texPlaster = canvasTex(256, 256, (g, w, h) => { // 聚楽壁(色はマテリアル側で付ける)
+  g.fillStyle = '#e6e6e6'; g.fillRect(0, 0, w, h);
+  noise(g, w, h, 7000, 0.45, ['#cfcfcf', '#f6f6f6', '#c2c2c2', '#d8d8d8'], 2);
 });
-const texFloor = canvasTex(256, 256, (g, w, h) => { // 廊下のフローリング
+const texCloth = canvasTex(128, 128, (g, w, h) => { // 廊下天井の白いクロス(菱形の地紋)
+  g.fillStyle = '#f4f2ec'; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(200,195,180,.35)';
+  for (let y = 0; y < h; y += 32) for (let x = 0; x < w; x += 32) {
+    const ox = ((y / 32) % 2) * 16;
+    g.beginPath(); g.moveTo(x + ox + 16, y + 2); g.lineTo(x + ox + 30, y + 16); g.lineTo(x + ox + 16, y + 30); g.lineTo(x + ox + 2, y + 16); g.closePath(); g.fill();
+  }
+  noise(g, w, h, 600, 0.12, ['#bbb', '#fff']);
+});
+const texFloor = canvasTex(256, 256, (g, w, h) => { // 廊下のフローリング(オレンジがかった茶色)
   for (let i = 0; i < 8; i++) {
-    g.fillStyle = ['#b98a55', '#c29361', '#ae7f4b', '#c99c69'][i % 4]; g.fillRect(i * 32, 0, 32, h);
+    g.fillStyle = ['#b2612a', '#bc6a30', '#a85a26', '#c27236'][i % 4]; g.fillRect(i * 32, 0, 32, h);
     g.fillStyle = 'rgba(80,50,20,.5)'; g.fillRect(i * 32 + 31, 0, 1, h);
     g.fillRect(i * 32, ((i * 83) % 256), 32, 1);
     for (let k = 0; k < 6; k++) { g.fillStyle = 'rgba(90,55,25,.15)'; g.fillRect(i * 32 + 3 + Math.random() * 26, 0, 1, h); }
@@ -143,14 +152,15 @@ const texSiding = canvasTex(256, 256, (g, w, h) => {
   noise(g, w, h, 1500, 0.15, ['#999', '#fff']);
 });
 const texFusuma = canvasTex(128, 256, (g, w, h) => {
-  g.fillStyle = '#efe7d2'; g.fillRect(0, 0, w, h);
-  noise(g, w, h, 900, 0.25, ['#d6c9a6', '#fffaf0']);
-  // 下の方に淡い山の柄
-  g.fillStyle = 'rgba(150,170,160,.35)';
-  g.beginPath(); g.moveTo(0, 200); g.quadraticCurveTo(40, 150, 70, 190); g.quadraticCurveTo(100, 160, 128, 185); g.lineTo(128, 256); g.lineTo(0, 256); g.fill();
-  g.strokeStyle = '#3a2a1a'; g.lineWidth = 7; g.strokeRect(3.5, 3.5, w - 7, h - 7);
-  g.fillStyle = '#5b4a35'; g.beginPath(); g.ellipse(w - 22, h * 0.5, 6, 9, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = '#2b2118'; g.beginPath(); g.ellipse(w - 22, h * 0.5, 3.5, 6, 0, 0, Math.PI * 2); g.fill();
+  // 白無地の襖紙+黒い縁+丸い引手(写真に合わせる)
+  g.fillStyle = '#f3efe4'; g.fillRect(0, 0, w, h);
+  noise(g, w, h, 700, 0.12, ['#ddd6c4', '#ffffff']);
+  g.fillStyle = '#141414'; g.fillRect(0, 0, w, 6); g.fillRect(0, h - 6, w, 6); g.fillRect(0, 0, 7, h); g.fillRect(w - 7, 0, 7, h);
+  g.fillStyle = '#333'; g.fillRect(w - 6, 0, 2, h);
+  for (const ex of [w - 19]) {
+    g.fillStyle = '#7a6a55'; g.beginPath(); g.arc(ex, h * 0.52, 6, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#2b2118'; g.beginPath(); g.arc(ex, h * 0.52, 3.5, 0, Math.PI * 2); g.fill();
+  }
 }, false);
 const texShoji = canvasTex(128, 256, (g, w, h) => {
   g.fillStyle = '#f7f4ea'; g.fillRect(0, 0, w, h);
@@ -223,10 +233,12 @@ function tatamiTex(layout, W, D) {
 // ============================================================
 const mats = {};
 const M = (key, color, extra = {}) => (mats[key] = { mat: new THREE.MeshLambertMaterial({ color, ...extra }), list: [] });
-M('plaster', 0xffffff, { map: texPlaster }); M('siding', 0xffffff, { map: texSiding });
-M('pillar', 0xc9a06a); M('nageshi', 0xbf955f); M('dark', 0x3a2a1c); M('alu', 0xb9bcbe); M('aluDark', 0x6b6e70);
+M('plaster', 0xdccaa5, { map: texPlaster }); M('plasterHall', 0xc4b585, { map: texPlaster });
+M('plasterBlue', 0xa8b7ba, { map: texPlaster }); M('plasterCream', 0xe9dcb4, { map: texPlaster }); M('plasterWhite', 0xeeeae2, { map: texPlaster });
+M('baseboard', 0xa8763f); M('switch', 0xf2f0ea); M('lantern', 0xffe9bf, { map: texShoji, emissive: 0xa87a3a }); M('mat', 0xd9c9b8); M('siding', 0xffffff, { map: texSiding });
+M('pillar', 0xdcb98a); M('nageshi', 0xd3ad7a); M('dark', 0x3a2a1c); M('alu', 0xb9bcbe); M('aluDark', 0x6b6e70);
 M('fusuma', 0xffffff, { map: texFusuma }); M('shoji', 0xffffff, { map: texShoji, emissive: 0x3a3830 });
-M('door', 0xd9c3a0); M('ceilW', 0xffffff, { map: texCeil }); M('ceilWhite', 0xf3f1ea);
+M('door', 0xcfa16c); M('ceilW', 0xffffff, { map: texCeil }); M('ceilWhite', 0xf3f1ea);
 M('step', 0xb68650); M('futon1', 0xf0ece0); M('futon2', 0xd88a8a); M('futon3', 0x7d9cc4); M('case', 0xe8e8e8);
 M('zabuton', 0x8a2e36); M('table', 0x5e3a1e); M('tansu', 0x7a4a26); M('metal', 0x2a2a2a); M('tv', 0x111111);
 M('lampShade', 0xfff8e6, { emissive: 0xbfa880 }); M('toilet', 0xfafafa); M('toiletFloor', 0xe8e2d4);
@@ -282,12 +294,12 @@ for (const w of intWalls) wallLine(w);
 
 // 柱: 壁の端と、襖・戸の両脇
 const pillarPts = new Set();
-const addPillar = (x, z) => { const k = x.toFixed(2) + ',' + z.toFixed(2); if (pillarPts.has(k)) return; pillarPts.add(k); boxB('pillar', x, 0, z, 0.105, CEIL, 0.105); };
+const addPillar = (x, z) => { const k = x.toFixed(2) + ',' + z.toFixed(2); if (pillarPts.has(k)) return; pillarPts.add(k); boxB('pillar', x, 0, z, 0.12, CEIL, 0.12); };
 for (const w of [...extWalls, ...intWalls]) {
   const off = w.out ? -w.out * 0.03 : 0;
   for (const p of [w.a, w.b]) w.o === 'h' ? addPillar(p, w.c + off) : addPillar(w.c + off, p);
 }
-for (const p of openings) if (p.kind !== 'window') for (const e of [p.a, p.b]) p.o === 'h' ? addPillar(e, p.c) : addPillar(p.c, e);
+for (const p of openings) if (p.kind !== 'window' && p.kind !== 'hatch') for (const e of [p.a, p.b]) p.o === 'h' ? addPillar(e, p.c) : addPillar(p.c, e);
 
 // 開口部の建具
 function along(p, t) { return p.o === 'h' ? [t, p.c] : [p.c, t]; }
@@ -299,24 +311,43 @@ function panel(key, p, t0, t1, ya, yb, nOff, th = 0.03) {
 for (const p of openings) {
   const w = p.b - p.a, half = p.a + w / 2;
   // 鴨居・敷居
-  if (p.kind !== 'door') {
-    panel('nageshi', p, p.a, p.b, p.y1 - 0.04, p.y1, 0, 0.11);
+  if (p.kind !== 'door' && p.kind !== 'hatch') {
+    if (!p.woodFrame) panel('nageshi', p, p.a, p.b, p.y1 - 0.04, p.y1, 0, 0.11);
     if (p.y0 < 0.1) panel('nageshi', p, p.a, p.b, 0, 0.015, 0, 0.11);
-    else panel('nageshi', p, p.a, p.b, p.y0 - 0.03, p.y0, p.s * 0.03, 0.17);
+    else if (!p.woodFrame) panel('nageshi', p, p.a, p.b, p.y0 - 0.03, p.y0, p.s * 0.03, 0.17);
   }
   if (p.kind === 'fusuma' || p.kind === 'closet') {
     // 襖2枚を片側に寄せて開けた状態
-    panel('fusuma', p, p.a, half + 0.02, p.y0, p.y1 - 0.04, -0.02);
-    panel('fusuma', p, p.a + 0.01, half + 0.03, p.y0, p.y1 - 0.04, 0.02);
-    const [x0, z0] = along(p, p.a), [x1, z1] = along(p, half);
+    const [k0, k1] = p.stack === 'b' ? [half - 0.03, p.b] : [p.a, half + 0.03];
+    panel('fusuma', p, k0, k1 - 0.01, p.y0, p.y1 - 0.04, -0.02);
+    panel('fusuma', p, k0 + 0.01, k1, p.y0, p.y1 - 0.04, 0.02);
+    const [x0, z0] = along(p, k0), [x1, z1] = along(p, k1);
     addCol(Math.min(x0, x1) - 0.05, Math.min(z0, z1) - 0.05, Math.max(x0, x1) + 0.05, Math.max(z0, z1) + 0.05);
+  } else if (p.kind === 'hatch') {
+    // 低い小扉(閉まっている)
+    panel('pillar', p, p.a - 0.04, p.b + 0.04, p.y1, p.y1 + 0.05, 0, 0.13);
+    for (const e of [p.a, p.b]) panel('pillar', p, e - 0.04, e, 0, p.y1, 0, 0.13);
+    panel('door', p, p.a, p.b, 0.01, p.y1, p.s * 0.02, 0.03);
+    const [hx, hz] = along(p, p.knobAt === 'a' ? p.a + 0.08 : p.b - 0.08);
+    const ky = p.knobY || 0.55;
+    if (p.o === 'h') boxB('metal', hx, ky, hz + p.s * 0.045, 0.03, 0.05, 0.02);
+    else boxB('alu', hx + p.s * 0.05, ky, hz, 0.03, 0.025, 0.11);
+    if (p.win) { const [wx, wz] = along(p, (p.a + p.b) / 2); boxB('switch', wx + (p.o === 'v' ? p.s * 0.02 : 0), 1.5, wz + (p.o === 'h' ? p.s * 0.02 : 0), p.o === 'v' ? 0.04 : 0.12, 0.12, p.o === 'v' ? 0.12 : 0.04); }
+    if (p.win) boxB('mat', p.c + p.s * 0.35, 0, (p.a + p.b) / 2, 0.5, 0.012, 0.6);
+    addCol(...(p.o === 'h' ? [p.a, p.c - 0.1, p.b, p.c + 0.1] : [p.c - 0.1, p.a, p.c + 0.1, p.b]));
   } else if (p.kind === 'door') {
     // 開き戸(90度開いた状態)
     panel('door', p, p.a - 0.02, p.b + 0.02, p.y1, p.y1 + 0.05, 0, 0.12);
     for (const e of [p.a, p.b]) panel('door', p, e - 0.02, e + 0.02, 0, p.y1, 0, 0.12);
     const [hx, hz] = along(p, p.a + 0.03);
     if (p.o === 'h') boxB('door', hx, 0, hz + (p.s * w) / 2, 0.035, p.y1 - 0.02, w - 0.04, true);
-    else boxB('door', hx + (p.s * w) / 2, 0, hz, w - 0.04, p.y1 - 0.02, 0.035, true);
+    else {
+      // トイレの戸: 木目のフラッシュ戸+小さなすりガラス窓+レバー
+      boxB('door', hx + (p.s * w) / 2, 0, hz, w - 0.04, p.y1 - 0.02, 0.035, true);
+      boxB('switch', hx + (p.s * w) / 2 + p.s * 0.12, 1.45, hz, 0.11, 0.11, 0.045);
+      boxB('alu', hx + p.s * (w - 0.1), 0.95, hz + 0.04, 0.1, 0.02, 0.03);
+      boxB('mat', p.c - 0.35, 0, (p.a + p.b) / 2, 0.5, 0.012, 0.6);
+    }
   } else {
     // 窓 / 掃き出し窓: アルミサッシ+ガラス(+障子)
     const sweep = p.kind === 'sweep';
@@ -327,12 +358,18 @@ for (const p of openings) {
       if (p.o === 'v') g.rotateY(Math.PI / 2);
       if (p.o === 'h') g.translate(m, p.y0 + H / 2, p.c + nOff); else g.translate(p.c + nOff, p.y0 + H / 2, m);
       glass.push([g, !!p.frosted]);
-      panel('alu', p, t0, t1, p.y0, p.y0 + 0.035, nOff, 0.04);
-      panel('alu', p, t0, t1, p.y1 - 0.035, p.y1, nOff, 0.04);
-      panel('alu', p, t0, t0 + 0.035, p.y0, p.y1, nOff, 0.04);
-      panel('alu', p, t1 - 0.035, t1, p.y0, p.y1, nOff, 0.04);
+      const fk = p.woodFrame ? 'pillar' : 'alu';
+      panel(fk, p, t0, t1, p.y0, p.y0 + 0.035, nOff, 0.04);
+      panel(fk, p, t0, t1, p.y1 - 0.035, p.y1, nOff, 0.04);
+      panel(fk, p, t0, t0 + 0.035, p.y0, p.y1, nOff, 0.04);
+      panel(fk, p, t1 - 0.035, t1, p.y0, p.y1, nOff, 0.04);
     };
-    if (sweep) { addGlass(g0, g1, -p.s * 0.06); addGlass(g0 + 0.02, g1 + 0.02, -p.s * 0.02); }
+    if (p.woodFrame) {
+      addGlass(p.a, p.b, 0);
+      for (const e of [p.a, p.b]) panel('pillar', p, e - 0.05, e, p.y0 - 0.05, p.y1 + 0.05, p.s * 0.03, 0.06);
+      panel('pillar', p, p.a - 0.05, p.b + 0.05, p.y1, p.y1 + 0.05, p.s * 0.03, 0.06);
+      panel('pillar', p, p.a - 0.05, p.b + 0.05, p.y0 - 0.05, p.y0, p.s * 0.04, 0.1);
+    } else if (sweep) { addGlass(g0, g1, -p.s * 0.06); addGlass(g0 + 0.02, g1 + 0.02, -p.s * 0.02); }
     else { addGlass(p.a, half + 0.02, -p.s * 0.06); addGlass(half - 0.02, p.b, -p.s * 0.02); }
     if (p.shoji || sweep) {
       // 障子は片側に寄せて半分開けておく
@@ -349,10 +386,16 @@ for (const p of openings) {
 // ============================================================
 // 床・天井・部屋ごとの造作
 // ============================================================
-function plane(mat, x0, z0, x1, z1, y, tile = 0, down = false) {
+function plane(mat, x0, z0, x1, z1, y, tile = 0, down = false, swapUV = false) {
   const w = x1 - x0, d = z1 - z0;
   const g = new THREE.PlaneGeometry(w, d);
-  if (tile) { const uv = g.attributes.uv; for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / tile, (uv.getY(i) * d) / tile); }
+  if (tile) {
+    const uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) {
+      const u = (uv.getX(i) * w) / tile, v = (uv.getY(i) * d) / tile;
+      if (swapUV) uv.setXY(i, v, u); else uv.setXY(i, u, v);
+    }
+  }
   g.rotateX(down ? Math.PI / 2 : -Math.PI / 2);
   g.translate((x0 + x1) / 2, y, (z0 + z1) / 2);
   const m = new THREE.Mesh(g, mat);
@@ -360,15 +403,37 @@ function plane(mat, x0, z0, x1, z1, y, tile = 0, down = false) {
   return m;
 }
 const lam = (o) => new THREE.MeshLambertMaterial(o);
-const matFloor = lam({ map: texFloor }), matCeil = lam({ map: texCeil }), matCeilWhite = lam({ color: 0xf3f1ea });
+const matFloor = new THREE.MeshPhongMaterial({ map: texFloor, shininess: 70, specular: 0x3a2a1a });
+const matCeil = lam({ map: texCeil }), matCeilWhite = lam({ color: 0xf3f1ea }), matCeilCloth = lam({ map: texCloth });
+
+// 部屋ごとの壁仕上げ(壁の両面で色を変えるため、部屋側に薄い面を貼る)
+function skinRoom(rm, key, y0 = 0, y1 = CEIL, th = 0.006, extra = 0) {
+  const [x0, z0, x1, z1] = rm.r;
+  const sides = [['h', z0, x0, x1, 1], ['h', z1, x0, x1, -1], ['v', x0, z0, z1, 1], ['v', x1, z0, z1, -1]];
+  for (const [o, c, a, b, inward] of sides) {
+    for (const w of [...extWalls, ...intWalls]) {
+      if (w.o !== o || Math.abs(w.c - c) > 0.01) continue;
+      const s0 = Math.max(a, w.a), s1 = Math.min(b, w.b);
+      if (s1 - s0 < 0.05) continue;
+      const face = w.out ? 0.08 : 0.05;
+      wallLine({ o, c, a: s0 + 0.05, b: s1 - 0.05 }, { key, y0, y1, th, off: inward * (face + th / 2 + extra), ext: 0, collide: false });
+    }
+  }
+}
 
 for (const rm of rooms) {
   const [x0, z0, x1, z1] = rm.r;
   const W = x1 - x0, D = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
   if (rm.type === 'tatami') plane(lam({ map: tatamiTex(rm.layout, W, D) }), x0, z0, x1, z1, 0.0);
-  else if (rm.type === 'hall' || rm.type === 'closet') plane(matFloor, x0, z0, x1, z1, 0.0, 1.6);
+  else if (rm.type === 'hall' || rm.type === 'closet') plane(matFloor, x0, z0, x1, z1, 0.0, 1.6, false, W > D);
   else if (rm.type === 'toilet') plane(lam({ color: 0xe8e2d4 }), x0, z0, x1, z1, 0.0);
-  plane(rm.type === 'tatami' ? matCeil : matCeilWhite, x0, z0, x1, z1, CEIL, rm.type === 'tatami' ? 1.8 : 0, true);
+  const hallLike = rm.type === 'hall' || rm.type === 'stair';
+  plane(rm.type === 'tatami' ? matCeil : hallLike ? matCeilCloth : matCeilWhite, x0, z0, x1, z1, CEIL, rm.type === 'tatami' ? 1.8 : hallLike ? 0.7 : 0, true);
+  if (rm.wall) skinRoom(rm, rm.wall);
+  if (hallLike) {
+    skinRoom(rm, 'nageshi', CEIL - 0.045, CEIL, 0.03);        // 回り縁
+    if (rm.type === 'hall') skinRoom(rm, 'baseboard', 0, 0.06, 0.012, 0.006); // 巾木
+  }
 
   if (rm.type === 'tatami') {
     // 長押と回り縁
@@ -431,13 +496,45 @@ for (let i = 0; i < ST.n; i++) {
   boxB('step', ST.x0 + (i + 0.5) * ST.run, GROUND, (ST.z0 + ST.z1) / 2, ST.run, top - GROUND, ST.z1 - ST.z0);
 }
 // 吹き抜け部分の壁(床下)
-boxB('plaster', (ST.x0 + ST.x1) / 2, GROUND, ST.z0 + 0.02, ST.x1 - ST.x0, -GROUND, 0.04);
-boxB('plaster', (ST.x0 + ST.x1) / 2, GROUND, ST.z1 + 0.02, ST.x1 - ST.x0, -GROUND, 0.04);
-boxB('plaster', ST.x1 - 0.02, GROUND, (ST.z0 + ST.z1) / 2, 0.04, -GROUND, ST.z1 - ST.z0);
+boxB('plasterHall', (ST.x0 + ST.x1) / 2, GROUND, ST.z0 + 0.06, ST.x1 - ST.x0, -GROUND, 0.04);
+boxB('plasterHall', (ST.x0 + ST.x1) / 2, GROUND, ST.z1 + 0.02, ST.x1 - ST.x0, -GROUND, 0.04);
+boxB('plasterHall', ST.x1 - 0.06, GROUND, (ST.z0 + ST.z1) / 2, 0.04, -GROUND, ST.z1 - ST.z0);
 boxB('nageshi', (ST.x0 + ST.x1) / 2, 0, ST.z1, ST.x1 - ST.x0, 0.03, 0.1);
 // 手すり(踊り場側)と壁の手すり
-for (let x = ST.x0 + 0.05; x <= ST.x1; x += 0.12) boxB('pillar', x, 0, ST.z1, 0.025, 0.85, 0.025);
-boxB('pillar', (ST.x0 + ST.x1) / 2, 0.85, ST.z1, ST.x1 - ST.x0, 0.05, 0.06);
+{
+  // ろくろ挽きの手すり子・親柱(写真に合わせた木製の手すり)
+  const prof = [[0.0, 0], [0.024, 0], [0.024, 0.1], [0.016, 0.13], [0.02, 0.2], [0.013, 0.32], [0.017, 0.45], [0.013, 0.6], [0.02, 0.68], [0.016, 0.72], [0.024, 0.75], [0.024, 0.83], [0.0, 0.83]];
+  const lg = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 10);
+  const xs = [];
+  for (let x = ST.x0 + 0.2; x <= ST.x1 - 0.1; x += 0.13) xs.push(x);
+  const im = new THREE.InstancedMesh(lg, mats.pillar.mat, xs.length);
+  const m4 = new THREE.Matrix4();
+  xs.forEach((x, i) => im.setMatrixAt(i, m4.makeTranslation(x, 0.02, ST.z1)));
+  scene.add(im);
+  boxB('pillar', (ST.x0 + ST.x1) / 2, 0.84, ST.z1, ST.x1 - ST.x0, 0.06, 0.07);
+  boxB('pillar', (ST.x0 + ST.x1) / 2, 0, ST.z1, ST.x1 - ST.x0, 0.03, 0.08);
+  // 親柱(上に丸い飾り)
+  const npg = new THREE.LatheGeometry([[0, 0], [0.055, 0], [0.055, 0.1], [0.045, 0.14], [0.045, 0.8], [0.06, 0.84], [0.06, 0.9], [0.035, 0.93], [0.05, 0.98], [0.045, 1.04], [0.02, 1.08], [0, 1.09]].map(([r, y]) => new THREE.Vector2(r, y)), 12);
+  const np = new THREE.Mesh(npg, mats.pillar.mat); np.position.set(ST.x0 + 0.08, 0, ST.z1); scene.add(np);
+  // 階段の側板(白いささら板)
+  const L = Math.hypot(ST.x1 - ST.x0, -GROUND);
+  const sb = new THREE.Mesh(new THREE.BoxGeometry(L, 0.28, 0.02), lam({ color: 0xf2efe6 }));
+  sb.position.set((ST.x0 + ST.x1) / 2, GROUND / 2 + 0.12, ST.z0 + 0.09); sb.rotation.z = -Math.atan2(-GROUND, ST.x1 - ST.x0); scene.add(sb);
+  // 階段の上に下がる角形の和風ペンダント
+  const lx = 5.05, lz = 0.42;
+  boxB('metal', lx, 1.95, lz, 0.008, CEIL - 1.95, 0.008);
+  boxB('lantern', lx, 1.62, lz, 0.26, 0.28, 0.26);
+  for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) boxB('pillar', lx + dx * 0.13, 1.6, lz + dz * 0.13, 0.025, 0.33, 0.025);
+  boxB('pillar', lx, 1.9, lz, 0.32, 0.04, 0.32);
+  boxB('pillar', lx, 1.6, lz, 0.3, 0.02, 0.3);
+  const ll = new THREE.PointLight(0xffd9a0, 1.0, 5, 1.5); ll.position.set(lx, 1.5, lz); scene.add(ll);
+  // 廊下のスイッチ・天井の照明
+  boxB('switch', 3.63 + 0.064, 1.15, 1.12, 0.012, 0.12, 0.07);
+  boxB('switch', 4.45 - 0.064, 1.15, 1.92, 0.012, 0.12, 0.07);
+  boxB('switch', 4.45 - 0.064, 1.15, 3.88, 0.012, 0.12, 0.07);
+  boxB('switch', 6.6, CEIL - 0.04, 1.25, 0.2, 0.04, 0.14);
+  boxB('switch', 4.04, CEIL - 0.04, 3.2, 0.2, 0.04, 0.14);
+}
 addCol(ST.x0, ST.z1 - 0.04, ST.x1, ST.z1 + 0.06);
 {
   const g = new THREE.CylinderGeometry(0.02, 0.02, Math.hypot(ST.x1 - ST.x0, -GROUND), 8);
