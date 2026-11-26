@@ -393,8 +393,9 @@ let camDist = 14, camElev = 52 * Math.PI / 180;
 const ACTOR_SCALE = 1.3;
 const ZOOMS = [7, 10, 14];
 const camTarget = new THREE.Vector3();
+const appEl = $('app');
 function resize() {
-  const w = innerWidth, h = innerHeight;
+  const w = appEl.clientWidth, h = appEl.clientHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
@@ -471,7 +472,7 @@ function genMap(floor) {
 // ゲーム状態
 // ============================================================
 let G = null;
-const ui = { mode: 'title', variant: 0, zoom: 0, invSel: 0, turnOnly: false, mapBig: false };
+const ui = { mode: 'title', variant: 0, zoom: 0, invSel: 0, turnOnly: false, slot: null };
 let level = null; // 現在階の描画オブジェクト
 
 function newItem(type, n) {
@@ -489,7 +490,7 @@ function itemLabel(it) {
   return d.name;
 }
 
-function newGame() {
+function newGame(data) {
   G = {
     floor: 1, turn: 0, over: false,
     p: {
@@ -499,13 +500,21 @@ function newGame() {
     enemies: [], items: [], map: null,
   };
   const p = G.p;
-  const sword = newItem('tabigatana'), hat = newItem('tabigasa');
-  p.inv.push(sword, hat, newItem('onigiri'), newItem('gourd', 3), newItem('herb'));
-  p.weapon = sword; p.hat = hat;
+  if (data) {
+    const s = data.p;
+    Object.assign(p, { hp: s.hp, maxHp: s.maxHp, lv: s.lv, exp: s.exp, baseAtk: s.baseAtk, hunger: s.hunger, gold: s.gold, kills: s.kills });
+    p.inv = s.inv.filter(i => ITEMS[i.type]).map(i => ({ type: i.type, n: i.n }));
+    p.weapon = p.inv[s.weapon] || null; p.hat = p.inv[s.hat] || null;
+    G.turn = data.turn;
+  } else {
+    const sword = newItem('tabigatana'), hat = newItem('tabigasa');
+    p.inv.push(sword, hat, newItem('onigiri'), newItem('gourd', 3), newItem('herb'));
+    p.weapon = sword; p.hat = hat;
+  }
   logClear();
   if (!playerObj) { playerObj = withShadow(buildPlayerMesh(VARIANTS[ui.variant]), 0.85); scene.add(playerObj); }
-  enterFloor(1, true);
-  log('名もなき冒険者は、妖怪迷宮へ足を踏み入れた。', 'sys');
+  enterFloor(data ? data.floor : 1, true);
+  log(data ? `${G.floor}F のはじめから旅を再開した。` : '名もなき冒険者は、妖怪迷宮へ足を踏み入れた。', 'sys');
 }
 
 const pAtk = () => G.p.baseAtk + G.p.lv - 1 + (G.p.weapon ? ITEMS[G.p.weapon.type].atk : 0);
@@ -625,6 +634,7 @@ function enterFloor(floor, first) {
   refreshLevel();
   snapCamera();
   updateHud();
+  saveGame();
   showFloorBanner(floor, theme.name, first);
 }
 
@@ -746,7 +756,7 @@ const pops = [];
 function popup(x, y, text, cls) {
   const el = document.createElement('div');
   el.className = 'pop ' + (cls || ''); el.textContent = text;
-  document.body.appendChild(el);
+  appEl.appendChild(el);
   pops.push({ el, x, y, t: 0 });
 }
 const _pv = new THREE.Vector3();
@@ -754,8 +764,8 @@ function updatePops(dt) {
   for (let i = pops.length - 1; i >= 0; i--) {
     const p = pops[i]; p.t += dt;
     _pv.set(p.x, 1.3 + p.t * 0.8, p.y).project(camera);
-    p.el.style.left = ((_pv.x + 1) / 2 * innerWidth) + 'px';
-    p.el.style.top = ((1 - _pv.y) / 2 * innerHeight) + 'px';
+    p.el.style.left = ((_pv.x + 1) / 2 * appEl.clientWidth) + 'px';
+    p.el.style.top = ((1 - _pv.y) / 2 * appEl.clientHeight) + 'px';
     p.el.style.opacity = String(clamp(1.6 - p.t * 1.6, 0, 1));
     if (p.t > 1) { p.el.remove(); pops.splice(i, 1); }
   }
@@ -806,12 +816,12 @@ function renderLog() {
 const faceCtx = $('face').getContext('2d');
 let faceExpr = 0, faceTimer = 0;
 function setFace(e, dur = 1.0) { faceExpr = e; faceTimer = dur; drawFace(); }
-function drawFace() {
-  const c = faceCtx, P = (x, y, w, h, col) => { c.fillStyle = col; c.fillRect(x, y, w, h); };
+function drawFace(c = faceCtx, forceExpr) {
+  const P = (x, y, w, h, col) => { c.fillStyle = col; c.fillRect(x, y, w, h); };
   const H = '#1d1a27', SK = '#f1c08c', SKS = '#d99d68', K = '#141018', R = '#c0362c', W = '#ffffff';
   const coat = VARIANTS[ui.variant].coat;
-  let e = faceExpr;
-  if (e === 0 && G && G.p.hp <= G.p.maxHp * 0.3) e = 3;
+  let e = forceExpr ?? faceExpr;
+  if (forceExpr == null && e === 0 && G && G.p.hp <= G.p.maxHp * 0.3) e = 3;
   P(0, 0, 16, 16, '#2a2433');
   P(1, 1, 14, 10, H); P(2, 0, 3, 2, H); P(7, 0, 3, 1, H); P(11, 0, 3, 2, H);
   P(13, 1, 2, 2, R);
@@ -859,7 +869,7 @@ function updateHud() {
   bf.firstChild.textContent = onStairs ? '降りる' : feetItem ? '拾う' : '足元';
   bf.classList.toggle('hot', !!(onStairs || feetItem));
   const hasShuriken = p.inv.some(i => i.type === 'shuriken');
-  $('bThrow').style.opacity = hasShuriken ? 1 : 0.45;
+  $('bThrow').classList.toggle('off', !hasShuriken);
   drawMap();
   drawFace();
 }
@@ -1096,12 +1106,12 @@ function die(reason) {
   updateHud();
   setFace(1, 99);
   log('冒険者は力尽きた……。', 'dmg');
-  saveBest(false);
+  saveBest(false); clearSlot();
   setTimeout(() => showResult(false, reason), 1100);
 }
 function gameClear() {
   G.over = true;
-  saveBest(true);
+  saveBest(true); clearSlot();
   updateHud();
   setTimeout(() => showResult(true), 900);
 }
@@ -1265,15 +1275,102 @@ function dropItem(i) {
 }
 
 // ============================================================
-// 道具UI
+// 画面遷移(すべて iPhone 縦画面基準)
+// title → slots → play ⇄ items / equip → over
 // ============================================================
-function openInv() {
-  if (G.over || ui.mode !== 'play') return;
-  ui.mode = 'inv'; ui.invSel = clamp(ui.invSel, 0, Math.max(0, G.p.inv.length - 1));
-  $('inv').classList.add('show');
-  renderInv();
+const SCREENS = ['s-title', 's-slots', 's-items', 's-equip', 's-over'];
+function showScreen(id) {
+  for (const s of SCREENS) $(s).classList.toggle('show', s === id);
+  $('dungeon').classList.toggle('show', !id || id === 's-items' || id === 's-equip');
+  if (id !== null) $('map').classList.remove('big');
 }
-function closeInv() { $('inv').classList.remove('show'); if (ui.mode === 'inv') ui.mode = 'play'; }
+
+// ---------------- 確認ダイアログ ----------------
+let confirmCb = null;
+function askConfirm(msg, yesLabel, cb) {
+  $('confirmMsg').textContent = msg; $('confirmYes').textContent = yesLabel || 'はい';
+  confirmCb = cb; $('confirm').classList.add('show');
+}
+function closeConfirm(ok) {
+  $('confirm').classList.remove('show');
+  const cb = confirmCb; confirmCb = null;
+  if (ok && cb) cb();
+}
+$('confirmYes').onclick = () => closeConfirm(true);
+$('confirmNo').onclick = () => closeConfirm(false);
+
+// ---------------- セーブデータ(3枠・階に着いたときに自動記録) ----------------
+const SAVE_KEY = 'yokaiLabyrinthSlots';
+const SLOT_NAMES = ['壱', '弐', '参'];
+function loadSlots() {
+  try { const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); if (Array.isArray(s) && s.length === 3) return s; } catch (e) { /* 読めなければ空 */ }
+  return [null, null, null];
+}
+function writeSlots(s) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(s)); } catch (e) { /* 保存不可でも続行 */ } }
+function saveGame() {
+  if (ui.slot == null || !G || G.over) return;
+  const p = G.p, s = loadSlots();
+  s[ui.slot] = {
+    v: 1, floor: G.floor, turn: G.turn, variant: ui.variant, time: Date.now(),
+    p: {
+      hp: p.hp, maxHp: p.maxHp, lv: p.lv, exp: p.exp, baseAtk: p.baseAtk, hunger: p.hunger, gold: p.gold, kills: p.kills,
+      inv: p.inv.map(i => ({ type: i.type, n: i.n })), weapon: p.inv.indexOf(p.weapon), hat: p.inv.indexOf(p.hat),
+    },
+  };
+  writeSlots(s);
+}
+function clearSlot() { if (ui.slot == null) return; const s = loadSlots(); s[ui.slot] = null; writeSlots(s); }
+
+function fmtDate(t) { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; }
+let slotMode = 'new';
+function openSlots(mode) {
+  slotMode = mode; ui.mode = 'slots';
+  $('slotsTitle').textContent = mode === 'new' ? '記録する枠を選ぶ' : '続きから遊ぶ記録';
+  $('slotNote').innerHTML = mode === 'new'
+    ? '階に着くたびに、選んだ枠へ自動で記録されます。<br>力尽きると、その枠の記録は消えます。'
+    : '記録した階のはじめから再開します。';
+  renderSlots();
+  showScreen('s-slots');
+}
+function renderSlots() {
+  const s = loadSlots(), box = $('slotList');
+  box.innerHTML = '';
+  s.forEach((d, i) => {
+    const b = document.createElement('button');
+    b.className = 'slot' + (d ? '' : ' empty');
+    const v = d ? VARIANTS[d.variant] || VARIANTS[0] : null;
+    b.innerHTML = `<div class="no mincho">${SLOT_NAMES[i]}</div><div class="body">` + (d
+      ? `<div class="t1"><span class="chip" style="background:${v.coat}"></span>${d.floor}F ${themeFor(d.floor).name}</div>
+         <div class="t2">Lv ${d.p.lv} ・ HP ${d.p.hp}/${d.p.maxHp} ・ ${d.p.gold}銭</div>
+         <div class="t3">${d.turn} ターン ・ ${fmtDate(d.time)}</div>`
+      : `<div class="t1">空き</div><div class="t2">${slotMode === 'new' ? 'ここから新しい旅を始める' : '記録なし'}</div>`) + '</div>';
+    if (slotMode === 'load' && !d) b.disabled = true;
+    b.onclick = () => {
+      if (slotMode === 'load') { ui.slot = i; startGame(d); return; }
+      if (d) askConfirm(`${SLOT_NAMES[i]}の記録(${d.floor}F・Lv ${d.p.lv})を消して、新しい旅を始めますか？`, '上書きする', () => { ui.slot = i; startGame(null); });
+      else { ui.slot = i; startGame(null); }
+    };
+    box.appendChild(b);
+  });
+}
+$('slotsBack').onclick = () => enterTitle();
+
+function startGame(data) {
+  sfx('step');
+  if (data) ui.variant = data.variant ?? 0;
+  if (titleObj) { scene.remove(titleObj); titleObj = null; }
+  ui.mode = 'play';
+  showScreen(null);
+  newGame(data);
+}
+
+// ---------------- アイテム画面 ----------------
+function openInv() {
+  if (!G || G.over || ui.mode !== 'play') return;
+  ui.mode = 'inv'; ui.invSel = clamp(ui.invSel, 0, Math.max(0, G.p.inv.length - 1));
+  renderInv(); showScreen('s-items');
+}
+function closeInv() { if (ui.mode === 'inv') { ui.mode = 'play'; showScreen(null); } }
 function invActions(it) {
   const d = ITEMS[it.type], p = G.p;
   const acts = [];
@@ -1289,38 +1386,79 @@ function renderInv() {
   const p = G.p, ul = $('invList');
   $('invCount').textContent = `${p.inv.length}/${INV_MAX}`;
   ul.innerHTML = '';
-  if (!p.inv.length) { ul.innerHTML = '<li class="empty">何も持っていない</li>'; }
+  if (!p.inv.length) ul.innerHTML = '<li class="empty">何も持っていない</li>';
   p.inv.forEach((it, i) => {
     const li = document.createElement('li');
     li.className = i === ui.invSel ? 'sel' : '';
     const eq = p.weapon === it || p.hat === it;
-    li.innerHTML = `<span class="ic">${ITEMS[it.type].icon}</span><span>${itemLabel(it)}</span>${eq ? '<span class="eq">装</span>' : ''}`;
+    li.innerHTML = `<span class="ic">${ITEMS[it.type].icon}</span><span class="nm">${itemLabel(it)}</span>${eq ? '<span class="tag">装</span>' : ''}`;
     li.onclick = () => { ui.invSel = i; renderInv(); };
     ul.appendChild(li);
   });
   const it = p.inv[ui.invSel];
+  $('invName').textContent = it ? itemLabel(it) : '';
   $('invDesc').textContent = it ? ITEMS[it.type].desc || '' : '';
   const box = $('invActs'); box.innerHTML = '';
   if (it) invActions(it).forEach(([label, a], k) => {
-    const b = document.createElement('button'); b.textContent = label; if (k === 0) b.className = 'pri';
+    const b = document.createElement('button'); b.className = 'btn' + (k === 0 ? ' pri' : ''); b.textContent = label;
     b.onclick = () => doInvAction(a); box.appendChild(b);
   });
-  const c = document.createElement('button'); c.textContent = '閉じる'; c.onclick = closeInv; box.appendChild(c);
+  else { const n = document.createElement('div'); n.className = 'note'; n.textContent = '道具は迷宮のあちこちに落ちている。'; box.appendChild(n); }
 }
 function doInvAction(a) {
   const i = ui.invSel;
   if (!G.p.inv[i]) return;
-  let r;
-  if (a === 'use') r = useItem(i);
-  else r = dropItem(i);
+  const r = a === 'use' ? useItem(i) : dropItem(i);
   if (r === 'done') return;
   closeInv();
   if (r) endTurn();
 }
+$('itemsBack').onclick = closeInv;
 
-// ============================================================
-// 結果画面・記録
-// ============================================================
+// ---------------- 装備画面 ----------------
+let equipChanged = false;
+function openEquip() {
+  if (!G || G.over || ui.mode !== 'play') return;
+  ui.mode = 'equip'; equipChanged = false;
+  renderEquip(); showScreen('s-equip');
+}
+function closeEquip() {
+  if (ui.mode !== 'equip') return;
+  ui.mode = 'play'; showScreen(null);
+  if (equipChanged) endTurn(); else updateHud();
+}
+function renderEquip() {
+  const p = G.p;
+  const W = p.weapon && ITEMS[p.weapon.type], H = p.hat && ITEMS[p.hat.type];
+  $('eqW').textContent = W ? W.name : 'なし'; $('eqWn').textContent = W ? `攻撃 +${W.atk}` : '';
+  $('eqH').textContent = H ? H.name : 'なし'; $('eqHn').textContent = H ? `防御 +${H.def}` : '';
+  $('eqAtk').textContent = pAtk(); $('eqDef').textContent = pDef(); $('eqLv').textContent = p.lv;
+  const fill = (ul, kind, slot, stat) => {
+    ul.innerHTML = '';
+    const list = p.inv.filter(it => ITEMS[it.type].kind === kind);
+    if (!list.length) { ul.innerHTML = '<li class="empty">持っていない</li>'; return; }
+    const cur = p[slot] ? ITEMS[p[slot].type][stat] : 0;
+    for (const it of list) {
+      const d = ITEMS[it.type], on = p[slot] === it, diff = d[stat] - cur;
+      const li = document.createElement('li');
+      li.className = on ? 'sel' : '';
+      li.innerHTML = `<span class="ic">${d.icon}</span><span class="nm">${d.name}</span>` +
+        (on ? '<span class="tag">装備中</span>' : `<span class="val ${diff > 0 ? 'up' : diff < 0 ? 'down' : ''}">${stat === 'atk' ? '攻' : '防'} ${diff >= 0 ? '+' : ''}${diff}</span>`);
+      li.onclick = () => {
+        p[slot] = on ? null : it; equipChanged = true;
+        log(on ? `${d.name}を外した。` : `${d.name}を装備した。`, on ? '' : 'good');
+        if (!on) setFace(3, 0.6);
+        renderEquip();
+      };
+      ul.appendChild(li);
+    }
+  };
+  fill($('eqListW'), 'weapon', 'weapon', 'atk');
+  fill($('eqListH'), 'hat', 'hat', 'def');
+}
+$('equipBack').onclick = closeEquip;
+
+// ---------------- ゲームオーバー / 踏破 ----------------
 function loadBest() { try { return JSON.parse(localStorage.getItem('yokaiLabyrinthBest') || 'null'); } catch (e) { return null; } }
 function saveBest(cleared) {
   try {
@@ -1332,21 +1470,34 @@ function saveBest(cleared) {
 }
 function showBest() {
   const b = loadBest();
-  $('best').textContent = b ? `最高到達: ${b.floor}F${b.cleared ? ` ・ 踏破 ${b.cleared} 回` : ''}` : '';
+  $('best').textContent = b ? `最高到達 ${b.floor}F${b.cleared ? ` ・ 踏破 ${b.cleared} 回` : ''}` : '';
 }
 function showResult(cleared, reason) {
-  ui.mode = 'result';
+  ui.mode = 'over';
   const p = G.p;
-  $('resTitle').innerHTML = cleared ? '<span class="brush" style="font-size:22px">迷宮踏破</span>' : '<span class="brush" style="font-size:22px;background:#c9c0b0">旅の終わり</span>';
-  $('resBody').innerHTML = cleared
-    ? `名もなき冒険者は「龍の宝玉」を手に、迷宮をあとにした。<br>Lv ${p.lv} ・ 退治した妖怪 ${p.kills} ・ ${p.gold}銭<br>${G.turn} ターン`
-    : `${G.floor}F で${reason}。<br>Lv ${p.lv} ・ 退治した妖怪 ${p.kills} ・ ${p.gold}銭<br>${G.turn} ターン`;
-  $('result').classList.add('show');
+  $('s-over').classList.toggle('clear', cleared);
+  $('overTitle').textContent = cleared ? '迷宮踏破' : '旅の終わり';
+  $('overTitle').style.background = cleared ? '#f0d890' : '#c9c0b0';
+  drawFace($('overFace').getContext('2d'), cleared ? 2 : 1);
+  $('overReason').innerHTML = cleared
+    ? '名もなき冒険者は「龍の宝玉」を手に、<br>迷宮をあとにした。'
+    : `${G.floor}F ${themeFor(G.floor).name}にて、<br>${reason}。`;
+  const rows = [['到達', `${G.floor}F`], ['レベル', `Lv ${p.lv}`], ['退治した妖怪', `${p.kills}`], ['銭', `${p.gold}`], ['ターン', `${G.turn}`]];
+  $('overRec').innerHTML = rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  showScreen('s-over');
+}
+$('bOverTitle').onclick = () => enterTitle();
+$('bOverNew').onclick = () => { enterTitle(); openSlots('new'); };
+
+// ---------------- 中断 ----------------
+function quitToTitle() {
+  if (!G || G.over || ui.mode !== 'play') return;
+  askConfirm(ui.slot != null
+    ? `中断してタイトルに戻りますか？\n「つづきから」で ${G.floor}F のはじめから再開できます。`
+    : '中断してタイトルに戻りますか？', '中断する', () => enterTitle());
 }
 
-// ============================================================
-// タイトル
-// ============================================================
+// ---------------- タイトル ----------------
 let titleObj = null;
 function buildSwatches() {
   const box = $('swatches'); box.innerHTML = '';
@@ -1361,35 +1512,31 @@ function buildSwatches() {
 function setTitleModel() {
   if (titleObj) { scene.remove(titleObj); titleObj.userData.body.children[0].geometry.dispose(); }
   titleObj = withShadow(buildPlayerMesh(VARIANTS[ui.variant]), 1.0, 1);
-  titleObj.position.set(0, 0, 0);
   scene.add(titleObj);
 }
 function enterTitle() {
   ui.mode = 'title';
-  $('title').classList.add('show');
-  $('hud').style.display = 'none'; $('controls').style.display = 'none';
+  $('confirm').classList.remove('show');
   logClear();
   if (level) { scene.remove(level.group); level = null; }
   if (playerObj) { scene.remove(playerObj); playerObj.userData.body.children[0].geometry.dispose(); playerObj = null; }
+  for (const pr of projectiles) scene.remove(pr.m);
+  projectiles.length = 0;
+  G = null;
   scene.background.set('#1a1622'); scene.fog.color.set('#1a1622');
   lantern.color.setHex(0xffc880);
   buildSwatches(); setTitleModel(); showBest();
+  $('bCont').disabled = !loadSlots().some(Boolean);
+  showScreen('s-title');
 }
-$('bStart').onclick = () => {
-  sfx('step');
-  if (titleObj) { scene.remove(titleObj); titleObj = null; }
-  $('title').classList.remove('show');
-  $('hud').style.display = ''; $('controls').style.display = '';
-  ui.mode = 'play';
-  newGame();
-};
-$('bAgain').onclick = () => { $('result').classList.remove('show'); enterTitle(); };
+$('bNew').onclick = () => openSlots('new');
+$('bCont').onclick = () => openSlots('load');
 
 // ============================================================
-// 入力
+// 入力(画面のボタンが基本。PCのキーボードは開発・確認用)
 // ============================================================
 function tryAction(fn) {
-  if (ui.mode !== 'play' || !G || G.over || busy()) return false;
+  if (ui.mode !== 'play' || !G || G.over || busy() || $('confirm').classList.contains('show')) return false;
   fn(); return true;
 }
 const KEYDIR = {
@@ -1402,13 +1549,22 @@ const KEYDIR = {
   KeyZ: 5, Numpad1: 5, End: 5, KeyB: 5,
   KeyQ: 7, Numpad7: 7, Home: 7, KeyY: 7,
 };
-const held = new Set();
 addEventListener('keydown', ev => {
-  if (ui.mode === 'title') { if (ev.code === 'Enter' || ev.code === 'Space') $('bStart').click(); return; }
-  if (ui.mode === 'result') { if (ev.code === 'Enter') $('bAgain').click(); return; }
+  if ($('confirm').classList.contains('show')) {
+    if (ev.code === 'Enter') closeConfirm(true); else if (ev.code === 'Escape') closeConfirm(false);
+    ev.preventDefault(); return;
+  }
+  if (ui.mode === 'title') { if (ev.code === 'Enter' || ev.code === 'Space') $('bNew').click(); return; }
+  if (ui.mode === 'slots') {
+    if (ev.code === 'Escape') enterTitle();
+    const n = ['Digit1', 'Digit2', 'Digit3'].indexOf(ev.code); if (n >= 0) $('slotList').children[n]?.click();
+    return;
+  }
+  if (ui.mode === 'over') { if (ev.code === 'Enter') $('bOverTitle').click(); return; }
+  if (ui.mode === 'equip') { if (ev.code === 'Escape' || ev.code === 'KeyR') closeEquip(); return; }
   if (ui.mode === 'inv') {
     const n = G.p.inv.length;
-    if (ev.code === 'Escape' || ev.code === 'KeyI' || ev.code === 'Tab') { closeInv(); ev.preventDefault(); }
+    if (ev.code === 'Escape' || ev.code === 'KeyI' || ev.code === 'Tab') closeInv();
     else if (ev.code === 'ArrowUp' || ev.code === 'KeyW') { ui.invSel = (ui.invSel - 1 + n) % Math.max(1, n); renderInv(); }
     else if (ev.code === 'ArrowDown' || ev.code === 'KeyS') { ui.invSel = (ui.invSel + 1) % Math.max(1, n); renderInv(); }
     else if (ev.code === 'Enter' || ev.code === 'Space') { if (n) doInvAction('use'); }
@@ -1416,12 +1572,11 @@ addEventListener('keydown', ev => {
     ev.preventDefault();
     return;
   }
+  if (ui.mode !== 'play') return;
   if (ev.code === 'KeyM') { toggleMap(); return; }
   if (ev.code === 'KeyV') { cycleZoom(); return; }
-  if (ui.mode !== 'play') return;
   if (ev.code in KEYDIR) {
     ev.preventDefault();
-    held.add(ev.code);
     const dir = KEYDIR[ev.code];
     if (ev.shiftKey) { ui.turnOnly = true; playerMove(dir); ui.turnOnly = false; return; }
     tryAction(() => playerMove(dir));
@@ -1429,17 +1584,18 @@ addEventListener('keydown', ev => {
   }
   if (ev.code === 'Space' || ev.code === 'Period' || ev.code === 'Numpad5') { ev.preventDefault(); tryAction(actWait); }
   else if (ev.code === 'KeyI' || ev.code === 'Tab') { ev.preventDefault(); openInv(); }
+  else if (ev.code === 'KeyR') openEquip();
   else if (ev.code === 'Enter' || ev.code === 'KeyG') { ev.preventDefault(); tryAction(actFeet); }
-  else if (ev.code === 'KeyT' || ev.code === 'KeyF') { tryAction(() => actThrow()); }
+  else if (ev.code === 'KeyT' || ev.code === 'KeyF') tryAction(() => actThrow());
+  else if (ev.code === 'Escape') quitToTitle();
 });
-addEventListener('keyup', ev => held.delete(ev.code));
 
-// 画面の十字ボタン(押しっぱなしで連続移動)
+// 十字ボタン(押しっぱなしで連続移動)
 let padHold = null;
 function padRepeat() {
   if (!padHold) return;
   if (interrupt) { interrupt = false; padHold.stopped = true; return; }
-  if (!padHold.stopped && tryAction(padHold.fn)) { padHold.count++; }
+  if (!padHold.stopped && tryAction(padHold.fn)) padHold.count++;
   padHold.timer = setTimeout(padRepeat, padHold.count <= 1 ? 260 : 60);
 }
 function bindHold(btn, fn) {
@@ -1463,12 +1619,13 @@ document.querySelectorAll('#pad button[data-d]').forEach(b => {
 bindHold($('bWait'), actWait);
 const tap = (el, fn) => el.addEventListener('pointerdown', ev => { ev.preventDefault(); fn(); });
 tap($('bInv'), openInv);
+tap($('bEquip'), openEquip);
 tap($('bThrow'), () => tryAction(() => actThrow()));
 tap($('bFeet'), () => tryAction(actFeet));
 tap($('bView'), cycleZoom);
+tap($('bQuit'), quitToTitle);
 tap($('map'), toggleMap);
-$('inv').addEventListener('pointerdown', ev => { if (ev.target === $('inv')) closeInv(); });
-function toggleMap() { if (ui.mode === 'title') return; $('map').classList.toggle('big'); }
+function toggleMap() { if (ui.mode === 'play') $('map').classList.toggle('big'); }
 function cycleZoom() { ui.zoom = (ui.zoom + 1) % ZOOMS.length; }
 
 // ============================================================
@@ -1481,9 +1638,9 @@ function snapCamera() {
 const portraitShift = () => camera.aspect < 1 ? 1.4 : 0.4;
 function updateCamera(dt) {
   if (ui.mode === 'title' || !playerObj) {
-    const d = camera.aspect < 1 ? 6.4 : 4.6;
+    const d = 6.6;
     camera.position.set(Math.sin(0.25) * d, 1.5, Math.cos(0.25) * d);
-    camera.lookAt(0, camera.aspect < 1 ? 0.75 : 0.62, 0);
+    camera.lookAt(0, 0.42, 0);
     scene.fog.near = 30; scene.fog.far = 60;
     lantern.position.set(1.5, 2.5, 2.5);
     sun.position.set(-3, 6, 5); sun.target.position.set(0, 0, 0);
