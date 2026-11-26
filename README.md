@@ -37,6 +37,7 @@
 - [vr-missions-boxer](games/vr-missions-boxer) — VR MISSIONS 3D // SNEAKING の自機をボクサーのモデルに置き換えた版(構え・歩き・パンチのモーション付き)
 - [school-walk-3d](games/school-walk-3d) — Three.js製、手描きの間取り図をもとにした学校(1階)を一人称視点で歩けるスマホ縦画面向けウォークスルー
 - [japanese-house-walk-3d](games/japanese-house-walk-3d) — Three.js製、設計図をもとにした和室の家(2階)を一人称視点で歩けるスマホ縦画面向けウォークスルー
+- [yokai-labyrinth-3d](games/yokai-labyrinth-3d) — Three.js製、ボクセルの「旅の冒険者」で妖怪の迷宮を地下10階まで潜る和風ターン制ローグライク
 
 ## 公開ページ
 
