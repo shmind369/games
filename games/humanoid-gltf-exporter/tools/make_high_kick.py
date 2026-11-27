@@ -35,10 +35,6 @@ def slerp(a, b, t):
 # Model faces +Z, its left side is +X. Hips +Y turns the body to the left.
 K = [
  (0,  {}),
- # weight shift onto the left leg, start lifting the right knee
- (5,  {'Hips': (0, 0, 4), 'Spine': (6, 0, -3),
-       'RightUpperLeg': (-55, 0, -15), 'RightLowerLeg': (100, 0, 0), 'RightFoot': (25, 0, 0),
-       'LeftUpperLeg': (-25, -5, 4), 'LeftLowerLeg': (35, 0, 0)}),
  # chamber: knee up high in front, hips start opening
  (10, {'Hips': (0, 40, -12), 'Spine': (0, 0, -8), 'Chest': (0, 5, -6), 'Head': (0, -35, 18),
        'RightUpperLeg': (-100, 0, -40), 'RightLowerLeg': (125, 0, 0), 'RightFoot': (35, 0, 0),
@@ -74,7 +70,6 @@ K = [
        'LeftUpperLeg': (-28, -5, 6), 'LeftLowerLeg': (40, 0, 0)}),
  # back to stance
  (40, {}),
- (50, {}),
 ]
 TOTAL = K[-1][0]
 
@@ -88,6 +83,8 @@ KP = [(f, full_pose(o)) for f, o in K]
 def ease(t):  # smooth in/out
     return t*t*(3-2*t)
 
+# 書き出すのはキーフレームの時点だけ(エディタ同様、間は線形補間で再生される)
+KEYS = [f for f, _ in K]
 frames = []
 for f in range(TOTAL+1):
     for i in range(len(KP)-1):
@@ -130,7 +127,7 @@ r = lambda v: [round(float(x), 5) for x in v]
 out = {'formatVersion': 1, 'type': 'humanoid-pose-animation', 'name': 'rightHighKick',
        'fps': FPS, 'totalFrames': TOTAL, 'durationSeconds': round(TOTAL/FPS, 5), 'boneNames': BONES,
        'keyframes': [{'frame': f, 'time': round(f/FPS, 5), 'pose': {b: r(frames[f][b]) for b in BONES},
-                      'modelPosition': r(mpos[f])} for f in range(TOTAL+1)]}
+                      'modelPosition': r(mpos[f])} for f in KEYS]}
 json.dump(out, open(OUT_JSON, 'w'), indent=2)
 
 # ---- embed glTF animation
@@ -142,17 +139,17 @@ def add(data, comp, typ, count, mn=None, mx=None):
     acc = {'bufferView': len(gj['bufferViews'])-1, 'componentType': 5126, 'count': count, 'type': typ}
     if mn is not None: acc['min'] = mn; acc['max'] = mx
     gj['accessors'].append(acc); return len(gj['accessors'])-1
-times = np.arange(TOTAL+1, dtype=np.float32)/FPS
+times = np.array(KEYS, dtype=np.float32)/FPS
 tacc = add(times.tobytes(), 5126, 'SCALAR', len(times), [0.0], [float(times[-1])])
 samplers, channels = [], []
 for b in BONES:
-    arr = np.array([frames[f][b] for f in range(TOTAL+1)], np.float32)
+    arr = np.array([frames[f][b] for f in KEYS], np.float32)
     for f in range(1, len(arr)):  # keep hemisphere continuity
         if np.dot(arr[f], arr[f-1]) < 0: arr[f] = -arr[f]
     a = add(arr.tobytes(), 5126, 'VEC4', len(arr))
     samplers.append({'input': tacc, 'output': a, 'interpolation': 'LINEAR'})
     channels.append({'sampler': len(samplers)-1, 'target': {'node': name2idx[b], 'path': 'rotation'}})
-tr = np.array([HIPS_REST + m for m in mpos], np.float32)
+tr = np.array([HIPS_REST + mpos[f] for f in KEYS], np.float32)
 a = add(tr.tobytes(), 5126, 'VEC3', len(tr))
 samplers.append({'input': tacc, 'output': a, 'interpolation': 'LINEAR'})
 channels.append({'sampler': len(samplers)-1, 'target': {'node': name2idx['Hips'], 'path': 'translation'}})
@@ -167,4 +164,4 @@ with open(OUT_GLB, 'wb') as fo:
     fo.write(struct.pack('<II', len(js), 0x4E4F534A)); fo.write(js)
     fo.write(struct.pack('<II', len(binchunk), 0x004E4942)); fo.write(binchunk)
 rf = world(frames[16], 'RightFoot') + mpos[16]
-print('frames', TOTAL+1, 'impact right foot world', rf.round(3), 'head', (world(frames[16], 'Head')+mpos[16]).round(3))
+print('keyframes', KEYS, 'impact right foot world', rf.round(3), 'head', (world(frames[16], 'Head')+mpos[16]).round(3))
