@@ -1902,6 +1902,103 @@ function importAnimationJSON(json) {
   }
 }
 
+// ---------- GLBのアニメーション(glTF animations)をモーションとして読み込む ----------
+// GLB/glTFに含まれるアニメーションクリップを、このアプリのモーション形式
+// ({ time, pose: {[ボーン名]:[x,y,z,w]}, modelPosition })へ変換する。
+// 補間方式(LINEAR/STEP/CUBICSPLINE)に依存しないよう、AnimationMixerで
+// 実際に再生して30fpsの各フレームで全ボーンの回転を読み取り、毎フレームを
+// キーフレームにする。
+// - 対象ノード: GLBのボーン(skinのjoint)と、現在のモデルと同名のノード
+// - ルートのボーン(親がボーンでないもの)は、モデル読み込み時と同じく
+//   アーマチュア等の親の変換を含めたワールド回転に直す
+//   (loadModelFromGLTFSceneがルートボーンをワールド変換を保ったまま付け替えるため)
+// - ルートのボーンの移動(Hipsのtranslationなど)は、レスト位置からの差分を
+//   modelPosition(MOVE)として取り込む。移動しないクリップではMOVEは付けない
+// - タイムラインは固定長(TOTAL_FRAMES)なので、それより長いクリップは先頭から
+//   タイムラインの長さ分だけを取り込む
+function animationsFromGLTF(gltf, fallbackName) {
+  const clips = gltf.animations || [];
+  const sceneRoot = gltf.scene;
+  sceneRoot.updateMatrixWorld(true);
+  const nodes = [];
+  sceneRoot.traverse((o) => {
+    if (o === sceneRoot || !o.name) return;
+    if (o.isBone || boneNameToBone[o.name]) nodes.push(o);
+  });
+  const nodeSet = new Set(nodes);
+  const isRootNode = (o) => !(o.parent && nodeSet.has(o.parent));
+  const rootNodes = nodes.filter(isRootNode);
+  const restWorldPos = new Map(rootNodes.map((o) => [o, o.getWorldPosition(new THREE.Vector3())]));
+  const maxTime = TOTAL_FRAMES / FPS;
+  const result = [];
+  const usedNames = new Set();
+  const tmpQ = new THREE.Quaternion();
+  const tmpV = new THREE.Vector3();
+
+  clips.forEach((clip, clipIdx) => {
+    const mixer = new THREE.AnimationMixer(sceneRoot);
+    const action = mixer.clipAction(clip);
+    action.play();
+    const duration = Math.min(clip.duration, maxTime);
+    const lastFrame = Math.max(0, Math.round(duration * FPS));
+    // ルートボーンにposition(translation)トラックがある場合だけMOVEを作る
+    const movingRoots = rootNodes.filter((o) =>
+      clip.tracks.some((t) => t.name === `${o.name}.position` || t.name.endsWith(`[${o.name}].position`)));
+    const moveRoot = movingRoots[0] || null;
+    const keyframes = [];
+    for (let f = 0; f <= lastFrame; f++) {
+      const time = f / FPS;
+      mixer.setTime(time);
+      sceneRoot.updateMatrixWorld(true);
+      const pose = {};
+      for (const o of nodes) {
+        const q = isRootNode(o) ? o.getWorldQuaternion(tmpQ) : o.quaternion;
+        pose[o.name] = [q.x, q.y, q.z, q.w];
+      }
+      let modelPosition = null;
+      if (moveRoot) {
+        moveRoot.getWorldPosition(tmpV).sub(restWorldPos.get(moveRoot));
+        modelPosition = tmpV.toArray();
+      }
+      keyframes.push({ time, pose, modelPosition });
+    }
+    action.stop();
+    mixer.uncacheRoot(sceneRoot);
+
+    let name = clip.name || (clips.length > 1 ? `${fallbackName}_${clipIdx + 1}` : fallbackName);
+    while (usedNames.has(name)) name += "_";
+    usedNames.add(name);
+    result.push({
+      name,
+      fps: FPS,
+      totalFrames: TOTAL_FRAMES,
+      keyframes,
+      truncated: clip.duration > maxTime + 1e-6,
+      matchedBones: Object.keys(keyframes[0] ? keyframes[0].pose : {}).filter((n) => boneNameToBone[n]).length,
+    });
+  });
+  return result;
+}
+
+// GLBから取り出したモーションを一覧(animations)へ追加し、最初の1つを
+// タイムラインへ読み込む。同名のモーションは置き換える
+function importAnimationsFromGLTF(gltf, fallbackName) {
+  const anims = animationsFromGLTF(gltf, fallbackName);
+  if (anims.length === 0) throw new Error("アニメーションが含まれていません");
+  for (const a of anims) {
+    const data = { name: a.name, fps: a.fps, totalFrames: a.totalFrames, keyframes: a.keyframes };
+    const idx = animations.findIndex((x) => x.name === a.name);
+    if (idx >= 0) animations[idx] = data;
+    else animations.push(data);
+  }
+  refreshAnimSelect();
+  const first = anims[0];
+  loadAnimationData(first);
+  animSelectEl.value = first.name;
+  animNameInputEl.value = first.name;
+  return anims;
+}
+
 const fileMenuBtn = document.getElementById("fileMenuBtn");
 const fileMenuEl = document.getElementById("fileMenu");
 const animNameInputEl = document.getElementById("animNameInput");
@@ -1953,15 +2050,40 @@ animImportFileEl.addEventListener("change", async () => {
   const file = animImportFileEl.files && animImportFileEl.files[0];
   animImportFileEl.value = "";
   if (!file) return;
+  // JSON(このアプリの形式)か、GLB/glTF(含まれるアニメーション)かを
+  // 拡張子と先頭4バイト("glTF")で判別する
+  const buffer = await file.arrayBuffer();
+  const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+  const isGLB = String.fromCharCode(...head) === "glTF";
+  const lowerName = file.name.toLowerCase();
+  const isGLTF = isGLB || lowerName.endsWith(".glb") || lowerName.endsWith(".gltf");
+  let delay = 2500;
   try {
-    const json = JSON.parse(await file.text());
-    importAnimationJSON(json);
-    statusEl.textContent = `「${json.name || file.name}」を読み込みました`;
+    if (isGLTF) {
+      const gltf = await new Promise((resolve, reject) => gltfLoader.parse(buffer, "", resolve, reject));
+      const baseName = file.name.replace(/\.(glb|gltf)$/i, "") || "animation";
+      const anims = importAnimationsFromGLTF(gltf, baseName);
+      const first = anims[0];
+      let msg = anims.length > 1
+        ? `「${file.name}」から${anims.length}個のモーションを読み込みました(「${first.name}」を表示中)`
+        : `「${file.name}」のモーション「${first.name}」を読み込みました`;
+      if (first.matchedBones < allBones.length) msg += `(一致したボーン${first.matchedBones}/${allBones.length}本)`;
+      if (anims.some((a) => a.truncated)) msg += `。${TOTAL_FRAMES / FPS}秒を超える部分は取り込んでいません`;
+      statusEl.textContent = msg;
+      delay = 5000;
+    } else {
+      const json = JSON.parse(new TextDecoder().decode(buffer));
+      importAnimationJSON(json);
+      statusEl.textContent = `「${json.name || file.name}」を読み込みました`;
+    }
   } catch (err) {
     console.error(err);
-    statusEl.textContent = "アニメーションJSONの読み込みに失敗しました";
+    statusEl.textContent = isGLTF
+      ? `GLBのモーションを読み込めませんでした${err && err.message ? `: ${err.message}` : ""}`
+      : "アニメーションJSONの読み込みに失敗しました";
+    delay = 6000;
   }
-  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, 2500);
+  setTimeout(() => { statusEl.textContent = "タップでボーン選択・ドラッグで回転"; }, delay);
 });
 
 refreshAnimSelect();
