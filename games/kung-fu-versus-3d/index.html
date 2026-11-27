@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <link rel="icon" href="data:," />
+  <title>Kung-Fu Versus 3D</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <style>
+    :root { --padH: 36vh; }
+    html, body {
+      margin: 0; height: 100%; height: 100dvh; overflow: hidden; overscroll-behavior: none;
+      background: #07070c; color: #eee; font-family: system-ui, sans-serif;
+      touch-action: none; -webkit-user-select: none; user-select: none; -webkit-text-size-adjust: 100%; -webkit-touch-callout: none;
+    }
+    #view { position: fixed; left: 0; right: 0; top: 0; bottom: var(--padH); }
+    #view canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+    /* ---- 上部HUD: 体力ゲージ・タイマー・ラウンド ---- */
+    #hud { position: fixed; left: 0; right: 0; top: 0; padding: max(10px, env(safe-area-inset-top)) 10px 0; display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: start; pointer-events: none; z-index: 5; }
+    .side .name { font: 800 13px system-ui, sans-serif; letter-spacing: .12em; text-shadow: 0 1px 3px #000; margin-bottom: 3px; }
+    .side.right .name, .side.right .wins { text-align: right; }
+    .hp { position: relative; height: 16px; border: 2px solid rgba(255,255,255,.85); border-radius: 3px; background: #300; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,.6); }
+    .hp i, .hp b { position: absolute; top: 0; bottom: 0; }
+    .hp b { background: #ff4a3a; transition: width .5s .25s; }
+    .hp i { background: linear-gradient(#ffe36a, #f0a020); z-index: 1; }
+    .side.left .hp i, .side.left .hp b { right: 0; }
+    .side.right .hp i, .side.right .hp b { left: 0; }
+    .hp.low i { background: linear-gradient(#ff8a5a, #e03a1a); }
+    .wins { margin-top: 4px; height: 12px; }
+    .wins span { display: inline-block; width: 10px; height: 10px; margin: 0 2px; border-radius: 50%; border: 1.5px solid #ffd060; box-sizing: border-box; }
+    .wins span.on { background: #ffd060; box-shadow: 0 0 6px #ffb020; }
+    #timer { font: 900 30px system-ui, sans-serif; min-width: 44px; text-align: center; text-shadow: 0 2px 6px #000; line-height: 1; padding-top: 6px; }
+    #timer.hurry { color: #ff6a5a; }
+
+    /* ---- 画面中央のメッセージ(ROUND 1 / FIGHT! / K.O. など) ---- */
+    #msg { position: fixed; left: 0; right: 0; top: 0; bottom: var(--padH); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; pointer-events: none; z-index: 6; }
+    #msgText { font: 900 52px system-ui, sans-serif; letter-spacing: .06em; color: #fff; -webkit-text-stroke: 2px #000; paint-order: stroke fill; text-shadow: 0 4px 14px rgba(0,0,0,.7); opacity: 0; transform: scale(1.4); transition: opacity .18s, transform .18s; text-align: center; }
+    #msgText.show { opacity: 1; transform: scale(1); }
+    #msgSub { font: 800 18px system-ui, sans-serif; letter-spacing: .1em; color: #ffd060; text-shadow: 0 2px 6px #000; min-height: 22px; }
+    #retry { pointer-events: auto; display: none; margin-top: 8px; font: 800 18px system-ui, sans-serif; padding: 10px 30px; border-radius: 24px; border: none; background: #fff; color: #222; }
+    #combo { position: fixed; top: 70px; font: 900 26px system-ui, sans-serif; color: #ffd060; text-shadow: 0 2px 6px #000; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 6; }
+    #combo small { font-size: 14px; margin-left: 4px; }
+
+    /* ---- 操作パネル(画面の下) ---- */
+    #pad { position: fixed; left: 0; right: 0; bottom: 0; height: var(--padH); z-index: 6; background: linear-gradient(#11121c, #08080e); border-top: 1px solid rgba(255,208,96,.25); touch-action: none; padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; }
+    #padHint { position: absolute; left: 0; right: 0; top: 6px; text-align: center; font-size: 11px; opacity: .6; letter-spacing: .03em; pointer-events: none; }
+    #stickZone { position: absolute; left: 4%; top: 14%; bottom: 4%; width: 46%; touch-action: none; }
+    #stickBase { position: absolute; left: 50%; top: 50%; width: var(--S); height: var(--S); transform: translate(-50%, -50%); border-radius: 50%; border: 2px solid rgba(255,255,255,.3); background: radial-gradient(circle, rgba(255,255,255,.07), rgba(255,255,255,.02)); box-sizing: border-box; }
+    #stickBase .lab { position: absolute; font-size: 10px; opacity: .55; white-space: nowrap; }
+    #stickKnob { position: absolute; left: 50%; top: 50%; width: calc(var(--S) * .44); height: calc(var(--S) * .44); margin: calc(var(--S) * -.22) 0 0 calc(var(--S) * -.22); border-radius: 50%; background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.8), rgba(170,180,200,.55)); box-shadow: 0 3px 10px rgba(0,0,0,.5); }
+    #btns { position: absolute; right: 4%; top: 14%; bottom: 6%; width: 44%; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; }
+    #btns button { border-radius: 50%; aspect-ratio: 1; max-width: 100%; max-height: 100%; margin: auto; width: 100%; border: 2px solid rgba(255,255,255,.4); color: #fff; font: 800 14px system-ui, sans-serif; line-height: 1.15; touch-action: none; -webkit-tap-highlight-color: transparent; padding: 0; }
+    #btns button small { display: block; font-size: 10px; opacity: .8; font-weight: 600; }
+    #btns button[data-a="lp"], #btns button[data-a="rp"] { background: radial-gradient(circle at 35% 30%, #6a7cff, #2b3590); }
+    #btns button[data-a="lk"], #btns button[data-a="rk"] { background: radial-gradient(circle at 35% 30%, #ff7a5a, #8a2a20); }
+    #btns button.on { filter: brightness(1.6); transform: scale(.94); }
+    #loading { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: #07070c; font-size: 14px; letter-spacing: .1em; }
+  </style>
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
+</head>
+<body>
+  <div id="view"></div>
+  <div id="hud">
+    <div class="side left"><div class="name">CHINA</div><div class="hp" id="hpP"><b></b><i></i></div><div class="wins" id="winsP"></div></div>
+    <div id="timer">60</div>
+    <div class="side right"><div class="name">USA</div><div class="hp" id="hpC"><b></b><i></i></div><div class="wins" id="winsC"></div></div>
+  </div>
+  <div id="combo"></div>
+  <div id="msg"><div id="msgText"></div><div id="msgSub"></div><button id="retry">もう一度</button></div>
+  <div id="pad">
+    <div id="padHint">←ガード　→前進　↑奥へ横移動　↓しゃがみ(短く↓で手前へ)</div>
+    <div id="stickZone"><div id="stickBase"><div id="stickKnob"></div></div></div>
+    <div id="btns">
+      <button data-a="lp">ジャブ<small>上段</small></button>
+      <button data-a="rp">ストレート<small>中段</small></button>
+      <button data-a="lk">ロー<small>下段</small></button>
+      <button data-a="rk">ハイキック<small>上段</small></button>
+    </div>
+  </div>
+  <div id="loading">LOADING...</div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
