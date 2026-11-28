@@ -1,0 +1,763 @@
+<!doctype html><!--wrap-->
+<html lang="ja"><!--wrap-->
+<head><!--wrap-->
+<meta charset="utf-8"><!--wrap-->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"><!--wrap-->
+<title>RUBBER LINK</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap">
+<style>
+/* Layout: full-screen canvas playfield, HUD pinned to the safe-area corners, sheets slide over it. Single deliberate look (rubber band on graph paper). */
+:root {
+  --sky: #d7e7ef;
+  --grid: #b9d0dc;
+  --ink: #1d2b36;
+  --slate: #34505f;
+  --rubber: #e5486e;
+  --yolk: #f4b62c;
+  --paper: #f7f3e8;
+  --font-display: "Dela Gothic One", "Hiragino Kaku Gothic StdN", "Arial Black", sans-serif;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  color-scheme: light;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--sky); color: var(--ink); }
+body { font-family: var(--font-body); -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+.hud { position: fixed; pointer-events: none; z-index: 2; }
+.hud-tl { top: calc(env(safe-area-inset-top, 0px) + 10px); left: calc(env(safe-area-inset-left, 0px) + 12px); }
+.hud-tr { top: calc(env(safe-area-inset-top, 0px) + 10px); right: calc(env(safe-area-inset-right, 0px) + 12px); display: flex; gap: 8px; pointer-events: auto; }
+.hud-bl { bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); left: calc(env(safe-area-inset-left, 0px) + 12px); max-width: 55vw; }
+.hud-br { bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); right: calc(env(safe-area-inset-right, 0px) + 12px); display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
+
+.timer { font-family: var(--font-display); font-size: 26px; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; line-height: 1; color: var(--ink); text-shadow: 0 2px 0 var(--paper); }
+.sub { margin-top: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; color: var(--slate); font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; font-weight: 700; line-height: 1.5; color: var(--paper); background: var(--ink); padding: 6px 10px; border-radius: 4px; opacity: 0.88; }
+
+.btn { font-family: var(--font-body); font-weight: 700; font-size: 13px; color: var(--ink); background: var(--paper); border: 2px solid var(--ink); border-radius: 6px; padding: 7px 11px; box-shadow: 0 3px 0 var(--ink); touch-action: manipulation; cursor: pointer; }
+.btn:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--ink); }
+.btn:focus-visible, .reel:focus-visible { outline: 3px solid var(--rubber); outline-offset: 2px; }
+
+.reel { width: 64px; height: 64px; border-radius: 50%; border: 3px solid var(--ink); background: var(--paper); color: var(--ink); font-family: var(--font-display); font-size: 15px; line-height: 1.05; box-shadow: 0 4px 0 var(--ink); touch-action: none; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.reel small { display: block; font-family: var(--font-body); font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+.reel.on { background: var(--yolk); transform: translateY(2px); box-shadow: 0 2px 0 var(--ink); }
+.reel.off { opacity: 0.35; }
+
+.sheet { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; background: rgba(29, 43, 54, 0.55); padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.card { background: var(--paper); color: var(--ink); border: 3px solid var(--ink); border-radius: 10px; box-shadow: 0 6px 0 var(--ink); padding: 22px 20px 20px; width: min(420px, 100%); max-height: 100%; overflow-y: auto; box-sizing: border-box; }
+.logo { font-family: var(--font-display); font-size: clamp(34px, 11vw, 48px); line-height: 0.95; letter-spacing: -0.01em; margin: 0; }
+.logo .band { color: var(--rubber); }
+.tag { margin: 8px 0 16px; font-size: 13px; font-weight: 700; letter-spacing: 0.12em; color: var(--slate); }
+.howto { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 10px; }
+.howto li { display: grid; grid-template-columns: 76px 1fr; gap: 10px; align-items: baseline; font-size: 14px; line-height: 1.5; }
+.howto b { font-size: 11px; letter-spacing: 0.08em; background: var(--ink); color: var(--paper); border-radius: 3px; padding: 2px 6px; text-align: center; }
+.pc { font-size: 12px; color: var(--slate); margin: 0 0 16px; line-height: 1.6; }
+.primary { width: 100%; font-family: var(--font-display); font-size: 20px; padding: 12px; background: var(--yolk); }
+.result { font-family: var(--font-display); font-size: 44px; font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+.stats { font-size: 13px; font-weight: 700; color: var(--slate); margin: 0 0 18px; line-height: 1.7; }
+
+.tune h2 { font-family: var(--font-display); font-size: 22px; margin: 0 0 4px; }
+.tune p { font-size: 12px; color: var(--slate); margin: 0 0 14px; line-height: 1.6; }
+.row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; margin-bottom: 12px; }
+.row label { font-size: 13px; font-weight: 700; }
+.row output { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--slate); }
+.row input { grid-column: 1 / -1; width: 100%; accent-color: var(--rubber); }
+.tune .actions { display: flex; gap: 8px; margin-top: 6px; }
+.tune .actions .btn { flex: 1; }
+
+@media (prefers-reduced-motion: reduce) { .btn:active, .reel.on { transform: none; } }
+</style>
+</head><!--wrap-->
+<body><!--wrap-->
+<canvas id="game" aria-label="RUBBER LINK プレイ画面"></canvas>
+
+<div class="hud hud-tl">
+  <div class="timer" id="timer">0:00.00</div>
+  <div class="sub" id="sub">CHECK 0/4 · 落下 0</div>
+</div>
+<div class="hud hud-tr">
+  <button class="btn" id="btnRetry" type="button">リトライ</button>
+  <button class="btn" id="btnTune" type="button">調整</button>
+</div>
+<div class="hud hud-bl"><div class="hint" id="hint">壁や天井をタップしてアンカー発射</div></div>
+<div class="hud hud-br">
+  <button class="reel off" id="reelIn" type="button" aria-label="ゴムを縮める">▲<small>縮める</small></button>
+  <button class="reel off" id="reelOut" type="button" aria-label="ゴムを伸ばす">▼<small>伸ばす</small></button>
+</div>
+
+<div class="sheet" id="startSheet">
+  <div class="card">
+    <h1 class="logo">RUBBER<br><span class="band">LINK</span></h1>
+    <p class="tag">ひっぱる・のびる・はねかえる</p>
+    <ul class="howto">
+      <li><b>タップ</b><span>タップした方向へアンカーを発射。ブロックに当たると<strong>ゴム紐</strong>でつながる。</span></li>
+      <li><b>ドラッグ</b><span>つながっている間、画面をドラッグして四角を引っ張る。離すとゴムの反動で飛び出す。</span></li>
+      <li><b>タップ</b><span>つながっている間にもう一度タップするとアンカー解除。</span></li>
+      <li><b>▲ ▼</b><span>長押しでゴムを縮める・伸ばす。縮めて振り子を加速しよう。</span></li>
+    </ul>
+    <p class="pc">斜線入りの金属ブロックにはアンカーが刺さりません。右上の旗がゴール。<br>PC: クリック/ドラッグ、W・S で伸縮、Space で解除、R でリトライ。</p>
+    <button class="btn primary" id="btnStart" type="button">はじめる</button>
+  </div>
+</div>
+
+<div class="sheet" id="goalSheet" hidden>
+  <div class="card">
+    <h2 class="logo" style="font-size:36px">GOAL!</h2>
+    <div class="result" id="goalTime">0:00.00</div>
+    <p class="stats" id="goalStats"></p>
+    <button class="btn primary" id="btnAgain" type="button">もう一度</button>
+  </div>
+</div>
+
+<div class="sheet" id="tuneSheet" hidden>
+  <div class="card tune">
+    <h2>物理パラメータ</h2>
+    <p>操作感の調整用。変更はすぐに反映されます。</p>
+    <div id="tuneRows"></div>
+    <div class="actions">
+      <button class="btn" id="btnTuneReset" type="button">初期値に戻す</button>
+      <button class="btn" id="btnTuneClose" type="button" style="background:var(--yolk)">閉じる</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+// ---------- Tunable physics ----------
+const DEFAULTS = {
+  G: 1500,      // 重力 px/s^2
+  K: 42,        // ゴムのばね定数 (1/s^2, 質量1)
+  C: 3.0,       // ゴムの減衰
+  REST: 0.88,   // 接続時の自然長 = 距離 × REST
+  RANGE: 430,   // アンカー射程
+  HAND: 320,    // ドラッグの引っ張り強さ
+  PULL: 300,    // 最大伸び(ドラッグ時)
+  AIR: 0.06,    // 空気抵抗
+  BOUNCE: 0.22  // 壁の反発
+};
+const TUNE_SPEC = [
+  ['G', '重力', 600, 3000, 10],
+  ['K', 'ゴムの強さ (ばね定数)', 10, 120, 1],
+  ['C', 'ゴムの減衰', 0, 12, 0.1],
+  ['REST', '接続時の自然長 (距離比)', 0.4, 1.2, 0.01],
+  ['RANGE', 'アンカー射程', 200, 700, 5],
+  ['HAND', 'ドラッグの引っ張り強さ', 80, 800, 5],
+  ['PULL', '最大ストレッチ', 80, 500, 5],
+  ['AIR', '空気抵抗', 0, 1, 0.01],
+  ['BOUNCE', '壁の反発', 0, 0.9, 0.01]
+];
+const P = { ...DEFAULTS };
+const HALF = 14;
+const MIN_LEN = 22;
+const REEL_SPEED = 280;
+const HOOK_SPEED = 2800;
+const STEP = 1 / 240;
+
+// ---------- Stage ----------
+const WORLD = { w: 1400, top: -260, floor: 2620, kill: 2780 };
+const B = (x, y, w, h, metal = false) => ({ x, y, w, h, metal });
+const BLOCKS = [
+  B(-60, -260, 60, 3000, true), B(1400, -260, 60, 3000, true), B(0, -260, 1400, 60, true),
+  B(0, 2500, 560, 140), B(820, 2500, 580, 140),
+  B(240, 2200, 420, 28),
+  B(1160, 2180, 80, 80),
+  B(700, 1960, 360, 28),
+  B(520, 1720, 70, 70),
+  B(0, 1560, 420, 28),
+  B(620, 1340, 70, 70),
+  B(960, 1240, 70, 70),
+  B(1100, 1080, 300, 28),
+  B(800, 860, 70, 70),
+  B(480, 760, 70, 70),
+  B(80, 560, 340, 28),
+  B(560, 360, 70, 70),
+  B(900, 280, 70, 70),
+  B(1120, 200, 280, 28),
+  B(560, 2380, 40, 120, true), B(780, 2380, 40, 120, true)
+];
+const START = { x: 120, y: 2500 - HALF };
+const CHECKS = [
+  { x: 1080, y: 2500 }, { x: 200, y: 1560 }, { x: 1300, y: 1080 }, { x: 250, y: 560 }
+];
+const GOAL = { x: 1330, y: 200 };
+
+// ---------- State ----------
+const pl = { x: START.x, y: START.y, vx: 0, vy: 0, grounded: false, angle: 0, squash: 0, lookX: 1, lookY: 0 };
+const hook = { state: 'none', x: 0, y: 0, ox: 0, oy: 0, tx: 0, ty: 0, dist: 0, t: 0, rest: 0, hitMetal: false };
+const drag = { active: false, id: null, sx0: 0, sy0: 0, px0: 0, py0: 0, tx: 0, ty: 0 };
+const input = { reelIn: false, reelOut: false };
+let respawn = { ...START };
+let checkpoint = 0;
+let falls = 0;
+let elapsed = 0;
+let running = false;
+let finished = false;
+let particles = [];
+let shake = 0;
+let marker = null;
+const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------- Canvas ----------
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+let VW = 0, VH = 0, DPR = 1, scale = 1;
+const cam = { x: START.x, y: START.y - 200 };
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  VW = window.innerWidth; VH = window.innerHeight;
+  cv.width = Math.round(VW * DPR); cv.height = Math.round(VH * DPR);
+  scale = Math.min(VW / 440, VH / 620);
+}
+window.addEventListener('resize', resize);
+resize();
+const toWorld = (sx, sy) => ({ x: (sx - VW / 2) / scale + cam.x, y: (sy - VH / 2) / scale + cam.y });
+
+// ---------- Geometry ----------
+function rayBox(ox, oy, dx, dy, b) {
+  let tmin = -Infinity, tmax = Infinity;
+  if (Math.abs(dx) < 1e-9) { if (ox < b.x || ox > b.x + b.w) return null; }
+  else { const t1 = (b.x - ox) / dx, t2 = (b.x + b.w - ox) / dx; tmin = Math.max(tmin, Math.min(t1, t2)); tmax = Math.min(tmax, Math.max(t1, t2)); }
+  if (Math.abs(dy) < 1e-9) { if (oy < b.y || oy > b.y + b.h) return null; }
+  else { const t1 = (b.y - oy) / dy, t2 = (b.y + b.h - oy) / dy; tmin = Math.max(tmin, Math.min(t1, t2)); tmax = Math.min(tmax, Math.max(t1, t2)); }
+  if (tmax < tmin || tmax < 0 || tmin < 0) return null;
+  return tmin;
+}
+function raycast(ox, oy, dx, dy, range) {
+  let best = null;
+  for (const b of BLOCKS) {
+    const t = rayBox(ox, oy, dx, dy, b);
+    if (t !== null && t <= range && (!best || t < best.t)) best = { t, b };
+  }
+  return best;
+}
+
+// ---------- Actions ----------
+function fireHook(wx, wy) {
+  let dx = wx - pl.x, dy = wy - pl.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 4) return;
+  dx /= len; dy /= len;
+  // aim assist: try the exact direction, then fan out a little
+  const base = Math.atan2(dy, dx);
+  let chosen = null;
+  for (const deg of [0, 4, -4, 8, -8, 12, -12, 17, -17]) {
+    const a = base + deg * Math.PI / 180;
+    const ux = Math.cos(a), uy = Math.sin(a);
+    const hit = raycast(pl.x, pl.y, ux, uy, P.RANGE);
+    if (hit && !hit.b.metal) { chosen = { ux, uy, hit }; break; }
+    if (deg === 0) chosen = { ux, uy, hit };
+  }
+  const { ux, uy, hit } = chosen;
+  hook.state = 'flying';
+  hook.ox = pl.x; hook.oy = pl.y;
+  hook.dist = hit ? hit.t : P.RANGE;
+  hook.tx = pl.x + ux * hook.dist; hook.ty = pl.y + uy * hook.dist;
+  hook.hitMetal = !hit || hit.b.metal;
+  hook.miss = !hit;
+  hook.t = 0;
+  hook.x = pl.x; hook.y = pl.y;
+  marker = { x: wx, y: wy, life: 0.35 };
+}
+function attach() {
+  hook.state = 'attached';
+  hook.x = hook.tx; hook.y = hook.ty;
+  const d = Math.hypot(hook.x - pl.x, hook.y - pl.y);
+  hook.rest = Math.max(MIN_LEN, d * P.REST);
+  burst(hook.x, hook.y, 7, '#f7f3e8', 160);
+}
+function detach() {
+  if (hook.state === 'attached') burst(hook.x, hook.y, 4, '#e5486e', 90);
+  hook.state = 'none';
+  drag.active = false;
+}
+function burst(x, y, n, color, sp) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = sp * (0.4 + Math.random() * 0.8);
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4 + Math.random() * 0.3, max: 0.7, color });
+  }
+}
+function doRespawn() {
+  pl.x = respawn.x; pl.y = respawn.y; pl.vx = 0; pl.vy = 0; pl.angle = 0;
+  hook.state = 'none'; drag.active = false;
+}
+function resetRun() {
+  respawn = { ...START }; checkpoint = 0; falls = 0; elapsed = 0; finished = false;
+  doRespawn();
+  cam.x = pl.x; cam.y = pl.y - 200;
+  updateHud();
+}
+
+// ---------- Physics ----------
+function overlaps(b) {
+  return pl.x + HALF > b.x && pl.x - HALF < b.x + b.w && pl.y + HALF > b.y && pl.y - HALF < b.y + b.h;
+}
+function impact(speed, nx, ny) {
+  if (speed > 380) {
+    pl.squash = Math.min(1, speed / 1600);
+    burst(pl.x - nx * HALF, pl.y - ny * HALF, Math.min(10, (speed / 160) | 0), '#34505f', speed * 0.18);
+    if (!reduceMotion) shake = Math.min(8, speed / 260);
+  }
+}
+function step(dt) {
+  let ax = 0, ay = P.G;
+
+  if (hook.state === 'attached') {
+    const dx = hook.x - pl.x, dy = hook.y - pl.y;
+    const d = Math.hypot(dx, dy) || 1e-6;
+    const nx = dx / d, ny = dy / d;
+    if (d > hook.rest) {
+      const stretch = d - hook.rest;
+      const stretchRate = -(pl.vx * nx + pl.vy * ny);
+      const f = Math.max(0, P.K * stretch + P.C * stretchRate);
+      ax += nx * f; ay += ny * f;
+    }
+    if (input.reelIn) hook.rest = Math.max(MIN_LEN, hook.rest - REEL_SPEED * dt);
+    if (input.reelOut) hook.rest = Math.min(P.RANGE * 1.25, hook.rest + REEL_SPEED * dt);
+
+    if (drag.active) {
+      let tx = drag.tx, ty = drag.ty;
+      const ddx = tx - hook.x, ddy = ty - hook.y;
+      const dd = Math.hypot(ddx, ddy);
+      const maxD = hook.rest + P.PULL;
+      if (dd > maxD) { tx = hook.x + ddx / dd * maxD; ty = hook.y + ddy / dd * maxD; }
+      const cHand = 2 * Math.sqrt(P.HAND);
+      ax += P.HAND * (tx - pl.x) - cHand * pl.vx;
+      ay += P.HAND * (ty - pl.y) - cHand * pl.vy;
+    }
+  }
+  ax -= pl.vx * P.AIR; ay -= pl.vy * P.AIR;
+
+  pl.vx += ax * dt; pl.vy += ay * dt;
+  const sp = Math.hypot(pl.vx, pl.vy);
+  if (sp > 2800) { pl.vx *= 2800 / sp; pl.vy *= 2800 / sp; }
+
+  // X axis
+  pl.x += pl.vx * dt;
+  for (const b of BLOCKS) {
+    if (!overlaps(b)) continue;
+    const s = Math.abs(pl.vx);
+    if (pl.vx > 0) { pl.x = b.x - HALF; impact(s, 1, 0); }
+    else if (pl.vx < 0) { pl.x = b.x + b.w + HALF; impact(s, -1, 0); }
+    else { const l = pl.x + HALF - b.x, r = b.x + b.w - (pl.x - HALF); pl.x += l < r ? -l : r; }
+    pl.vx = s > 220 ? -pl.vx * P.BOUNCE : 0;
+  }
+  // Y axis
+  pl.grounded = false;
+  pl.y += pl.vy * dt;
+  for (const b of BLOCKS) {
+    if (!overlaps(b)) continue;
+    const s = Math.abs(pl.vy);
+    if (pl.vy > 0) { pl.y = b.y - HALF; pl.grounded = true; impact(s, 0, 1); }
+    else if (pl.vy < 0) { pl.y = b.y + b.h + HALF; impact(s, 0, -1); }
+    else { const t = pl.y + HALF - b.y, u = b.y + b.h - (pl.y - HALF); if (t < u) { pl.y -= t; pl.grounded = true; } else pl.y += u; }
+    pl.vy = s > 260 ? -pl.vy * P.BOUNCE : 0;
+  }
+  if (pl.grounded) pl.vx *= Math.exp(-9 * dt);
+
+  // hook flight
+  if (hook.state === 'flying') {
+    hook.t += HOOK_SPEED * dt;
+    if (hook.t >= hook.dist) {
+      if (hook.hitMetal) {
+        if (!hook.miss) burst(hook.tx, hook.ty, 5, '#f4b62c', 140);
+        hook.state = 'retract'; hook.t = hook.dist;
+      } else attach();
+    } else {
+      const k = hook.t / hook.dist;
+      hook.x = hook.ox + (hook.tx - hook.ox) * k; hook.y = hook.oy + (hook.ty - hook.oy) * k;
+    }
+  } else if (hook.state === 'retract') {
+    hook.t -= HOOK_SPEED * 1.4 * dt;
+    if (hook.t <= 0) hook.state = 'none';
+    else {
+      const k = hook.t / hook.dist;
+      hook.x = pl.x + (hook.tx - pl.x) * k; hook.y = pl.y + (hook.ty - pl.y) * k;
+    }
+  }
+}
+
+function update(dt) {
+  if (running && !finished) {
+    let acc = dt;
+    while (acc > 1e-6) { const h = Math.min(STEP, acc); step(h); acc -= h; }
+    elapsed += dt;
+
+    if (pl.y > WORLD.kill) { falls++; burst(pl.x, WORLD.kill - 40, 12, '#e5486e', 300); doRespawn(); }
+
+    CHECKS.forEach((c, i) => {
+      if (i >= checkpoint && Math.abs(pl.x - c.x) < 40 && pl.y < c.y && pl.y > c.y - 80) {
+        checkpoint = i + 1; respawn = { x: c.x, y: c.y - HALF };
+        burst(c.x, c.y - 50, 14, '#f4b62c', 220);
+      }
+    });
+    if (Math.abs(pl.x - GOAL.x) < 50 && pl.y < GOAL.y && pl.y > GOAL.y - 90) finish();
+  }
+
+  // visual state
+  let targetAngle;
+  if (hook.state === 'attached' && !pl.grounded) {
+    targetAngle = Math.atan2(hook.y - pl.y, hook.x - pl.x) + Math.PI / 2;
+  } else if (pl.grounded) {
+    targetAngle = Math.round(pl.angle / (Math.PI / 2)) * (Math.PI / 2);
+  } else {
+    targetAngle = pl.angle + pl.vx * 0.0025 * dt * 60 * 0.1;
+  }
+  let da = targetAngle - pl.angle;
+  while (da > Math.PI) da -= Math.PI * 2;
+  while (da < -Math.PI) da += Math.PI * 2;
+  pl.angle += da * (1 - Math.exp(-12 * dt));
+  pl.squash *= Math.exp(-10 * dt);
+  const sp = Math.hypot(pl.vx, pl.vy);
+  if (sp > 30) { pl.lookX += (pl.vx / sp - pl.lookX) * 0.2; pl.lookY += (pl.vy / sp - pl.lookY) * 0.2; }
+
+  particles = particles.filter(p => (p.life -= dt) > 0);
+  for (const p of particles) { p.vy += 900 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  if (marker && (marker.life -= dt) <= 0) marker = null;
+  shake *= Math.exp(-12 * dt);
+
+  // camera
+  const viewW = VW / scale, viewH = VH / scale;
+  const look = 0.12;
+  let tx = pl.x + Math.max(-140, Math.min(140, pl.vx * look));
+  let ty = pl.y + Math.max(-140, Math.min(140, pl.vy * look)) - viewH * 0.08;
+  if (viewW >= WORLD.w + 120) tx = WORLD.w / 2;
+  else tx = Math.max(viewW / 2 - 60, Math.min(WORLD.w + 60 - viewW / 2, tx));
+  ty = Math.max(WORLD.top + 60 + viewH / 2 - 60, Math.min(WORLD.floor - viewH / 2 + 60, ty));
+  const kc = 1 - Math.exp(-6 * dt);
+  cam.x += (tx - cam.x) * kc; cam.y += (ty - cam.y) * kc;
+
+  updateHud();
+}
+
+// ---------- Rendering ----------
+const COL = { sky: '#d7e7ef', sky2: '#eef4ec', grid: '#bdd3de', grid2: '#a9c4d2', ink: '#1d2b36', slate: '#34505f', slateTop: '#4d6f80', metal: '#7d8c96', rubber: '#e5486e', taut: '#c4123c', yolk: '#f4b62c', paper: '#f7f3e8' };
+
+function drawBackground(viewW, viewH) {
+  const g = ctx.createLinearGradient(0, 0, 0, VH);
+  g.addColorStop(0, COL.sky2); g.addColorStop(1, COL.sky);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, VW, VH);
+}
+function drawGrid(x0, y0, x1, y1) {
+  ctx.lineWidth = 1 / scale;
+  for (const [stepSz, col] of [[40, COL.grid], [200, COL.grid2]]) {
+    ctx.strokeStyle = col;
+    ctx.beginPath();
+    for (let x = Math.floor(x0 / stepSz) * stepSz; x <= x1; x += stepSz) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+    for (let y = Math.floor(y0 / stepSz) * stepSz; y <= y1; y += stepSz) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+    ctx.stroke();
+  }
+  // height ruler on the left (meters, 40px = 1m)
+  ctx.fillStyle = COL.slate;
+  ctx.font = `700 ${11 / scale}px "Zen Kaku Gothic New", sans-serif`;
+  ctx.textBaseline = 'middle';
+  for (let y = Math.floor(y0 / 200) * 200; y <= y1; y += 200) {
+    const m = Math.round((2500 - y) / 40);
+    if (m < 0) continue;
+    ctx.fillText(`${m}m`, x0 + 6 / scale, y - 8 / scale);
+  }
+}
+function drawBlock(b) {
+  ctx.fillStyle = b.metal ? COL.metal : COL.slate;
+  ctx.fillRect(b.x, b.y, b.w, b.h);
+  if (b.metal) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(b.x, b.y, b.w, b.h); ctx.clip();
+    ctx.strokeStyle = 'rgba(29,43,54,0.35)'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let k = -b.h; k < b.w + b.h; k += 14) { ctx.moveTo(b.x + k, b.y); ctx.lineTo(b.x + k + b.h, b.y + b.h); }
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.fillStyle = COL.slateTop;
+    ctx.fillRect(b.x, b.y, b.w, Math.min(6, b.h));
+    // rivets mark anchorable blocks
+    ctx.fillStyle = COL.paper;
+    const r = 2.2;
+    const pts = b.w > 100 ? [[b.x + 8, b.y + b.h / 2], [b.x + b.w - 8, b.y + b.h / 2]] : [[b.x + 9, b.y + 9], [b.x + b.w - 9, b.y + 9], [b.x + 9, b.y + b.h - 9], [b.x + b.w - 9, b.y + b.h - 9]];
+    for (const [px, py] of pts) { ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 2.5;
+  ctx.strokeRect(b.x, b.y, b.w, b.h);
+}
+function drawFlag(x, y, color, label, reached) {
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 64); ctx.stroke();
+  ctx.fillStyle = reached ? color : COL.paper;
+  ctx.beginPath(); ctx.moveTo(x, y - 64); ctx.lineTo(x + 30, y - 55); ctx.lineTo(x, y - 46); ctx.closePath();
+  ctx.fill(); ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = COL.ink;
+  ctx.font = '700 11px "Zen Kaku Gothic New", sans-serif';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(label, x + 6, y - 70);
+}
+function ropeColor(t) {
+  // t: 0 slack .. 1 very taut
+  const a = [0xe5, 0x48, 0x6e], b = [0xc4, 0x12, 0x3c];
+  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(',')})`;
+}
+function drawRope() {
+  if (hook.state === 'none') return;
+  const ax = hook.x, ay = hook.y;
+  if (hook.state === 'attached') {
+    const d = Math.hypot(ax - pl.x, ay - pl.y);
+    const ratio = d / hook.rest;
+    if (d < hook.rest) {
+      const sag = Math.sqrt(hook.rest * hook.rest - d * d) * 0.5;
+      ctx.strokeStyle = COL.rubber; ctx.lineWidth = 4.5;
+      ctx.beginPath(); ctx.moveTo(pl.x, pl.y);
+      ctx.quadraticCurveTo((pl.x + ax) / 2, (pl.y + ay) / 2 + sag, ax, ay);
+      ctx.stroke();
+    } else {
+      const t = Math.min(1, (ratio - 1) / 1.5);
+      ctx.strokeStyle = ropeColor(t);
+      ctx.lineWidth = Math.max(1.6, 4.5 / Math.sqrt(ratio));
+      ctx.beginPath(); ctx.moveTo(pl.x, pl.y); ctx.lineTo(ax, ay); ctx.stroke();
+    }
+    // natural-length tick on the rope
+    if (d > hook.rest + 4) {
+      const k = hook.rest / d;
+      const mx = ax + (pl.x - ax) * k, my = ay + (pl.y - ay) * k;
+      ctx.fillStyle = COL.paper; ctx.strokeStyle = COL.ink; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(mx, my, 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  } else {
+    ctx.strokeStyle = COL.rubber; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(pl.x, pl.y); ctx.lineTo(ax, ay); ctx.stroke();
+  }
+  // anchor claw
+  ctx.fillStyle = hook.state === 'retract' ? COL.metal : COL.yolk;
+  ctx.strokeStyle = COL.ink; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(ax, ay, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+}
+function drawDragGuide() {
+  if (!drag.active || hook.state !== 'attached') return;
+  ctx.save();
+  ctx.setLineDash([6, 6]);
+  ctx.strokeStyle = 'rgba(29,43,54,0.45)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(pl.x, pl.y); ctx.lineTo(drag.tx, drag.ty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(drag.tx, drag.ty, 10, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+function drawRange() {
+  if (hook.state !== 'none') return;
+  ctx.save();
+  ctx.setLineDash([4, 10]);
+  ctx.strokeStyle = 'rgba(52,80,95,0.28)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(pl.x, pl.y, P.RANGE, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+function drawPlayer() {
+  ctx.save();
+  ctx.translate(pl.x, pl.y);
+  ctx.rotate(pl.angle);
+  const s = pl.squash;
+  ctx.scale(1 + s * 0.35, 1 - s * 0.3);
+  const h = HALF;
+  ctx.fillStyle = COL.yolk; ctx.strokeStyle = COL.ink; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.rect(-h, -h, h * 2, h * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillRect(-h + 3, -h + 3, h * 2 - 6, 4);
+  ctx.restore();
+  // eyes stay upright-ish and look where it's going
+  ctx.save();
+  ctx.translate(pl.x, pl.y);
+  ctx.rotate(pl.angle);
+  const lx = pl.lookX * 2.5, ly = pl.lookY * 2.5;
+  const c = Math.cos(-pl.angle), sn = Math.sin(-pl.angle);
+  const ex = lx * c - ly * sn, ey = lx * sn + ly * c;
+  ctx.fillStyle = COL.ink;
+  for (const ox of [-5, 5]) { ctx.beginPath(); ctx.arc(ox + ex, -2 + ey, 2.6, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+}
+
+function render() {
+  const viewW = VW / scale, viewH = VH / scale;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  drawBackground(viewW, viewH);
+  const sx = shake ? (Math.random() - 0.5) * shake : 0, sy = shake ? (Math.random() - 0.5) * shake : 0;
+  ctx.setTransform(DPR * scale, 0, 0, DPR * scale, DPR * (VW / 2 - cam.x * scale + sx), DPR * (VH / 2 - cam.y * scale + sy));
+  const x0 = cam.x - viewW / 2, y0 = cam.y - viewH / 2, x1 = x0 + viewW, y1 = y0 + viewH;
+  drawGrid(x0, y0, x1, y1);
+
+  // pit danger stripe
+  ctx.fillStyle = 'rgba(229,72,110,0.18)';
+  ctx.fillRect(x0, WORLD.kill - 120, viewW, 400);
+
+  drawRange();
+  for (const b of BLOCKS) {
+    if (b.x > x1 || b.x + b.w < x0 || b.y > y1 || b.y + b.h < y0) continue;
+    drawBlock(b);
+  }
+  CHECKS.forEach((c, i) => drawFlag(c.x, c.y, COL.yolk, `CHECK ${i + 1}`, checkpoint > i));
+  drawFlag(GOAL.x, GOAL.y, COL.rubber, 'GOAL', finished);
+
+  drawDragGuide();
+  drawRope();
+  drawPlayer();
+
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - 2.5, p.y - 2.5, 5, 5);
+  }
+  ctx.globalAlpha = 1;
+  if (marker) {
+    ctx.strokeStyle = COL.ink; ctx.lineWidth = 2;
+    ctx.globalAlpha = marker.life / 0.35;
+    const r = 8 + (0.35 - marker.life) * 40;
+    ctx.beginPath(); ctx.arc(marker.x, marker.y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------- HUD ----------
+const $ = id => document.getElementById(id);
+const timerEl = $('timer'), subEl = $('sub'), hintEl = $('hint'), reelInEl = $('reelIn'), reelOutEl = $('reelOut');
+const fmt = t => { const m = Math.floor(t / 60), s = t - m * 60; return `${m}:${s.toFixed(2).padStart(5, '0')}`; };
+let lastHint = '';
+function updateHud() {
+  timerEl.textContent = fmt(elapsed);
+  subEl.textContent = `CHECK ${checkpoint}/${CHECKS.length} · 落下 ${falls}`;
+  const attached = hook.state === 'attached';
+  const hint = drag.active ? '指を離すとゴムの反動で飛び出す'
+    : attached ? 'ドラッグで引っ張る / タップで解除'
+    : 'ブロックをタップしてアンカー発射';
+  if (hint !== lastHint) { hintEl.textContent = hint; lastHint = hint; }
+  reelInEl.classList.toggle('off', !attached);
+  reelOutEl.classList.toggle('off', !attached);
+  reelInEl.classList.toggle('on', attached && input.reelIn);
+  reelOutEl.classList.toggle('on', attached && input.reelOut);
+}
+function finish() {
+  finished = true;
+  burst(GOAL.x, GOAL.y - 50, 30, '#e5486e', 320);
+  let best = null;
+  try { best = parseFloat(localStorage.getItem('rubberlink.best')); } catch (e) {}
+  const isBest = !(best > 0) || elapsed < best;
+  if (isBest) { try { localStorage.setItem('rubberlink.best', String(elapsed)); } catch (e) {} best = elapsed; }
+  $('goalTime').textContent = fmt(elapsed);
+  $('goalStats').innerHTML = `落下 ${falls} 回<br>${isBest ? 'ベスト更新!' : `ベスト ${fmt(best)}`}`;
+  setTimeout(() => { $('goalSheet').hidden = false; }, 700);
+}
+
+// ---------- Input ----------
+const pointers = new Map();
+const TAP_MOVE = 10;
+cv.addEventListener('pointerdown', e => {
+  if (!running || finished) return;
+  e.preventDefault();
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  const w = toWorld(e.clientX, e.clientY);
+  if (hook.state === 'attached' && !drag.active && drag.id === null) {
+    // primary pointer: may become a drag, or a tap (= detach)
+    drag.id = e.pointerId; drag.sx0 = e.clientX; drag.sy0 = e.clientY;
+    pointers.set(e.pointerId, { mode: 'pending' });
+  } else if (hook.state === 'attached') {
+    // second finger while dragging: detach
+    pointers.set(e.pointerId, { mode: 'tapDetach' });
+  } else {
+    fireHook(w.x, w.y);
+    pointers.set(e.pointerId, { mode: 'fired' });
+  }
+});
+cv.addEventListener('pointermove', e => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  if (p.mode === 'pending' && hook.state === 'attached') {
+    if (Math.hypot(e.clientX - drag.sx0, e.clientY - drag.sy0) > TAP_MOVE) {
+      p.mode = 'drag';
+      drag.active = true;
+      drag.px0 = pl.x; drag.py0 = pl.y;
+      drag.sx0 = e.clientX; drag.sy0 = e.clientY;
+    }
+  }
+  if (p.mode === 'drag' && drag.active) {
+    drag.tx = drag.px0 + (e.clientX - drag.sx0) / scale;
+    drag.ty = drag.py0 + (e.clientY - drag.sy0) / scale;
+  }
+});
+function endPointer(e, cancelled) {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  pointers.delete(e.pointerId);
+  if (e.pointerId === drag.id) drag.id = null;
+  if (p.mode === 'drag') { drag.active = false; }
+  else if (!cancelled && (p.mode === 'pending' || p.mode === 'tapDetach') && hook.state === 'attached') detach();
+}
+cv.addEventListener('pointerup', e => endPointer(e, false));
+cv.addEventListener('pointercancel', e => endPointer(e, true));
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+function bindHold(el, key) {
+  const on = e => { e.preventDefault(); input[key] = true; try { el.setPointerCapture(e.pointerId); } catch (_) {} };
+  const off = () => { input[key] = false; };
+  el.addEventListener('pointerdown', on);
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+  el.addEventListener('lostpointercapture', off);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+bindHold(reelInEl, 'reelIn');
+bindHold(reelOutEl, 'reelOut');
+
+window.addEventListener('keydown', e => {
+  if (e.repeat && (e.code === 'Space' || e.code === 'KeyR')) return;
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') { input.reelIn = true; e.preventDefault(); }
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') { input.reelOut = true; e.preventDefault(); }
+  if (e.code === 'Space' && running) { e.preventDefault(); detach(); }
+  if (e.code === 'KeyR' && running && !finished) doRespawn();
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.reelIn = false;
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.reelOut = false;
+});
+window.addEventListener('blur', () => { input.reelIn = input.reelOut = false; drag.active = false; drag.id = null; pointers.clear(); });
+
+// ---------- Sheets ----------
+$('btnStart').addEventListener('click', () => { $('startSheet').hidden = true; running = true; });
+$('btnAgain').addEventListener('click', () => { $('goalSheet').hidden = true; resetRun(); running = true; });
+$('btnRetry').addEventListener('click', e => { e.currentTarget.blur(); if (!finished) doRespawn(); });
+let wasRunning = false;
+$('btnTune').addEventListener('click', () => { wasRunning = running; running = false; $('tuneSheet').hidden = false; });
+$('btnTuneClose').addEventListener('click', () => { $('tuneSheet').hidden = true; running = wasRunning || $('startSheet').hidden; });
+
+const rows = $('tuneRows');
+const decimals = st => (String(st).split('.')[1] || '').length;
+function buildTune() {
+  rows.innerHTML = '';
+  for (const [key, label, min, max, st] of TUNE_SPEC) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const id = `tune-${key}`;
+    row.innerHTML = `<label for="${id}">${label}</label><output id="${id}-out"></output><input id="${id}" type="range" min="${min}" max="${max}" step="${st}" value="${P[key]}">`;
+    const input = row.querySelector('input'), out = row.querySelector('output');
+    const show = () => { out.textContent = Number(P[key]).toFixed(decimals(st)); };
+    input.addEventListener('input', () => { P[key] = parseFloat(input.value); show(); });
+    show();
+    rows.appendChild(row);
+  }
+}
+$('btnTuneReset').addEventListener('click', () => { Object.assign(P, DEFAULTS); buildTune(); });
+buildTune();
+
+// ---------- Loop ----------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+resetRun();
+requestAnimationFrame(frame);
+})();
+</script>
+</body><!--wrap-->
+</html><!--wrap-->
