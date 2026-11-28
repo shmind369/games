@@ -39,6 +39,7 @@
 - [japanese-house-walk-3d](games/japanese-house-walk-3d) — Three.js製、設計図をもとにした和室の家(2階)を一人称視点で歩けるスマホ縦画面向けウォークスルー
 - [yokai-labyrinth-3d](games/yokai-labyrinth-3d) — Three.js製、ボクセルの「旅の冒険者」で妖怪の迷宮を地下10階まで潜る和風ターン制ローグライク
 - [kung-fu-versus-3d](games/kung-fu-versus-3d) — Three.js製、中華娘でUSAボクサー(CPU)と戦う体力ゲージ制・奥行き移動ありのサイドビュー3D格闘ゲーム(スマホ縦画面)
+- [rubber-link](games/rubber-link) — 伸縮するゴム紐とアンカーで、引っ張る・伸びる・跳ね返る・飛び出すを楽しむ2Dラバーアクションのプロトタイプ(スマホタッチ操作、四角形キャラ)
 
 ## 公開ページ
 
