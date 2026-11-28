@@ -29,7 +29,19 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
 .hud { position: fixed; pointer-events: none; z-index: 2; }
 .hud-tl { top: calc(env(safe-area-inset-top, 0px) + 10px); left: calc(env(safe-area-inset-left, 0px) + 12px); }
 .hud-tr { top: calc(env(safe-area-inset-top, 0px) + 10px); right: calc(env(safe-area-inset-right, 0px) + 12px); display: flex; gap: 8px; pointer-events: auto; }
-.hud-bl { bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); left: calc(env(safe-area-inset-left, 0px) + 12px); max-width: 55vw; }
+.hud-bl { bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); left: calc(env(safe-area-inset-left, 0px) + 12px); pointer-events: auto; }
+.hint-wrap { margin-top: 8px; max-width: 60vw; }
+
+.pad { position: relative; width: 128px; height: 128px; border-radius: 50%; border: 3px solid var(--ink); background: rgba(247, 243, 232, 0.72); box-shadow: 0 4px 0 var(--ink); touch-action: none; cursor: pointer; }
+.pad::before, .pad::after { content: ""; position: absolute; left: 50%; top: 50%; background: rgba(29, 43, 54, 0.14); transform: translate(-50%, -50%); border-radius: 2px; }
+.pad::before { width: 76%; height: 4px; }
+.pad::after { width: 4px; height: 76%; }
+.pad-arrow { position: absolute; font-family: var(--font-display); font-size: 13px; line-height: 1; color: var(--slate); pointer-events: none; }
+.pad-arrow.up { top: 7px; left: 50%; transform: translateX(-50%); color: var(--rubber); font-size: 11px; text-align: center; }
+.pad-arrow.left { left: 9px; top: 50%; transform: translateY(-50%); }
+.pad-arrow.right { right: 9px; top: 50%; transform: translateY(-50%); }
+.pad-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: var(--yolk); border: 3px solid var(--ink); box-sizing: border-box; pointer-events: none; z-index: 1; }
+.pad.jump .pad-knob { background: var(--rubber); }
 .hud-br { bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); right: calc(env(safe-area-inset-right, 0px) + 12px); display: flex; flex-direction: column; gap: 10px; pointer-events: auto; }
 
 .timer { font-family: var(--font-display); font-size: 26px; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; line-height: 1; color: var(--ink); text-shadow: 0 2px 0 var(--paper); }
@@ -76,12 +88,20 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
 <div class="hud hud-tl">
   <div class="timer" id="timer">0:00.00</div>
   <div class="sub" id="sub">CHECK 0/4 · 落下 0</div>
+  <div class="hint-wrap"><div class="hint" id="hint">壁や天井をタップしてアンカー発射</div></div>
 </div>
 <div class="hud hud-tr">
   <button class="btn" id="btnRetry" type="button">リトライ</button>
   <button class="btn" id="btnTune" type="button">調整</button>
 </div>
-<div class="hud hud-bl"><div class="hint" id="hint">壁や天井をタップしてアンカー発射</div></div>
+<div class="hud hud-bl">
+  <div class="pad" id="pad" role="group" aria-label="移動パッド(上でジャンプ)">
+    <span class="pad-arrow up">▲<br>JUMP</span>
+    <span class="pad-arrow left">◀</span>
+    <span class="pad-arrow right">▶</span>
+    <div class="pad-knob" id="padKnob"></div>
+  </div>
+</div>
 <div class="hud hud-br">
   <button class="reel off" id="reelIn" type="button" aria-label="ゴムを縮める">▲<small>縮める</small></button>
   <button class="reel off" id="reelOut" type="button" aria-label="ゴムを伸ばす">▼<small>伸ばす</small></button>
@@ -92,12 +112,13 @@ canvas#game { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
     <h1 class="logo">RUBBER<br><span class="band">LINK</span></h1>
     <p class="tag">ひっぱる・のびる・はねかえる</p>
     <ul class="howto">
+      <li><b>パッド</b><span>左下のパッドを左右に倒して歩く。<strong>上に弾く</strong>とジャンプ。ぶら下がり中に左右へ倒すと振り子をこげる。</span></li>
       <li><b>タップ</b><span>タップした方向へアンカーを発射。ブロックに当たると<strong>ゴム紐</strong>でつながる。</span></li>
       <li><b>ドラッグ</b><span>つながっている間、画面をドラッグして四角を引っ張る。離すとゴムの反動で飛び出す。</span></li>
       <li><b>タップ</b><span>つながっている間にもう一度タップするとアンカー解除。</span></li>
       <li><b>▲ ▼</b><span>長押しでゴムを縮める・伸ばす。縮めて振り子を加速しよう。</span></li>
     </ul>
-    <p class="pc">斜線入りの金属ブロックにはアンカーが刺さりません。右上の旗がゴール。<br>PC: クリック/ドラッグ、W・S で伸縮、Space で解除、R でリトライ。</p>
+    <p class="pc">斜線入りの金属ブロックにはアンカーが刺さりません。右上の旗がゴール。<br>PC: A・D(←→)で移動、W(↑)でジャンプ、クリック/ドラッグ、Z・X で伸縮、Space で解除、R でリトライ。</p>
     <button class="btn primary" id="btnStart" type="button">はじめる</button>
   </div>
 </div>
@@ -137,7 +158,10 @@ const DEFAULTS = {
   HAND: 320,    // ドラッグの引っ張り強さ
   PULL: 300,    // 最大伸び(ドラッグ時)
   AIR: 0.06,    // 空気抵抗
-  BOUNCE: 0.22  // 壁の反発
+  BOUNCE: 0.22, // 壁の反発
+  MOVE: 280,    // 歩く速さ
+  JUMP: 640,    // ジャンプ初速
+  SWING: 520    // ぶら下がり中のこぐ力 / 空中制御
 };
 const TUNE_SPEC = [
   ['G', '重力', 600, 3000, 10],
@@ -148,8 +172,12 @@ const TUNE_SPEC = [
   ['HAND', 'ドラッグの引っ張り強さ', 80, 800, 5],
   ['PULL', '最大ストレッチ', 80, 500, 5],
   ['AIR', '空気抵抗', 0, 1, 0.01],
-  ['BOUNCE', '壁の反発', 0, 0.9, 0.01]
+  ['BOUNCE', '壁の反発', 0, 0.9, 0.01],
+  ['MOVE', '歩く速さ', 100, 600, 5],
+  ['JUMP', 'ジャンプ力', 300, 1100, 10],
+  ['SWING', '振り子のこぐ力 / 空中制御', 0, 1500, 10]
 ];
+const COYOTE = 0.1, JUMP_BUFFER = 0.12;
 const P = { ...DEFAULTS };
 const HALF = 14;
 const MIN_LEN = 22;
@@ -189,7 +217,9 @@ const GOAL = { x: 1330, y: 200 };
 const pl = { x: START.x, y: START.y, vx: 0, vy: 0, grounded: false, angle: 0, squash: 0, lookX: 1, lookY: 0 };
 const hook = { state: 'none', x: 0, y: 0, ox: 0, oy: 0, tx: 0, ty: 0, dist: 0, t: 0, rest: 0, hitMetal: false };
 const drag = { active: false, id: null, sx0: 0, sy0: 0, px0: 0, py0: 0, tx: 0, ty: 0 };
-const input = { reelIn: false, reelOut: false };
+const input = { reelIn: false, reelOut: false, padX: 0, keyL: false, keyR: false, jumpBuf: 0 };
+let coyote = 0;
+const moveAxis = () => Math.max(-1, Math.min(1, input.padX + (input.keyR ? 1 : 0) - (input.keyL ? 1 : 0)));
 let respawn = { ...START };
 let checkpoint = 0;
 let falls = 0;
@@ -331,6 +361,34 @@ function step(dt) {
   }
   ax -= pl.vx * P.AIR; ay -= pl.vy * P.AIR;
 
+  // pad movement
+  const mx = moveAxis();
+  const onGround = pl.grounded;
+  if (onGround && mx !== 0) {
+    const target = mx * P.MOVE;
+    ax += Math.max(-3200, Math.min(3200, (target - pl.vx) * 16));
+  } else if (!onGround && mx !== 0) {
+    if (hook.state === 'attached') {
+      // pump the swing: push sideways, mostly perpendicular to the rope
+      const dx = hook.x - pl.x, dy = hook.y - pl.y, d = Math.hypot(dx, dy) || 1;
+      const tx = -dy / d, ty = dx / d; // tangent
+      const s = Math.sign(tx) || 1;
+      ax += tx * s * mx * P.SWING; ay += ty * s * mx * P.SWING;
+    } else if (pl.vx * mx < P.MOVE) {
+      ax += mx * P.SWING * 0.8;
+    }
+  }
+  if (onGround) coyote = COYOTE; else coyote -= dt;
+  if (input.jumpBuf > 0) {
+    input.jumpBuf -= dt;
+    if (coyote > 0) {
+      pl.vy = -P.JUMP; pl.grounded = false;
+      coyote = 0; input.jumpBuf = 0;
+      pl.squash = 0.35;
+      burst(pl.x, pl.y + HALF, 6, '#34505f', 140);
+    }
+  }
+
   pl.vx += ax * dt; pl.vy += ay * dt;
   const sp = Math.hypot(pl.vx, pl.vy);
   if (sp > 2800) { pl.vx *= 2800 / sp; pl.vy *= 2800 / sp; }
@@ -356,7 +414,7 @@ function step(dt) {
     else { const t = pl.y + HALF - b.y, u = b.y + b.h - (pl.y - HALF); if (t < u) { pl.y -= t; pl.grounded = true; } else pl.y += u; }
     pl.vy = s > 260 ? -pl.vy * P.BOUNCE : 0;
   }
-  if (pl.grounded) pl.vx *= Math.exp(-9 * dt);
+  if (pl.grounded && moveAxis() === 0) pl.vx *= Math.exp(-9 * dt);
 
   // hook flight
   if (hook.state === 'flying') {
@@ -426,7 +484,7 @@ function update(dt) {
   let ty = pl.y + Math.max(-140, Math.min(140, pl.vy * look)) - viewH * 0.08;
   if (viewW >= WORLD.w + 120) tx = WORLD.w / 2;
   else tx = Math.max(viewW / 2 - 60, Math.min(WORLD.w + 60 - viewW / 2, tx));
-  ty = Math.max(WORLD.top + 60 + viewH / 2 - 60, Math.min(WORLD.floor - viewH / 2 + 60, ty));
+  ty = Math.max(WORLD.top + 60 + viewH / 2 - 60, Math.min(WORLD.floor - viewH / 2, ty));
   const kc = 1 - Math.exp(-6 * dt);
   cam.x += (tx - cam.x) * kc; cam.y += (ty - cam.y) * kc;
 
@@ -708,16 +766,59 @@ bindHold(reelOutEl, 'reelOut');
 
 window.addEventListener('keydown', e => {
   if (e.repeat && (e.code === 'Space' || e.code === 'KeyR')) return;
-  if (e.code === 'KeyW' || e.code === 'ArrowUp') { input.reelIn = true; e.preventDefault(); }
-  if (e.code === 'KeyS' || e.code === 'ArrowDown') { input.reelOut = true; e.preventDefault(); }
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') { input.keyL = true; e.preventDefault(); }
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') { input.keyR = true; e.preventDefault(); }
+  if ((e.code === 'KeyW' || e.code === 'ArrowUp') && !e.repeat) { input.jumpBuf = JUMP_BUFFER; e.preventDefault(); }
+  if (e.code === 'KeyZ') { input.reelIn = true; e.preventDefault(); }
+  if (e.code === 'KeyX') { input.reelOut = true; e.preventDefault(); }
   if (e.code === 'Space' && running) { e.preventDefault(); detach(); }
   if (e.code === 'KeyR' && running && !finished) doRespawn();
 });
 window.addEventListener('keyup', e => {
-  if (e.code === 'KeyW' || e.code === 'ArrowUp') input.reelIn = false;
-  if (e.code === 'KeyS' || e.code === 'ArrowDown') input.reelOut = false;
+  if (e.code === 'KeyA' || e.code === 'ArrowLeft') input.keyL = false;
+  if (e.code === 'KeyD' || e.code === 'ArrowRight') input.keyR = false;
+  if (e.code === 'KeyZ') input.reelIn = false;
+  if (e.code === 'KeyX') input.reelOut = false;
 });
-window.addEventListener('blur', () => { input.reelIn = input.reelOut = false; drag.active = false; drag.id = null; pointers.clear(); });
+
+// ---------- Virtual pad (left/right = move, flick up = jump) ----------
+const padEl = $('pad'), knobEl = $('padKnob');
+const pad = { id: null, cx: 0, cy: 0, armed: true };
+const PAD_R = 44, DEAD = 0.18;
+function padMove(e) {
+  let dx = e.clientX - pad.cx, dy = e.clientY - pad.cy;
+  const d = Math.hypot(dx, dy);
+  if (d > PAD_R) { dx *= PAD_R / d; dy *= PAD_R / d; }
+  knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
+  const nx = dx / PAD_R, ny = dy / PAD_R;
+  input.padX = Math.abs(nx) < DEAD ? 0 : (nx - Math.sign(nx) * DEAD) / (1 - DEAD);
+  if (ny < -0.55 && pad.armed) { input.jumpBuf = JUMP_BUFFER; pad.armed = false; }
+  if (ny > -0.3) pad.armed = true;
+  padEl.classList.toggle('jump', ny < -0.55);
+}
+padEl.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (pad.id !== null) return;
+  pad.id = e.pointerId;
+  try { padEl.setPointerCapture(e.pointerId); } catch (_) {}
+  const r = padEl.getBoundingClientRect();
+  pad.cx = r.left + r.width / 2; pad.cy = r.top + r.height / 2;
+  pad.armed = true;
+  padMove(e);
+});
+padEl.addEventListener('pointermove', e => { if (e.pointerId === pad.id) padMove(e); });
+function padEnd(e) {
+  if (e && e.pointerId !== pad.id) return;
+  pad.id = null; input.padX = 0; pad.armed = true;
+  knobEl.style.transform = '';
+  padEl.classList.remove('jump');
+}
+padEl.addEventListener('pointerup', padEnd);
+padEl.addEventListener('pointercancel', padEnd);
+padEl.addEventListener('lostpointercapture', padEnd);
+padEl.addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('blur', () => { padEnd(); input.keyL = input.keyR = false; input.reelIn = input.reelOut = false; drag.active = false; drag.id = null; pointers.clear(); });
 
 // ---------- Sheets ----------
 $('btnStart').addEventListener('click', () => { $('startSheet').hidden = true; running = true; });
